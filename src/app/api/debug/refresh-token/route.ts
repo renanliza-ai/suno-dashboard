@@ -9,33 +9,21 @@ export const dynamic = "force-dynamic";
  *
  * 🔒 ENDPOINT MASTER-ONLY E TEMPORÁRIO.
  *
- * Retorna o refresh_token Google OAuth da sessão do usuário logado, pra
- * configurar BRIEFING_REFRESH_TOKEN em ambientes de produção (cron).
- *
- * COMO USAR:
- * 1. Faça login em https://suno-dashboard-painel.vercel.app
- * 2. Acesse https://suno-dashboard-painel.vercel.app/api/debug/refresh-token
- * 3. Copie o campo `refreshToken` da resposta JSON
- * 4. Cole em BRIEFING_REFRESH_TOKEN no Vercel → Redeploy
- *
- * APÓS USAR: DELETE este arquivo do repo (medida de segurança).
+ * Retorna o refresh_token Google OAuth da sessão do usuário logado.
+ * Em produção, NextAuth v5 usa cookie name `__Secure-authjs.session-token`
+ * (com prefixo Secure por causa do HTTPS), enquanto dev usa `authjs.session-token`.
+ * Este endpoint tenta ambos os salts para funcionar nos dois ambientes.
  */
 export async function GET() {
   const session = (await auth()) as {
     user?: { isMaster?: boolean; email?: string };
-    accessToken?: string;
-    // O refreshToken não vem no `session` por padrão, vamos usar o getToken cru
   } | null;
 
   // Gate: só master
   if (!session?.user?.isMaster) {
-    return NextResponse.json(
-      { error: "forbidden_master_only" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "forbidden_master_only" }, { status: 403 });
   }
 
-  // Lê o JWT raw via getToken pra acessar o refreshToken (não está exposto na session)
   const { getToken } = await import("next-auth/jwt");
   const { headers } = await import("next/headers");
   const reqHeaders = await headers();
@@ -46,18 +34,45 @@ export async function GET() {
     },
   } as unknown as Request;
 
-  const token = (await getToken({
-    req: fakeReq as unknown as Parameters<typeof getToken>[0]["req"],
-    secret: process.env.AUTH_SECRET,
-    salt: "authjs.session-token",
-  })) as { refreshToken?: string; accessTokenExpires?: number } | null;
+  // Tenta os 2 salts possíveis (production usa o "__Secure-" prefix)
+  const salts = ["__Secure-authjs.session-token", "authjs.session-token"];
+  let token: { refreshToken?: string; accessTokenExpires?: number; isMaster?: boolean } | null = null;
+  let usedSalt: string | null = null;
+  for (const salt of salts) {
+    try {
+      const t = (await getToken({
+        req: fakeReq as unknown as Parameters<typeof getToken>[0]["req"],
+        secret: process.env.AUTH_SECRET,
+        salt,
+      })) as { refreshToken?: string; accessTokenExpires?: number; isMaster?: boolean } | null;
+      if (t) {
+        token = t;
+        usedSalt = salt;
+        break;
+      }
+    } catch {
+      // tenta o próximo
+    }
+  }
+
+  // Diagnóstico: se ainda não achou, mostra os cookies disponíveis pra debug
+  const cookieNames = cookieHeader
+    .split(";")
+    .map((c) => c.trim().split("=")[0])
+    .filter(Boolean);
 
   return NextResponse.json({
     user: session.user.email,
-    refreshToken: token?.refreshToken || "(não encontrado — faça logout e login novamente)",
+    refreshToken: token?.refreshToken || "(NÃO ENCONTRADO — veja diagnóstico abaixo)",
     accessTokenExpires: token?.accessTokenExpires
       ? new Date(token.accessTokenExpires * 1000).toISOString()
       : null,
+    diagnostico: {
+      saltUsado: usedSalt,
+      cookiesPresentes: cookieNames,
+      hasAuthSecret: Boolean(process.env.AUTH_SECRET),
+      tokenKeysFound: token ? Object.keys(token) : null,
+    },
     instructions: [
       "1. Copia o valor de `refreshToken` (sem aspas)",
       "2. Cola em BRIEFING_REFRESH_TOKEN nas Environment Variables da Vercel",
