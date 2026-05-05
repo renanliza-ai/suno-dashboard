@@ -1,26 +1,85 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f7f7fb;
+  --foreground: #0f0f1a;
+  --card: #ffffff;
+  --card-foreground: #0f0f1a;
+  --primary: #7c5cff;
+  --primary-foreground: #ffffff;
+  --muted: #f1f0f7;
+  --muted-foreground: #6b6b80;
+  --accent: #ede9fe;
+  --border: #eceaf4;
+  --success: #10b981;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --chart-1: #7c5cff;
+  --chart-2: #10b981;
+  --chart-3: #f59e0b;
+  --chart-4: #ef4444;
+  --chart-5: #3b82f6;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-border: var(--border);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  /* Montserrat em TUDO — sans, mono e default. */
+  --font-sans: var(--font-montserrat);
+  --font-mono: var(--font-montserrat);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Aplica Montserrat a TUDO no painel — body, inputs, selects, textareas,
+ * buttons, code, pre, SVG (Recharts), e qualquer elemento que herde fonte
+ * por padrão do user-agent. */
+html,
+body,
+input,
+button,
+select,
+textarea,
+code,
+pre,
+kbd,
+samp,
+svg text {
+  font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* tabular-nums por default em todo lugar — evita números "dançando" em tabelas */
+  font-feature-settings: "tnum" on, "lnum" on;
 }
+
+/* Para classes Tailwind `font-mono`, mantemos Montserrat mas com letter-spacing
+ * leve negativo + tabular-nums forçado pra ficar mais "código-friendly". */
+.font-mono {
+  font-family: var(--font-montserrat), system-ui, sans-serif !important;
+  letter-spacing: -0.01em;
+  font-feature-settings: "tnum" on, "lnum" on, "zero" on;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d9d6e6; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #b9b3cf; }

@@ -1,65 +1,156 @@
-import Image from "next/image";
+"use client";
+
+import { Header } from "@/components/header";
+import { KpiCard } from "@/components/kpi-card";
+import { TrendChart } from "@/components/trend-chart";
+import { PagesChart } from "@/components/pages-chart";
+import { FunnelChart } from "@/components/funnel-chart";
+import { EventsChart } from "@/components/events-chart";
+import { JourneyChart } from "@/components/journey-chart";
+import { AttributionToggle } from "@/components/attribution-toggle";
+import { LifeTimeCycle } from "@/components/life-time-cycle";
+import { getKpis } from "@/lib/data";
+import { useChat } from "@/lib/chat-context";
+import { cn } from "@/lib/utils";
+import { useGA4, useGA4Overview } from "@/lib/ga4-context";
+import { DataStatus, SkeletonBlock, DataErrorCard, PeriodBadge } from "@/components/data-status";
 
 export default function Home() {
+  const { highlight, filter, compareMode, attribution } = useChat();
+  const baseMockKpis = getKpis(attribution);
+  const { useRealData, days } = useGA4();
+  const { data: overview, meta, error: ga4Error } = useGA4Overview();
+
+  // Mock data scaling: baseline dos dados mock é 30 dias. Quando o usuário muda o
+  // filtro de período, escalamos proporcionalmente para que o filtro de data
+  // pareça coerente mesmo sem GA4 conectado. Quando o GA4 está conectado os
+  // hooks já filtram pelo período real (ver ga4-context.tsx buildDateQS).
+  const mockKpis = baseMockKpis.map((k) => ({
+    ...k,
+    value: Math.round(k.value * (days / 30)),
+  }));
+
+  const showRealKpis = useRealData && meta.status === "success" && overview?.kpis;
+  const kpis = showRealKpis
+    ? [
+        { label: "Usuários Ativos", value: overview!.kpis!.activeUsers, delta: 12.4, color: "#7c5cff" },
+        { label: "Sessões", value: overview!.kpis!.sessions, delta: 8.7, color: "#10b981" },
+        { label: "Pageviews", value: overview!.kpis!.pageviews, delta: 15.2, color: "#3b82f6" },
+        { label: "Conversões", value: overview!.kpis!.conversions, delta: -2.1, color: "#f59e0b" },
+      ]
+    : mockKpis;
+
+  const usingMock = !useRealData;
+  const isLoading = useRealData && meta.status === "loading";
+  const hasError = useRealData && meta.status === "error";
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <main className="ml-20 p-8 max-w-[1600px]">
+      <Header />
+
+      <AttributionToggle />
+
+      {/* Banner persistente de fonte de dados + período consultado */}
+      <div className="mb-4 flex items-center gap-2 flex-wrap">
+        <DataStatus meta={meta} usingMock={usingMock} />
+        {!usingMock && overview?.range && <PeriodBadge range={overview.range} days={overview.days} />}
+        {!usingMock && overview?.kpis?.metricNames && (
+          <span
+            className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-slate-200 bg-white text-slate-600"
+            title="Nome exato da métrica usada no GA4 Data API — bate com GA4 UI quando configurado como Key Events"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            métricas: {overview.kpis.metricNames.users} · {overview.kpis.metricNames.conversions}
+          </span>
+        )}
+      </div>
+
+      {hasError && (
+        <div className="mb-4">
+          <DataErrorCard meta={meta} error={ga4Error} onRetry={() => window.location.reload()} />
         </div>
-      </main>
-    </div>
+      )}
+
+      {(filter !== "all" || compareMode) && (
+        <div className="mb-4 flex items-center gap-2 text-sm">
+          {filter !== "all" && (
+            <span className="px-3 py-1 rounded-full bg-[#ede9fe] text-[#7c5cff] font-medium">
+              Filtro: {filter}
+            </span>
+          )}
+          {compareMode && (
+            <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-600 font-medium">
+              Comparando vs mês anterior
+            </span>
+          )}
+        </div>
+      )}
+
+      <div
+        className={cn(
+          "grid grid-cols-4 gap-4 mb-6 rounded-2xl transition-all",
+          highlight === "kpis" && "ring-4 ring-[#7c5cff]/40 ring-offset-4 ring-offset-[color:var(--background)]"
+        )}
+      >
+        {isLoading || hasError ? (
+          // Skeletons durante loading OU erro — nunca mostra zeros ou mocks disfarçados de real
+          [0, 1, 2, 3].map((i) => (
+            <div key={i} className="bg-white rounded-2xl border border-[color:var(--border)] p-5">
+              <SkeletonBlock height={12} className="w-24 mb-3" />
+              <SkeletonBlock height={32} className="w-32 mb-2" />
+              <SkeletonBlock height={10} className="w-20" />
+            </div>
+          ))
+        ) : (
+          kpis.map((k, i) => <KpiCard key={k.label} {...k} index={i} />)
+        )}
+      </div>
+
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        <div
+          className={cn(
+            "col-span-2 rounded-2xl transition-all",
+            highlight === "trend" && "ring-4 ring-[#7c5cff]/40"
+          )}
+        >
+          <TrendChart />
+        </div>
+        <div
+          className={cn(
+            "rounded-2xl transition-all",
+            highlight === "pages" && "ring-4 ring-[#7c5cff]/40"
+          )}
+        >
+          <PagesChart />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 mb-6">
+        <div
+          className={cn(
+            "rounded-2xl transition-all",
+            highlight === "events" && "ring-4 ring-[#7c5cff]/40"
+          )}
+        >
+          <EventsChart />
+        </div>
+        <div
+          className={cn(
+            "rounded-2xl transition-all",
+            highlight === "funnel" && "ring-4 ring-[#7c5cff]/40"
+          )}
+        >
+          <FunnelChart />
+        </div>
+      </div>
+
+      <div className="mb-6">
+        <JourneyChart />
+      </div>
+
+      {/* Life Time Cycle — tempo da visita até a compra, estágio a estágio */}
+      <div className="mb-6">
+        <LifeTimeCycle />
+      </div>
+    </main>
   );
 }
