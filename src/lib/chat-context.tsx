@@ -408,6 +408,7 @@ type Intent =
   | "top_campaigns_7d" // "melhores campanhas dos últimos 7 dias"
   | "leads_last_24h" // "quantos leads capturei nas últimas 24h"
   | "sales_purchase" // "como estão as vendas", "quantas vendas hoje" — evento purchase + campanhas
+  | "lp_lookup" // "como está a LP X", "quantas sessões na url Y" — busca métricas de página específica
   | "whatsapp_widget_pages" // "páginas com widget de WhatsApp + acessos em 90d"
   | "smalltalk" // "tudo bem?", "oi chat"
   | "unknown";
@@ -633,6 +634,47 @@ function detectIntent(text: string, live: LiveData = EMPTY_LIVE): Intent {
     )
   )
     return "sales_purchase";
+
+  // Q5: "Como está a LP X?" / "Quantas sessões na url Y?" → busca métricas
+  // de uma URL/path específico. Detectamos por:
+  //  - URL completa (https://...)
+  //  - Path explícito (/algo/)
+  //  - Padrões linguísticos pra LP/landing page/url/página
+  // O handler extrai o trecho de URL/path do texto e cruza com pagesDetail.
+  const hasUrlOrPath =
+    /(https?:\/\/[^\s]+|\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)*\/?)/i.test(text);
+  const hasLpKeyword = has(
+    "lp ",
+    "lp/",
+    "landing page",
+    "landing-page",
+    " url ",
+    "url ",
+    "essa pagina",
+    "essa página",
+    "esta pagina",
+    "esta página",
+    "página específica",
+    "pagina especifica",
+    "métricas da página",
+    "metricas da pagina",
+    "métricas dessa",
+    "metricas dessa",
+    "dados da lp",
+    "dados da url",
+    "dados da página",
+    "dados da pagina",
+    "como está a lp",
+    "como esta a lp",
+    "como está a url",
+    "como esta a url",
+    "como está a página",
+    "como esta a pagina",
+    "performance da lp",
+    "performance da página",
+    "performance da pagina"
+  );
+  if (hasUrlOrPath || hasLpKeyword) return "lp_lookup";
 
   // Análise específica de "ontem" — pergunta crítica pra gerentes
   if (
@@ -1393,6 +1435,157 @@ function handleIntent(
           "Quais são as melhores campanhas dos últimos 7 dias?",
           "Como estamos hoje de sessões no site?",
         ],
+      };
+    }
+
+    case "lp_lookup": {
+      // Extrai URL/path da pergunta. Aceita:
+      //   - URL completa: https://lp.suno.com.br/foo
+      //   - Path puro: /foo/bar
+      //   - Slug: "webinario-status-alpha" (sem barra) - tenta como path
+      const urlMatch = text.match(/https?:\/\/[^\s,]+/i);
+      const pathMatch = !urlMatch ? text.match(/\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)*\/?/i) : null;
+      // Slug fallback (palavras com hífen ou underscore que parecem path)
+      const slugMatch = !urlMatch && !pathMatch
+        ? text.match(/\b([a-z0-9]+(?:[-_][a-z0-9]+){2,})\b/i)
+        : null;
+
+      const queryStr = urlMatch?.[0] || pathMatch?.[0] || slugMatch?.[0] || "";
+
+      if (!queryStr) {
+        return {
+          reply: `🤔 Não identifiquei uma URL ou path na sua pergunta. Tenta uma destas formas:\n\n• "Como está a LP **/cl/webinario-status-alpha**"\n• "Quantas sessões em **https://lp.suno.com.br/x**"\n• "Métricas da página **/carteiras**"`,
+          followUps: [
+            "Como estamos hoje de sessões no site?",
+            "Quais são as páginas mais acessadas?",
+            "Quantos leads capturei nas últimas 24 horas?",
+          ],
+        };
+      }
+
+      // Normaliza pra path (sem host)
+      let normalizedPath = queryStr;
+      try {
+        if (queryStr.startsWith("http")) {
+          normalizedPath = new URL(queryStr).pathname;
+        } else if (!queryStr.startsWith("/")) {
+          normalizedPath = "/" + queryStr;
+        }
+      } catch {
+        normalizedPath = queryStr;
+      }
+      normalizedPath = normalizedPath.replace(/\/+$/, "") || "/";
+
+      // Cruza com pagesDetail (dados reais GA4)
+      const allPages = live.pagesDetail?.pages || [];
+      const matches = allPages.filter((p) => {
+        const pagePathClean = (p.path || "/").replace(/\/+$/, "") || "/";
+        return (
+          pagePathClean === normalizedPath ||
+          pagePathClean.includes(normalizedPath.replace(/^\//, "")) ||
+          (p.url || "").includes(queryStr)
+        );
+      });
+
+      // Sem propriedade conectada → mensagem honesta
+      if (!live.propertyName) {
+        return {
+          reply: `🎭 Pra te trazer dados de **${queryStr}**, preciso que você selecione uma propriedade GA4 no header (canto superior direito).`,
+          followUps: [
+            "Como estamos hoje de sessões no site?",
+          ],
+        };
+      }
+
+      // Carregando ainda
+      if (live.loading) {
+        return {
+          reply: `📡 Carregando dados do GA4 de **${live.propertyName}**... me pergunta de novo em 2 segundos sobre **${queryStr}**.`,
+          followUps: [],
+        };
+      }
+
+      // Não achou
+      if (matches.length === 0) {
+        return {
+          reply: `🔍 Não encontrei a página **${queryStr}** entre as páginas com tráfego em ${live.propertyName} no período selecionado.\n\nPossíveis causas:\n• A URL pode estar grafada diferente (com/sem barra final, com/sem subdomínio)\n• A página pode ter pouquíssimo tráfego e não estar no top 100\n• O período do calendário não inclui sessões nessa LP\n\n💡 **Dica:** abra a aba **Páginas** e use a busca interna pra ver toda a lista.`,
+          newHighlight: "pages",
+          rich: [
+            {
+              type: "actions",
+              items: [
+                { label: "📄 Abrir aba Páginas", command: "/paginas" },
+              ],
+            },
+          ],
+          followUps: [
+            "Quais são as páginas mais acessadas?",
+            "Como estão as vendas hoje?",
+          ],
+          // Navega pro /paginas pra usuário ver lista completa
+          navigate: "/paginas",
+        };
+      }
+
+      // Achou — pega o melhor match (mais views)
+      const best = [...matches].sort((a, b) => (b.views || 0) - (a.views || 0))[0];
+      const totalUsers = matches.reduce((s, m) => s + (m.users || 0), 0);
+      const totalViews = matches.reduce((s, m) => s + (m.views || 0), 0);
+      const totalSessions = matches.reduce((s, m) => s + (m.sessions || 0), 0);
+      const avgBounce =
+        totalSessions > 0
+          ? matches.reduce((s, m) => s + (m.bounceRate || 0) * (m.sessions || 1), 0) /
+            matches.reduce((s, m) => s + (m.sessions || 1), 0)
+          : 0;
+      const avgEngagement = best.engagementPerUser || 0;
+      const avgDuration = best.avgSessionDuration || 0;
+
+      const hasMultipleMatches = matches.length > 1;
+      const matchInfo = hasMultipleMatches
+        ? `_(${matches.length} variações encontradas — somando todas)_`
+        : "";
+
+      return {
+        reply: `📊 **${queryStr}** em ${live.propertyName} (últimos ${live.days} dias) ${matchInfo}\n\n📡 Dado real do GA4. Carregando a aba **Páginas** com filtro pra você explorar mais detalhes.`,
+        newHighlight: "pages",
+        rich: [
+          {
+            type: "metrics",
+            items: [
+              { label: "Usuários únicos", value: formatCompact(totalUsers) },
+              { label: "Sessões", value: formatCompact(totalSessions) },
+              { label: "Pageviews", value: formatCompact(totalViews) },
+              { label: "Taxa de rejeição", value: `${avgBounce.toFixed(1)}%` },
+            ],
+          },
+          {
+            type: "insight",
+            severity: avgBounce > 60 ? "warning" : avgBounce < 35 ? "success" : "info",
+            title: hasMultipleMatches
+              ? `Match principal: ${best.path}`
+              : `Página: ${best.path}`,
+            body: `Engajamento por usuário: ${Math.round(avgEngagement)}s · Tempo médio sessão: ${Math.round(avgDuration)}s · Host: ${best.host || "—"}${
+              avgBounce > 60
+                ? ". ⚠ Bounce rate alto — vale checar fonte de tráfego/UTMs."
+                : avgBounce < 35
+                  ? ". ✅ Bounce baixo — público bem qualificado."
+                  : "."
+            }`,
+          },
+          {
+            type: "link",
+            href: best.url?.startsWith("http") ? best.url : `https://${best.host || ""}${best.path}`,
+            label: "Abrir LP no navegador →",
+            description: "Visualizar a página real",
+          },
+        ],
+        followUps: [
+          "Quais foram os canais que trouxeram mais tráfego pra essa LP?",
+          "Compare 3 LPs por canal",
+          "Como estão as vendas hoje?",
+        ],
+        // Leva pro /paginas com a busca pré-preenchida via query string
+        navigate: `/paginas?q=${encodeURIComponent(normalizedPath.replace(/^\//, ""))}`,
       };
     }
 

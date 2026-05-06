@@ -6,15 +6,20 @@ import { Sidebar } from "./sidebar";
 import { FloatingChat } from "./floating-chat";
 import { PeriodPicker } from "./period-picker";
 
-// Rotas que renderizam o componente <Header/> com o PeriodPicker inline.
-// Nas demais, exibimos o picker fixo no topo direito.
+// Rotas que renderizam o componente <Header/> (que já inclui PeriodPicker inline).
+// Nas demais, exibimos o picker fixo no topo direito como fallback.
+//
+// IMPORTANTE: toda rota nova que usar <Header/> deve ser adicionada aqui pra
+// evitar duplicação visual de date range (1 no header + 1 no fallback global).
 const ROUTES_WITH_INLINE_HEADER = new Set([
   "/",
+  "/anomalias",
+  "/audiencia",
   "/conversoes",
   "/copiloto-log",
   "/cro",
+  "/seo",
   "/tracking",
-  "/audiencia",
 ]);
 
 export function ShellFrame({ children }: { children: ReactNode }) {

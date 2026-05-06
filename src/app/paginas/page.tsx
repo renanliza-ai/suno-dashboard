@@ -1,7 +1,7 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import {
   FileText,
   ArrowUpDown,
@@ -54,6 +54,17 @@ export default function PaginasPage() {
   const [sortDesc, setSortDesc] = useState(true);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<PageRow | null>(null);
+
+  // Pré-preenche o filtro de busca quando vier de uma navegação do chat:
+  // ex.: /paginas?q=cl/webinario-status-alpha
+  // Lemos via window.location.search (em vez de useSearchParams) pra evitar
+  // requisito de Suspense em Next.js 16.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const q = params.get("q");
+    if (q) setSearch(q);
+  }, []);
 
   const { useRealData } = useGA4();
   const { data: overview, meta, error: ga4Error } = useGA4Overview();

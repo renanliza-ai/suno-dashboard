@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, ChevronDown, Search, Check, LogOut, Crown, Database, Loader2, AlertCircle } from "lucide-react";
+import { Bell, ChevronDown, Check, LogOut, Crown, Database, Loader2, AlertCircle } from "lucide-react";
 import { useState } from "react";
 import { AccountLogo } from "./account-logo";
 import { motion, AnimatePresence } from "framer-motion";
@@ -51,17 +51,11 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-3">
-        {/* Period picker — controla o range de datas de todas as telas */}
+        {/* Period picker — controla o range de datas de todas as telas.
+            Search bar removida: cada aba tem sua própria pesquisa interna,
+            e o chat (ícone roxo flutuante) cobre o caso de busca global por
+            métricas/URLs/eventos. */}
         <PeriodPicker />
-
-        <div className="relative">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[color:var(--muted-foreground)]" />
-          <input
-            type="text"
-            placeholder="Buscar..."
-            className="bg-white pl-9 pr-4 py-2.5 rounded-xl border border-[color:var(--border)] text-sm w-56 focus:outline-none focus:ring-2 focus:ring-[#7c5cff]/30"
-          />
-        </div>
 
         <button className="relative w-11 h-11 rounded-xl bg-white border border-[color:var(--border)] flex items-center justify-center hover:bg-[color:var(--muted)] transition">
           <Bell size={18} />
