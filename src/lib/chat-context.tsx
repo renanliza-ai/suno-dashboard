@@ -409,6 +409,7 @@ type Intent =
   | "leads_last_24h" // "quantos leads capturei nas últimas 24h"
   | "sales_purchase" // "como estão as vendas", "quantas vendas hoje" — evento purchase + campanhas
   | "lp_lookup" // "como está a LP X", "quantas sessões na url Y" — busca métricas de página específica
+  | "logged_area_analysis" // "NAI", "área logada", "investidor.suno.com.br" — análise completa do subdomínio investidor.*
   | "whatsapp_widget_pages" // "páginas com widget de WhatsApp + acessos em 90d"
   | "smalltalk" // "tudo bem?", "oi chat"
   | "unknown";
@@ -417,6 +418,40 @@ function detectIntent(text: string, live: LiveData = EMPTY_LIVE): Intent {
   const t = text.toLowerCase().trim();
   const has = (...kws: string[]) => kws.some((k) => t.includes(k));
   const exact = (...kws: string[]) => kws.some((k) => t === k);
+
+  // ---- ⚠ EARLY EXIT — perguntas sobre NAI / Área Logada / área do investidor
+  // SEMPRE vão pra logged_area_analysis. Convenção definida pelo Renan:
+  // "NAI" = Nova Área do Investidor (subdomínio investidor.* da propriedade
+  // selecionada — investidor.suno.com.br ou investidor.statusinvest.com.br).
+  // Esta checagem precede a regra de URL porque "investidor.suno.com.br"
+  // como URL deveria casar aqui (não em lp_lookup genérico).
+  const isLoggedAreaQuery =
+    /\bnai\b/i.test(t) ||
+    has(
+      "área logada",
+      "area logada",
+      "área do investidor",
+      "area do investidor",
+      "área investidor",
+      "area investidor",
+      "logged area",
+      "investidor.suno",
+      "investidor.statusinvest",
+      "dentro do investidor",
+      "dentro da área logada",
+      "dentro da area logada",
+      "usuário logado",
+      "usuario logado",
+      "usuários logados",
+      "usuarios logados",
+      "área de membro",
+      "area de membro",
+      "área de assinante",
+      "area de assinante"
+    );
+  if (isLoggedAreaQuery) {
+    return "logged_area_analysis";
+  }
 
   // ---- ⚠ EARLY EXIT — URL/path explícito SEMPRE vai pra lp_lookup.
   // Antes desse fix, "https://lp.statusinvest.com.br/..." caía em
@@ -1447,6 +1482,157 @@ function handleIntent(
           "Quais são as melhores campanhas dos últimos 7 dias?",
           "Como estamos hoje de sessões no site?",
         ],
+      };
+    }
+
+    case "logged_area_analysis": {
+      // ============================================================
+      // NAI / Área Logada — subdomínio investidor.* da propriedade.
+      // Convenção do Renan (memória nai_area_logada.md):
+      //   - "NAI" / "área logada" / "área do investidor"
+      //     → host investidor.{suno,statusinvest}.com.br
+      //   - Suno Research e Suno Advisory compartilham investidor.suno.com.br
+      //   - Statusinvest usa investidor.statusinvest.com.br
+      // O handler filtra pagesDetail por host começando com "investidor."
+      // e cruza com purchase events pra trazer análise completa.
+      // ============================================================
+
+      // Sem propriedade conectada
+      if (!live.propertyName) {
+        return {
+          reply: `🎭 Pra trazer dados da **área logada** (NAI), selecione uma propriedade GA4 no header.`,
+          followUps: [
+            "Como estão os números?",
+            "Quais são as melhores campanhas dos últimos 7 dias?",
+          ],
+        };
+      }
+
+      // Carregando dados ainda
+      if (live.loading) {
+        return {
+          reply: `📡 Carregando dados do GA4 de **${live.propertyName}**... me pergunta de novo em 2 segundos sobre a área logada.`,
+          followUps: [],
+        };
+      }
+
+      // Identifica o host esperado da NAI baseado na propriedade
+      const propLower = (live.propertyName || "").toLowerCase();
+      const expectedHost = propLower.includes("statusinvest")
+        ? "investidor.statusinvest.com.br"
+        : "investidor.suno.com.br";
+
+      // Filtra páginas do GA4 que estão DENTRO da área logada
+      const allPages = live.pagesDetail?.pages || [];
+      const loggedPages = allPages.filter((p) =>
+        (p.host || "").toLowerCase().startsWith("investidor.")
+      );
+
+      // Sem dados da NAI no período → mensagem honesta + sugestões
+      if (loggedPages.length === 0) {
+        return {
+          reply: `🔒 Não encontrei tráfego no host **${expectedHost}** em ${live.propertyName} no período selecionado.\n\nPossíveis causas:\n• A área logada pode não estar sendo trackeada por GA4 nesta propriedade\n• O período do calendário não inclui acessos à NAI\n• O tracking pode estar em outro stream/property GA4 (algumas empresas separam logged vs anonymous)\n\n💡 **Próximo passo:** confirme em GA4 → Admin → Data Streams se o domínio investidor.* está como measurement ID nessa property.`,
+          followUps: [
+            "Quais são as páginas mais acessadas?",
+            "Como estão os números?",
+            "Como estão as vendas?",
+          ],
+        };
+      }
+
+      // Agrega métricas da área logada
+      const totalUsers = loggedPages.reduce((s, p) => s + (p.users || 0), 0);
+      const totalSessions = loggedPages.reduce((s, p) => s + (p.sessions || 0), 0);
+      const totalViews = loggedPages.reduce((s, p) => s + (p.views || 0), 0);
+      const totalEntries = loggedPages.reduce((s, p) => s + (p.entries || 0), 0);
+      const avgBounce =
+        totalSessions > 0
+          ? loggedPages.reduce((s, p) => s + (p.bounceRate || 0) * (p.sessions || 1), 0) /
+            loggedPages.reduce((s, p) => s + (p.sessions || 1), 0)
+          : 0;
+      const avgDuration =
+        totalUsers > 0
+          ? loggedPages.reduce((s, p) => s + (p.avgSessionDuration || 0) * (p.users || 1), 0) /
+            loggedPages.reduce((s, p) => s + (p.users || 1), 0)
+          : 0;
+
+      // Top 5 páginas dentro da NAI
+      const topPages = [...loggedPages]
+        .sort((a, b) => (b.views || 0) - (a.views || 0))
+        .slice(0, 5);
+
+      // Cruza com vendas se houver dados de purchase do contexto live
+      const totalSiteUsers = live.overview?.kpis?.activeUsers || 0;
+      const naiShare = totalSiteUsers > 0 ? (totalUsers / totalSiteUsers) * 100 : 0;
+
+      // Acessos via entry → proxy de "logins" (cada entry no investidor.* costuma
+      // ser um login bem-sucedido, exceto deep-links que mantêm sessão)
+      const loginProxy = totalEntries;
+
+      // Insight automático baseado nos números
+      let insightSeverity: "success" | "warning" | "info" = "info";
+      let insightTitle = `Área logada com ${formatCompact(totalUsers)} usuários únicos no período`;
+      let insightBody = `${formatCompact(totalSessions)} sessões dentro da NAI · ${formatCompact(loginProxy)} entradas (proxy de logins) · ~${naiShare.toFixed(1)}% dos usuários ativos do site passaram pela área logada.`;
+
+      if (avgBounce > 55) {
+        insightSeverity = "warning";
+        insightTitle = `Bounce alto na NAI: ${avgBounce.toFixed(1)}%`;
+        insightBody = `Usuários estão entrando na área logada mas saindo rápido. Pode ser problema de UX no dashboard inicial, lentidão de carregamento ou bug pós-login. Investigar páginas de entrada principais: ${topPages.slice(0, 2).map((p) => p.path).join(", ")}.`;
+      } else if (avgBounce < 30 && avgDuration > 120) {
+        insightSeverity = "success";
+        insightTitle = `Engajamento forte na NAI: ${Math.round(avgDuration)}s médios`;
+        insightBody = `Usuários logados estão consumindo conteúdo de verdade — bounce baixo (${avgBounce.toFixed(1)}%) + tempo alto. Vale aproveitar o engajamento pra cross-sell ou upgrade pra plano superior.`;
+      }
+
+      return {
+        reply: `🔒 **Área Logada (NAI)** em ${live.propertyName} (${live.days} dias)\n\nHost: \`${expectedHost}\` · ${loggedPages.length} páginas internas com tráfego.`,
+        newHighlight: "pages",
+        rich: [
+          {
+            type: "metrics",
+            items: [
+              { label: "Usuários únicos logados", value: formatCompact(totalUsers) },
+              { label: "Sessões na NAI", value: formatCompact(totalSessions) },
+              { label: "Pageviews internos", value: formatCompact(totalViews) },
+              { label: "Entradas (≈ logins)", value: formatCompact(loginProxy) },
+              { label: "Tempo médio sessão", value: `${Math.round(avgDuration)}s` },
+              { label: "Taxa de rejeição", value: `${avgBounce.toFixed(1)}%` },
+              { label: "% do site que loga", value: `${naiShare.toFixed(1)}%` },
+              { label: "Período", value: `${live.days}d` },
+            ],
+          },
+          {
+            type: "table",
+            columns: ["#", "Página", "Pageviews", "Usuários", "Bounce"],
+            rows: topPages.map((p, i) => [
+              `${i + 1}`,
+              p.path || "/",
+              formatCompact(p.views || 0),
+              formatCompact(p.users || 0),
+              `${(p.bounceRate || 0).toFixed(1)}%`,
+            ]),
+          },
+          {
+            type: "insight",
+            severity: insightSeverity,
+            title: insightTitle,
+            body: insightBody,
+          },
+          {
+            type: "actions",
+            items: [
+              { label: "📄 Ver todas páginas da NAI", command: `/paginas?q=investidor.` },
+              { label: "📊 Comparar com período anterior", command: "Como está a NAI vs semana passada?" },
+              { label: "💰 Vendas dentro da área logada", command: "Quanto vendi pra usuários logados?" },
+            ],
+          },
+        ],
+        followUps: [
+          "Como está a NAI vs semana passada?",
+          "Quais canais trazem mais usuários pra NAI?",
+          "Quanto vendi pra usuários logados?",
+        ],
+        navigate: `/paginas?q=investidor.`,
       };
     }
 
