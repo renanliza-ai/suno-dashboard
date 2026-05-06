@@ -418,6 +418,18 @@ function detectIntent(text: string, live: LiveData = EMPTY_LIVE): Intent {
   const has = (...kws: string[]) => kws.some((k) => t.includes(k));
   const exact = (...kws: string[]) => kws.some((k) => t === k);
 
+  // ---- ⚠ EARLY EXIT — URL/path explícito SEMPRE vai pra lp_lookup.
+  // Antes desse fix, "https://lp.statusinvest.com.br/..." caía em
+  // landing_performance porque "lp" matchava no subdomain. Resultado:
+  // chat retornava MOCK (/lp/premium-30 etc) em vez dos dados reais
+  // da URL pesquisada. Esta checagem precede TUDO porque URL é a
+  // pista mais forte de intenção.
+  const hasExplicitUrl = /https?:\/\/[^\s]+/i.test(t);
+  const hasExplicitPath = /\/[a-z0-9_-]+(?:\/[a-z0-9_-]+){1,}\/?/i.test(t);
+  if (hasExplicitUrl || hasExplicitPath) {
+    return "lp_lookup";
+  }
+
   // ---- Conversação (prioridade máxima — respostas curtas primeiro)
   if (
     exact("oi", "olá", "ola", "hey", "hi", "hello", "e aí", "eai", "fala", "fala aí")
