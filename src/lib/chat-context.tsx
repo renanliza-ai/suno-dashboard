@@ -1463,11 +1463,14 @@ function handleIntent(
         };
       }
 
-      // Normaliza pra path (sem host)
+      // Normaliza pra path (sem host) + extrai host quando URL absoluta
       let normalizedPath = queryStr;
+      let parsedHost: string | null = null;
       try {
         if (queryStr.startsWith("http")) {
-          normalizedPath = new URL(queryStr).pathname;
+          const u = new URL(queryStr);
+          normalizedPath = u.pathname;
+          parsedHost = u.hostname.toLowerCase();
         } else if (!queryStr.startsWith("/")) {
           normalizedPath = "/" + queryStr;
         }
@@ -1477,13 +1480,25 @@ function handleIntent(
       normalizedPath = normalizedPath.replace(/\/+$/, "") || "/";
 
       // Cruza com pagesDetail (dados reais GA4)
+      // CRÍTICO: quando user passou URL absoluta com host, FILTRAR por host
+      // (caso contrário, match parcial via includes() pega LPs de outras propriedades).
       const allPages = live.pagesDetail?.pages || [];
       const matches = allPages.filter((p) => {
         const pagePathClean = (p.path || "/").replace(/\/+$/, "") || "/";
+        const pageHostClean = (p.host || "").toLowerCase();
+
+        // Se URL veio com host: match EXATO de path AND host bate.
+        if (parsedHost) {
+          return pagePathClean === normalizedPath && pageHostClean === parsedHost;
+        }
+
+        // Sem host na query: match exato de path OU substring (slug/path parcial).
+        // Substring fica restrita a pagePath — não olha p.url pra evitar
+        // match cruzado em outras properties.
+        const slugQuery = normalizedPath.replace(/^\//, "");
         return (
           pagePathClean === normalizedPath ||
-          pagePathClean.includes(normalizedPath.replace(/^\//, "")) ||
-          (p.url || "").includes(queryStr)
+          (slugQuery.length >= 4 && pagePathClean.includes(slugQuery))
         );
       });
 

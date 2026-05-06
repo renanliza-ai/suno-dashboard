@@ -10,26 +10,15 @@ import {
   Users,
   Clock,
   LogOut,
-  TrendingUp,
   X,
-  LogIn,
 } from "lucide-react";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-  Cell,
-} from "recharts";
 import { allPages } from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
 import { useGA4, useGA4Overview, useGA4PagesDetail } from "@/lib/ga4-context";
-import { LandingPagesSection } from "@/components/landing-pages-section";
 import { MasterOnly } from "@/components/master-only";
 import { LPChannelComparator } from "@/components/lp-channel-comparator";
+import { DailySessionsChart } from "@/components/daily-sessions-chart";
+import { ClarityHeatmap } from "@/components/clarity-heatmap";
 import {
   DataStatus,
   PeriodBadge,
@@ -140,26 +129,6 @@ export default function PaginasPage() {
     }
   };
 
-  // KPIs agregados — agora sempre calculados (real via pages-detail OU mock)
-  const totalViews = pageRows.reduce((s, p) => s + p.views, 0);
-  const totalUsers = pageRows.reduce((s, p) => s + p.users, 0);
-  // Média ponderada por views para tempo e rejeição (mais representativa que média simples)
-  const totalWeight = pageRows.reduce((s, p) => s + p.views, 0);
-  const avgTime =
-    totalWeight > 0
-      ? Math.round(
-          pageRows.reduce((s, p) => s + p.avgTime * p.views, 0) / totalWeight
-        )
-      : 0;
-  const avgBounce =
-    totalWeight > 0
-      ? Number(
-          (
-            pageRows.reduce((s, p) => s + p.bounceRate * p.views, 0) / totalWeight
-          ).toFixed(1)
-        )
-      : 0;
-
   const headers: { key: SortKey; label: string; fmt: (v: number) => string; realAvailable: boolean }[] = [
     { key: "views", label: "Visualizações", fmt: formatNumber, realAvailable: true },
     { key: "users", label: "Usuários Únicos", fmt: formatNumber, realAvailable: true },
@@ -173,19 +142,6 @@ export default function PaginasPage() {
     { key: "exitRate", label: "Saída", fmt: (v) => (v === 0 ? "—" : `${v.toFixed(1)}%`), realAvailable: true },
     { key: "entry", label: "Entradas", fmt: (v) => (v === 0 ? "—" : formatNumber(v)), realAvailable: true },
   ];
-
-  // Top 8 para o chart
-  const chartData = [...pageRows]
-    .sort((a, b) => b.views - a.views)
-    .slice(0, 8)
-    .map((p) => ({
-      name: p.path.length > 22 ? `…${p.path.slice(-20)}` : p.path,
-      fullPath: p.path,
-      views: p.views,
-      users: p.users,
-    }));
-
-  const COLORS = ["#7c5cff", "#8b6dff", "#9a7eff", "#a98fff", "#b8a0ff", "#c7b1ff", "#d6c2ff", "#e5d3ff"];
 
   return (
     <main className="ml-20 p-8 max-w-[1600px]">
@@ -225,134 +181,21 @@ export default function PaginasPage() {
         </div>
       )}
 
-      {/* Landing Pages (ex: GreatPages) — sempre no topo quando há GA4 conectado */}
-      {useRealData && <LandingPagesSection />}
-
-      {/* Comparativo LP × Canal — ferramenta dedicada pra analisar várias LPs lado a lado */}
+      {/* ============================================================
+          NOVA ORDEM (pedida pelo Renan):
+          1. Comparativo LP × Canal no TOPO (era a ferramenta principal escondida no meio)
+          2. Gráfico de linhas — sessões por dia (respeita range do header)
+          3. Mapa de calor Microsoft Clarity (heatmaps + recordings)
+          4. Tabela detalhada de páginas (busca + sort)
+          A "visão antiga" (KPIs agregados + top-pages bar chart + insights panel
+          + Landing Pages section) foi removida porque duplicava info do
+          comparativo e poluía a tela. KPIs ainda existem em outras abas.
+         ============================================================ */}
       <LPChannelComparator />
 
-      {/* KPI cards */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        {isLoading || hasError ? (
-          [0, 1, 2, 3].map((i) => (
-            <div key={i} className="bg-white rounded-2xl border border-[color:var(--border)] p-5">
-              <SkeletonBlock height={12} className="w-24 mb-3" />
-              <SkeletonBlock height={32} className="w-32 mb-2" />
-              <SkeletonBlock height={10} className="w-20" />
-            </div>
-          ))
-        ) : (
-          <>
-            <KpiCard
-              label="Pageviews"
-              value={formatNumber(totalViews)}
-              icon={Eye}
-              color="#7c5cff"
-              sub={`${pageRows.length} páginas`}
-            />
-            <KpiCard
-              label="Usuários Únicos"
-              value={formatNumber(totalUsers)}
-              icon={Users}
-              color="#10b981"
-              sub="somados (pode ter sobreposição)"
-            />
-            <KpiCard
-              label="Tempo Médio"
-              value={avgTime === 0 ? "—" : `${Math.floor(avgTime / 60)}m ${avgTime % 60}s`}
-              icon={Clock}
-              color="#3b82f6"
-              sub="ponderado por views"
-              disabled={avgTime === 0}
-            />
-            <KpiCard
-              label="Rejeição Média"
-              value={avgBounce === 0 ? "—" : `${avgBounce}%`}
-              icon={LogOut}
-              color="#f59e0b"
-              sub="ponderado por views"
-              disabled={avgBounce === 0}
-            />
-          </>
-        )}
-      </div>
+      <DailySessionsChart />
 
-      {/* Top pages chart */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
-        <div className="col-span-2 bg-white rounded-2xl border border-[color:var(--border)] p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-sm font-semibold flex items-center gap-2">
-                <TrendingUp size={16} className="text-[#7c5cff]" />
-                Top páginas por visualização
-              </h3>
-              <p className="text-xs text-[color:var(--muted-foreground)] mt-0.5">
-                As 8 páginas mais acessadas no período
-              </p>
-            </div>
-          </div>
-          {isLoading ? (
-            <SkeletonBlock height={280} />
-          ) : (
-            <div className="h-[280px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} layout="vertical" margin={{ left: 16, right: 16 }}>
-                  <CartesianGrid horizontal={false} stroke="#f1f5f9" />
-                  <XAxis type="number" tickFormatter={formatNumber} fontSize={11} stroke="#94a3b8" />
-                  <YAxis type="category" dataKey="name" width={140} fontSize={11} stroke="#475569" />
-                  <Tooltip
-                    contentStyle={{
-                      background: "white",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: 8,
-                      fontSize: 12,
-                    }}
-                    formatter={(value) => formatNumber(Number(value))}
-                  />
-                  <Bar dataKey="views" radius={[0, 6, 6, 0]}>
-                    {chartData.map((_, i) => (
-                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-
-        {/* Insights panel — MASTER ONLY (insights/recomendações ficam só no perfil Renan) */}
-        <MasterOnly>
-          <div className="bg-gradient-to-br from-[#ede9fe] to-white rounded-2xl border border-[#ddd6fe] p-6">
-            <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-              <LogIn size={16} className="text-[#7c5cff]" />
-              Insights
-              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-700 uppercase tracking-wider">
-                Master
-              </span>
-            </h3>
-            <div className="space-y-3 text-xs">
-              <InsightBlock
-                title="Página mais acessada"
-                value={chartData[0]?.fullPath || "—"}
-                detail={chartData[0] ? `${formatNumber(chartData[0].views)} views` : ""}
-              />
-              <InsightBlock
-                title="Página de maior engajamento"
-                value={[...pageRows].sort((a, b) => b.avgTime - a.avgTime)[0]?.path || "—"}
-                detail={(() => {
-                  const t = [...pageRows].sort((a, b) => b.avgTime - a.avgTime)[0]?.avgTime || 0;
-                  return t === 0 ? "—" : `${Math.floor(t / 60)}m ${t % 60}s`;
-                })()}
-              />
-              <InsightBlock
-                title="Top entrada"
-                value={[...pageRows].sort((a, b) => b.entry - a.entry)[0]?.path || "—"}
-                detail={`${formatNumber([...pageRows].sort((a, b) => b.entry - a.entry)[0]?.entry || 0)} entradas`}
-              />
-            </div>
-          </div>
-        </MasterOnly>
-      </div>
+      <ClarityHeatmap />
 
       {/* Search + Host filter */}
       <div className="bg-white rounded-2xl border border-[color:var(--border)] p-4 mb-4 flex flex-wrap items-center gap-3">
@@ -496,62 +339,6 @@ export default function PaginasPage() {
         )}
       </AnimatePresence>
     </main>
-  );
-}
-
-function KpiCard({
-  label,
-  value,
-  icon: Icon,
-  color,
-  sub,
-  disabled,
-}: {
-  label: string;
-  value: string;
-  icon: React.ComponentType<{ size?: number; className?: string; style?: React.CSSProperties }>;
-  color: string;
-  sub?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={`bg-white rounded-2xl border border-[color:var(--border)] p-5 ${
-        disabled ? "opacity-70" : ""
-      }`}
-    >
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-[10px] uppercase tracking-wider text-[color:var(--muted-foreground)] font-semibold">
-          {label}
-        </div>
-        <div
-          className="w-7 h-7 rounded-lg flex items-center justify-center"
-          style={{ background: `${color}18` }}
-        >
-          <Icon size={14} className="" style={{ color }} />
-        </div>
-      </div>
-      <div className="text-2xl font-bold tabular-nums" style={{ color: disabled ? "#94a3b8" : undefined }}>
-        {value}
-      </div>
-      {sub && (
-        <div className="text-[10px] text-[color:var(--muted-foreground)] mt-1">{sub}</div>
-      )}
-    </motion.div>
-  );
-}
-
-function InsightBlock({ title, value, detail }: { title: string; value: string; detail: string }) {
-  return (
-    <div className="p-3 rounded-xl bg-white/70 border border-white">
-      <div className="text-[10px] uppercase tracking-wider text-[#7c5cff] font-bold mb-0.5">
-        {title}
-      </div>
-      <div className="font-mono text-[11px] truncate">{value}</div>
-      <div className="text-[10px] text-[color:var(--muted-foreground)] mt-0.5">{detail}</div>
-    </div>
   );
 }
 
