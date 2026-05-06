@@ -27,12 +27,25 @@ function normalizeKey(name: string): string {
     .replace(/[^A-Z0-9]/g, "");
 }
 
+/**
+ * ⚠ Next.js só inlina `process.env.NEXT_PUBLIC_FOO` quando o acesso é
+ * **literal** (string estática). Acesso dinâmico via process.env[var]
+ * volta undefined no client. Por isso construímos um mapa estático
+ * abaixo, com cada chave acessada literalmente.
+ *
+ * Pra adicionar uma propriedade: copie a linha e ajuste o normalize key.
+ */
+const CLARITY_ID_MAP: Record<string, string | undefined> = {
+  STATUSINVESTWEB: process.env.NEXT_PUBLIC_CLARITY_PROJECT_STATUSINVESTWEB,
+  SUNORESEARCHWEB: process.env.NEXT_PUBLIC_CLARITY_PROJECT_SUNORESEARCHWEB,
+  SUNOADVISORY: process.env.NEXT_PUBLIC_CLARITY_PROJECT_SUNOADVISORY,
+};
+
 function resolveClarityId(propertyName: string | null | undefined): string | null {
-  if (typeof process === "undefined" || !process.env) return null;
   if (propertyName) {
-    const key = `NEXT_PUBLIC_CLARITY_PROJECT_${normalizeKey(propertyName)}`;
-    const perProp = process.env[key as keyof NodeJS.ProcessEnv];
-    if (perProp) return perProp as string;
+    const key = normalizeKey(propertyName);
+    const perProp = CLARITY_ID_MAP[key];
+    if (perProp) return perProp;
   }
   return process.env.NEXT_PUBLIC_CLARITY_PROJECT_ID || null;
 }

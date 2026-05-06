@@ -27,14 +27,23 @@ export function DailySessionsChart() {
   const isLoading = useRealData && meta.status === "loading";
   const trend = data?.trend || [];
 
-  // Formata YYYY-MM-DD pra DD/MM (mais legível em PT-BR)
+  // GA4 Data API retorna `date` como YYYYMMDD (sem hífens). Tratamos os dois
+  // formatos pra resiliência (ex.: se algum dia trocarmos pra runReport com
+  // dateHourMinute, o formato muda).
   const chartData = trend.map((t) => {
-    const [, mm, dd] = t.date.split("-");
+    const raw = t.date || "";
+    let label = raw;
+    if (/^\d{8}$/.test(raw)) {
+      label = `${raw.slice(6, 8)}/${raw.slice(4, 6)}`;
+    } else if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const [, mm, dd] = raw.split("-");
+      label = `${dd}/${mm}`;
+    }
     return {
-      label: `${dd}/${mm}`,
+      label,
       sessoes: t.sessoes,
       usuarios: t.usuarios,
-      dateRaw: t.date,
+      dateRaw: raw,
     };
   });
 
