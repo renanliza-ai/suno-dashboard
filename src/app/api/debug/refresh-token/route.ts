@@ -1,5 +1,6 @@
 import { auth } from "@/auth";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { decode } from "next-auth/jwt";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,12 +10,13 @@ export const dynamic = "force-dynamic";
  *
  * 🔒 ENDPOINT MASTER-ONLY E TEMPORÁRIO.
  *
- * Retorna o refresh_token Google OAuth da sessão do usuário logado.
- * Em produção, NextAuth v5 usa cookie name `__Secure-authjs.session-token`
- * (com prefixo Secure por causa do HTTPS), enquanto dev usa `authjs.session-token`.
- * Este endpoint tenta ambos os salts para funcionar nos dois ambientes.
+ * Lê o cookie de sessão NextAuth diretamente do request, decodifica com o
+ * AUTH_SECRET e devolve o refresh_token Google OAuth.
+ *
+ * Diferente da versão anterior, agora usa o NextRequest real (não fake) e
+ * tenta múltiplas combinações de cookieName/salt pra cobrir dev e produção.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = (await auth()) as {
     user?: { isMaster?: boolean; email?: string };
   } | null;
@@ -24,54 +26,103 @@ export async function GET() {
     return NextResponse.json({ error: "forbidden_master_only" }, { status: 403 });
   }
 
-  const { getToken } = await import("next-auth/jwt");
-  const { headers } = await import("next/headers");
-  const reqHeaders = await headers();
-  const cookieHeader = reqHeaders.get("cookie") || "";
-  const fakeReq = {
-    headers: {
-      get: (name: string) => (name.toLowerCase() === "cookie" ? cookieHeader : null),
-    },
-  } as unknown as Request;
+  // Lê todos os cookies disponíveis no request (NextRequest tem .cookies nativo)
+  const allCookies = req.cookies.getAll();
+  const cookieNames = allCookies.map((c) => c.name);
 
-  // Tenta os 2 salts possíveis (production usa o "__Secure-" prefix)
-  const salts = ["__Secure-authjs.session-token", "authjs.session-token"];
-  let token: { refreshToken?: string; accessTokenExpires?: number; isMaster?: boolean } | null = null;
-  let usedSalt: string | null = null;
-  for (const salt of salts) {
-    try {
-      const t = (await getToken({
-        req: fakeReq as unknown as Parameters<typeof getToken>[0]["req"],
-        secret: process.env.AUTH_SECRET,
-        salt,
-      })) as { refreshToken?: string; accessTokenExpires?: number; isMaster?: boolean } | null;
-      if (t) {
-        token = t;
-        usedSalt = salt;
-        break;
-      }
-    } catch {
-      // tenta o próximo
+  // Identifica qual cookie de sessão está presente (production usa prefixo __Secure-)
+  const possibleCookies = [
+    "__Secure-authjs.session-token",
+    "authjs.session-token",
+  ];
+
+  let foundCookieName: string | null = null;
+  let cookieValue: string | null = null;
+  for (const name of possibleCookies) {
+    const c = req.cookies.get(name);
+    if (c?.value) {
+      foundCookieName = name;
+      cookieValue = c.value;
+      break;
     }
   }
 
-  // Diagnóstico: se ainda não achou, mostra os cookies disponíveis pra debug
-  const cookieNames = cookieHeader
-    .split(";")
-    .map((c) => c.trim().split("=")[0])
-    .filter(Boolean);
+  // Se cookie está chunkificado (NextAuth divide cookies grandes em .0, .1, etc.)
+  if (!cookieValue) {
+    const chunks: { name: string; value: string }[] = [];
+    for (const c of allCookies) {
+      if (/(__Secure-)?authjs\.session-token\.\d+/.test(c.name)) {
+        chunks.push(c);
+      }
+    }
+    if (chunks.length > 0) {
+      chunks.sort((a, b) => {
+        const an = Number(a.name.split(".").pop());
+        const bn = Number(b.name.split(".").pop());
+        return an - bn;
+      });
+      cookieValue = chunks.map((c) => c.value).join("");
+      foundCookieName = chunks[0].name.replace(/\.\d+$/, "");
+    }
+  }
+
+  if (!cookieValue) {
+    return NextResponse.json({
+      error: "session_cookie_not_found",
+      diagnostico: {
+        cookiesPresentes: cookieNames,
+        hasAuthSecret: Boolean(process.env.AUTH_SECRET),
+      },
+    });
+  }
+
+  // Tenta decodificar com diferentes salts
+  const saltsToTry = [
+    foundCookieName!, // salt padrão = cookieName
+    "authjs.session-token",
+    "__Secure-authjs.session-token",
+  ];
+
+  type DecodedToken = {
+    refreshToken?: string;
+    accessTokenExpires?: number;
+    isMaster?: boolean;
+    [key: string]: unknown;
+  };
+  let decoded: DecodedToken | null = null;
+  let usedSalt: string | null = null;
+  let lastError: string | null = null;
+
+  for (const salt of saltsToTry) {
+    try {
+      const result = await decode({
+        token: cookieValue,
+        secret: process.env.AUTH_SECRET || "",
+        salt,
+      });
+      if (result) {
+        decoded = result as unknown as DecodedToken;
+        usedSalt = salt;
+        break;
+      }
+    } catch (e) {
+      lastError = (e as Error).message;
+    }
+  }
 
   return NextResponse.json({
     user: session.user.email,
-    refreshToken: token?.refreshToken || "(NÃO ENCONTRADO — veja diagnóstico abaixo)",
-    accessTokenExpires: token?.accessTokenExpires
-      ? new Date(token.accessTokenExpires * 1000).toISOString()
+    refreshToken: decoded?.refreshToken || "(NÃO ENCONTRADO — veja diagnóstico abaixo)",
+    accessTokenExpires: decoded?.accessTokenExpires
+      ? new Date(decoded.accessTokenExpires * 1000).toISOString()
       : null,
     diagnostico: {
+      cookieEncontrado: foundCookieName,
       saltUsado: usedSalt,
       cookiesPresentes: cookieNames,
       hasAuthSecret: Boolean(process.env.AUTH_SECRET),
-      tokenKeysFound: token ? Object.keys(token) : null,
+      tokenKeysFound: decoded ? Object.keys(decoded) : null,
+      lastDecodeError: lastError,
     },
     instructions: [
       "1. Copia o valor de `refreshToken` (sem aspas)",
