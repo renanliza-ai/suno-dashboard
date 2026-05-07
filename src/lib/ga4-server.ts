@@ -1697,6 +1697,240 @@ export async function getCheckoutFunnel(
   };
 }
 
+/**
+ * UTM Discrepancy Audit — investiga divergências entre GA4 e PowerBI/sunocode.
+ *
+ * Pra uma LP específica, retorna:
+ *   1. Top 50 source/medium pairs com sessions, conversions, revenue
+ *   2. Top campaigns
+ *   3. Pages com query string raw (mostra UTMs como chegaram, antes de normalizar)
+ *   4. Detector de "variações do mesmo canal" (ex: status-invest vs statusinvest)
+ *   5. % de (direct)/(none) — sintoma de UTM perdida
+ */
+export type UTMDiscrepancyVariation = {
+  canonical: string; // forma canônica (lowercase, sem hífens/espaços)
+  variants: { name: string; sessions: number }[];
+  totalSessions: number;
+  variantCount: number;
+};
+
+export async function getUTMAudit(
+  propertyId: string,
+  pathContains: string,
+  days = 30,
+  startDate?: string | null,
+  endDate?: string | null
+) {
+  const range = buildDateRangeIncludingToday(days, startDate, endDate);
+
+  // Filtra por LP path quando passado
+  const buildPathFilter = () =>
+    pathContains
+      ? {
+          dimensionFilter: {
+            filter: {
+              fieldName: "pagePath",
+              stringFilter: {
+                value: pathContains,
+                matchType: "CONTAINS" as const,
+              },
+            },
+          },
+        }
+      : {};
+
+  const [sourceMediumRes, campaignsRes, pagesRawRes, totalRes] = await Promise.all([
+    // 1) Top source/medium na LP
+    runReport(propertyId, {
+      dateRanges: [range.ga4Range],
+      dimensions: [
+        { name: "sessionSource" },
+        { name: "sessionMedium" },
+      ],
+      metrics: [{ name: "sessions" }, { name: "totalUsers" }, { name: "keyEvents" }],
+      orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+      limit: 50,
+      ...buildPathFilter(),
+    }),
+    // 2) Top campaigns na LP
+    runReport(propertyId, {
+      dateRanges: [range.ga4Range],
+      dimensions: [{ name: "sessionCampaignName" }, { name: "sessionSource" }, { name: "sessionMedium" }],
+      metrics: [{ name: "sessions" }, { name: "keyEvents" }],
+      orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+      limit: 50,
+      ...buildPathFilter(),
+    }),
+    // 3) Landing pages com pagePath E query string raw (pegar pageReferrer +
+    //    pagePathPlusQueryString pra ver UTMs antes da normalização)
+    runReport(propertyId, {
+      dateRanges: [range.ga4Range],
+      dimensions: [{ name: "pagePathPlusQueryString" }],
+      metrics: [{ name: "sessions" }],
+      orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+      limit: 100,
+      ...buildPathFilter(),
+    }),
+    // 4) Total de sessões na LP (pra calcular %)
+    runReport(propertyId, {
+      dateRanges: [range.ga4Range],
+      metrics: [{ name: "sessions" }],
+      ...buildPathFilter(),
+    }),
+  ]);
+
+  const sourceMedium = (sourceMediumRes.data?.rows || []).map((r) => ({
+    source: r.dimensionValues?.[0]?.value || "(not set)",
+    medium: r.dimensionValues?.[1]?.value || "(not set)",
+    sessions: Number(r.metricValues?.[0]?.value || 0),
+    users: Number(r.metricValues?.[1]?.value || 0),
+    conversions: Number(r.metricValues?.[2]?.value || 0),
+  }));
+
+  const campaigns = (campaignsRes.data?.rows || []).map((r) => ({
+    campaign: r.dimensionValues?.[0]?.value || "(not set)",
+    source: r.dimensionValues?.[1]?.value || "(not set)",
+    medium: r.dimensionValues?.[2]?.value || "(not set)",
+    sessions: Number(r.metricValues?.[0]?.value || 0),
+    conversions: Number(r.metricValues?.[1]?.value || 0),
+  }));
+
+  const pagesRaw = (pagesRawRes.data?.rows || []).map((r) => ({
+    url: r.dimensionValues?.[0]?.value || "",
+    sessions: Number(r.metricValues?.[0]?.value || 0),
+  }));
+
+  const totalSessions = Number(totalRes.data?.totals?.[0]?.metricValues?.[0]?.value || 0);
+
+  // Calcula % de (direct)/(none)
+  const directNoneSessions = sourceMedium
+    .filter((sm) => sm.source === "(direct)" && sm.medium === "(none)")
+    .reduce((s, sm) => s + sm.sessions, 0);
+  const directNonePct =
+    totalSessions > 0 ? Number(((directNoneSessions / totalSessions) * 100).toFixed(1)) : 0;
+
+  // Calcula % de (not set) — UTMs malformadas
+  const notSetSessions = sourceMedium
+    .filter((sm) => sm.source.includes("(not set)") || sm.medium.includes("(not set)"))
+    .reduce((s, sm) => s + sm.sessions, 0);
+  const notSetPct =
+    totalSessions > 0 ? Number(((notSetSessions / totalSessions) * 100).toFixed(1)) : 0;
+
+  // Detector de variações: agrupa por canonical (lowercase + sem hífen/underline/dot)
+  const canonicalize = (s: string) =>
+    s
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .replace(/[-_.\s]+/g, "");
+
+  const sourceVariants = new Map<string, { name: string; sessions: number }[]>();
+  for (const sm of sourceMedium) {
+    if (sm.source === "(not set)" || sm.source === "(direct)") continue;
+    const canonical = canonicalize(sm.source);
+    const existing = sourceVariants.get(canonical) || [];
+    const existingVariant = existing.find((v) => v.name === sm.source);
+    if (existingVariant) {
+      existingVariant.sessions += sm.sessions;
+    } else {
+      existing.push({ name: sm.source, sessions: sm.sessions });
+    }
+    sourceVariants.set(canonical, existing);
+  }
+  const sourceVariations: UTMDiscrepancyVariation[] = Array.from(sourceVariants.entries())
+    .filter(([_, variants]) => variants.length > 1)
+    .map(([canonical, variants]) => ({
+      canonical,
+      variants: variants.sort((a, b) => b.sessions - a.sessions),
+      totalSessions: variants.reduce((s, v) => s + v.sessions, 0),
+      variantCount: variants.length,
+    }))
+    .sort((a, b) => b.totalSessions - a.totalSessions);
+
+  // Mesmo pra medium
+  const mediumVariants = new Map<string, { name: string; sessions: number }[]>();
+  for (const sm of sourceMedium) {
+    if (sm.medium === "(not set)" || sm.medium === "(none)") continue;
+    const canonical = canonicalize(sm.medium);
+    const existing = mediumVariants.get(canonical) || [];
+    const existingVariant = existing.find((v) => v.name === sm.medium);
+    if (existingVariant) {
+      existingVariant.sessions += sm.sessions;
+    } else {
+      existing.push({ name: sm.medium, sessions: sm.sessions });
+    }
+    mediumVariants.set(canonical, existing);
+  }
+  const mediumVariations: UTMDiscrepancyVariation[] = Array.from(mediumVariants.entries())
+    .filter(([_, variants]) => variants.length > 1)
+    .map(([canonical, variants]) => ({
+      canonical,
+      variants: variants.sort((a, b) => b.sessions - a.sessions),
+      totalSessions: variants.reduce((s, v) => s + v.sessions, 0),
+      variantCount: variants.length,
+    }))
+    .sort((a, b) => b.totalSessions - a.totalSessions);
+
+  // Diagnóstico automático
+  const diagnoses: { severity: "info" | "warning" | "error"; message: string }[] = [];
+  if (directNonePct > 15) {
+    diagnoses.push({
+      severity: "error",
+      message: `${directNonePct}% das sessões nessa LP estão como (direct)/(none) — UTM perdida em volume crítico. Investigar cross-domain, adblockers ou redirecionamentos que descartam query string.`,
+    });
+  } else if (directNonePct > 7) {
+    diagnoses.push({
+      severity: "warning",
+      message: `${directNonePct}% de (direct)/(none) — acima do esperado (5-8% é normal). Verificar se há redirects internos que perdem UTMs.`,
+    });
+  }
+  if (notSetPct > 5) {
+    diagnoses.push({
+      severity: "warning",
+      message: `${notSetPct}% de (not set) — UTMs malformadas. Conferir se gerador (sunocode) sempre preenche source+medium.`,
+    });
+  }
+  if (sourceVariations.length > 0) {
+    const totalVariantSessions = sourceVariations.reduce((s, v) => s + v.totalSessions, 0);
+    diagnoses.push({
+      severity: "warning",
+      message: `${sourceVariations.length} canais com variações de naming (ex: ${sourceVariations[0].variants.map((v) => v.name).join(" / ")}). Total: ${totalVariantSessions} sessões pulverizadas. PowerBI/sunocode normaliza isso, GA4 não.`,
+    });
+  }
+  if (mediumVariations.length > 0) {
+    diagnoses.push({
+      severity: "warning",
+      message: `${mediumVariations.length} mediums com variações (ex: ${mediumVariations[0].variants.map((v) => v.name).join(" / ")}).`,
+    });
+  }
+  if (diagnoses.length === 0) {
+    diagnoses.push({
+      severity: "info",
+      message: "Nenhuma anomalia óbvia detectada nas UTMs desta LP.",
+    });
+  }
+
+  return {
+    data: {
+      filterPath: pathContains,
+      totalSessions,
+      directNoneSessions,
+      directNonePct,
+      notSetSessions,
+      notSetPct,
+      sourceMedium,
+      campaigns,
+      pagesRaw,
+      sourceVariations,
+      mediumVariations,
+      diagnoses,
+      range,
+      days,
+    },
+    error: null,
+  };
+}
+
 export async function getRealtimeActive(propertyId: string) {
   // O Realtime API às vezes popula `totals` e às vezes `rows[0]` quando consultado sem
   // dimensão. Lemos os dois e, se ambos forem 0, ainda agregamos por país como salvaguarda.

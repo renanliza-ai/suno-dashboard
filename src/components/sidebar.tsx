@@ -17,6 +17,7 @@ import {
   Megaphone,
   AlertTriangle,
   ShieldCheck,
+  Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SunoLogo } from "./suno-logo";
@@ -52,6 +53,7 @@ const comportamentoNav: NavItem[] = [
 const masterNav: NavItem[] = [
   { icon: AlertTriangle, label: "Anomalias", href: "/anomalias", description: "Detector D-1 vs baseline 14d" },
   { icon: ShieldCheck, label: "Auditoria", href: "/auditoria", description: "Audit GA4 — métricas vs painel nativo" },
+  { icon: Tag, label: "Auditoria UTM", href: "/auditoria-utm", description: "GA4 vs PowerBI/sunocode — UTMs e atribuição" },
   { icon: TrendingUp, label: "CRO", href: "/cro", description: "Recomendações + experimentos" },
   { icon: Radar, label: "Tracking", href: "/tracking", description: "UTM + GTM + CAPI" },
   { icon: MessageSquare, label: "Copiloto Log", href: "/copiloto-log", description: "Histórico do chat" },
