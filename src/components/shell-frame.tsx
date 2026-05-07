@@ -15,6 +15,7 @@ const ROUTES_WITH_INLINE_HEADER = new Set([
   "/",
   "/anomalias",
   "/audiencia",
+  "/auditoria",
   "/conversoes",
   "/copiloto-log",
   "/cro",
