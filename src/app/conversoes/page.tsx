@@ -28,6 +28,7 @@ import {
 } from "@/components/attribution-illustration";
 import { AttributionToggle } from "@/components/attribution-toggle";
 import { AssistedTimeToPurchase } from "@/components/assisted-time-to-purchase";
+import { CheckoutMonitor } from "@/components/checkout-monitor";
 
 const eventIcon: Record<string, typeof Target> = {
   view_item: Eye,
@@ -114,6 +115,18 @@ export default function ConversoesPage() {
 
       {/* Tempo até compra por canal — só aparece no modo assistida */}
       <AssistedTimeToPurchase />
+
+      {/* ============================================================
+          MONITOR DE CHECKOUT — adicionado a pedido pra análise de
+          CTR de campanhas + abandono de carrinho. Mostra:
+          1. Funil 5-step (view_item → add_to_cart → begin_checkout
+             → add_payment_info → purchase)
+          2. KPIs de receita perdida e taxa de abandono
+          3. Tabela de campanhas com CTR-to-checkout, taxa de abandono,
+             conversion rate, ticket médio, receita
+          4. Diagnóstico automático da etapa com maior drop
+         ============================================================ */}
+      <CheckoutMonitor />
 
       <div className="grid grid-cols-4 gap-4 mb-6">
         {isLoading || hasError ? (

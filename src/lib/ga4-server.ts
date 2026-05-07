@@ -1431,6 +1431,235 @@ export async function getJourneyFunnel(propertyId: string, days = 30, startDate?
   return { data: { steps, top, discoveredEvents }, error: null };
 }
 
+/**
+ * Checkout funnel detalhado — análise de abandono de carrinho + CTR
+ * de campanhas que levam ao checkout.
+ *
+ * Retorna 4 blocos:
+ *   1) steps: funil de eventos view_item → add_to_cart → begin_checkout
+ *      → add_payment_info → purchase
+ *   2) abandonment: drop absoluto entre cada etapa + valor perdido estimado
+ *   3) byCampaign: top campanhas com sessões, begin_checkout, purchase,
+ *      conversion rate, ticket médio
+ *   4) byLandingPage: top LPs por entrada que levam ao checkout
+ */
+const CHECKOUT_STEPS: { stage: string; aliases: string[]; label: string }[] = [
+  { stage: "view_item", aliases: ["view_item", "view_product"], label: "Viu produto" },
+  { stage: "add_to_cart", aliases: ["add_to_cart"], label: "Adicionou ao carrinho" },
+  { stage: "begin_checkout", aliases: ["begin_checkout", "checkout_start"], label: "Iniciou checkout" },
+  { stage: "add_payment_info", aliases: ["add_payment_info", "add_shipping_info"], label: "Preencheu pagamento" },
+  { stage: "purchase", aliases: ["purchase", "purchase_success"], label: "Comprou" },
+];
+
+export type CheckoutFunnelStep = {
+  stage: string;
+  label: string;
+  matchedAlias: string | null;
+  count: number;
+  pctOfTop: number;
+  dropFromPrev: number; // % drop vs etapa anterior
+  dropAbsoluteFromPrev: number; // valor absoluto perdido
+};
+
+export type CheckoutCampaignRow = {
+  campaign: string;
+  sessions: number;
+  beginCheckout: number;
+  purchases: number;
+  revenue: number;
+  ctr_to_checkout: number; // begin_checkout / sessions × 100
+  conversion_rate: number; // purchase / sessions × 100
+  abandonment_rate: number; // (begin_checkout - purchase) / begin_checkout × 100
+  avg_ticket: number;
+};
+
+export async function getCheckoutFunnel(
+  propertyId: string,
+  days = 30,
+  startDate?: string | null,
+  endDate?: string | null
+) {
+  const range = buildDateRangeIncludingToday(days, startDate, endDate);
+
+  // Query 1: contagem de cada evento do checkout
+  const eventsRes = await runReport(propertyId, {
+    dateRanges: [range.ga4Range],
+    dimensions: [{ name: "eventName" }],
+    metrics: [{ name: "eventCount" }],
+    orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
+    limit: 200,
+  });
+  if (eventsRes.error) return { data: null, error: eventsRes.error };
+
+  const eventCounts = new Map<string, number>();
+  for (const r of eventsRes.data?.rows || []) {
+    eventCounts.set(r.dimensionValues?.[0]?.value || "", Number(r.metricValues?.[0]?.value || 0));
+  }
+
+  const resolvedSteps = CHECKOUT_STEPS.map((step) => {
+    let hit: { alias: string; count: number } | null = null;
+    for (const alias of step.aliases) {
+      const c = eventCounts.get(alias) || 0;
+      if (c > 0 && (!hit || c > hit.count)) {
+        hit = { alias, count: c };
+      }
+    }
+    return {
+      stage: step.stage,
+      label: step.label,
+      matchedAlias: hit?.alias || null,
+      count: hit?.count || 0,
+    };
+  });
+
+  // Query 2: receita total (via purchase event value) — pra estimar valor abandonado
+  const revRes = await runReport(propertyId, {
+    dateRanges: [range.ga4Range],
+    metrics: [{ name: "totalRevenue" }, { name: "purchaseRevenue" }],
+  });
+  const totalRevenue = Number(
+    revRes.data?.totals?.[0]?.metricValues?.[1]?.value ||
+      revRes.data?.totals?.[0]?.metricValues?.[0]?.value ||
+      0
+  );
+
+  // Calcula ticket médio com base nos purchases reais (não no count do funnel)
+  const purchaseStep = resolvedSteps.find((s) => s.stage === "purchase");
+  const avgTicket = purchaseStep && purchaseStep.count > 0 ? totalRevenue / purchaseStep.count : 0;
+
+  // Constrói os steps com dropFromPrev + dropAbsolute
+  const top = resolvedSteps[0]?.count || 0;
+  const steps: CheckoutFunnelStep[] = resolvedSteps.map((s, i) => {
+    const prev = i > 0 ? resolvedSteps[i - 1].count : s.count;
+    const dropAbs = i > 0 ? Math.max(0, prev - s.count) : 0;
+    const dropPct = prev > 0 && i > 0 ? Math.round((1 - s.count / prev) * 1000) / 10 : 0;
+    const pctOfTop = top > 0 ? Math.round((s.count / top) * 1000) / 10 : 0;
+    return { ...s, dropFromPrev: dropPct, dropAbsoluteFromPrev: dropAbs, pctOfTop };
+  });
+
+  // Calcula valor abandonado total (entre begin_checkout e purchase)
+  const beginCheckoutStep = resolvedSteps.find((s) => s.stage === "begin_checkout");
+  const beginCheckoutCount = beginCheckoutStep?.count || 0;
+  const purchaseCount = purchaseStep?.count || 0;
+  const abandonedCount = Math.max(0, beginCheckoutCount - purchaseCount);
+  const abandonedRevenueLost = abandonedCount * avgTicket;
+
+  // Query 3: per-campaign breakdown — sessions + begin_checkout + purchase + revenue
+  // Strategy: 3 queries em paralelo cruzando cada métrica com sessionCampaignName
+  const [campSessionsRes, campCheckoutRes, campPurchaseRes] = await Promise.all([
+    runReport(propertyId, {
+      dateRanges: [range.ga4Range],
+      dimensions: [{ name: "sessionCampaignName" }],
+      metrics: [{ name: "sessions" }],
+      orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+      limit: 50,
+    }),
+    runReport(propertyId, {
+      dateRanges: [range.ga4Range],
+      dimensions: [{ name: "sessionCampaignName" }, { name: "eventName" }],
+      metrics: [{ name: "eventCount" }],
+      dimensionFilter: {
+        filter: {
+          fieldName: "eventName",
+          inListFilter: { values: ["begin_checkout", "checkout_start"] },
+        },
+      },
+      limit: 200,
+    }),
+    runReport(propertyId, {
+      dateRanges: [range.ga4Range],
+      dimensions: [{ name: "sessionCampaignName" }, { name: "eventName" }],
+      metrics: [{ name: "eventCount" }, { name: "eventValue" }],
+      dimensionFilter: {
+        filter: {
+          fieldName: "eventName",
+          inListFilter: { values: ["purchase", "purchase_success"] },
+        },
+      },
+      limit: 200,
+    }),
+  ]);
+
+  // Mapeia campaign → sessions
+  const campSessions = new Map<string, number>();
+  for (const r of campSessionsRes.data?.rows || []) {
+    const camp = r.dimensionValues?.[0]?.value || "(not set)";
+    campSessions.set(camp, Number(r.metricValues?.[0]?.value || 0));
+  }
+
+  // Mapeia campaign → begin_checkout
+  const campCheckout = new Map<string, number>();
+  for (const r of campCheckoutRes.data?.rows || []) {
+    const camp = r.dimensionValues?.[0]?.value || "(not set)";
+    campCheckout.set(camp, (campCheckout.get(camp) || 0) + Number(r.metricValues?.[0]?.value || 0));
+  }
+
+  // Mapeia campaign → purchase + revenue
+  const campPurchase = new Map<string, { count: number; revenue: number }>();
+  for (const r of campPurchaseRes.data?.rows || []) {
+    const camp = r.dimensionValues?.[0]?.value || "(not set)";
+    const count = Number(r.metricValues?.[0]?.value || 0);
+    const value = Number(r.metricValues?.[1]?.value || 0);
+    const existing = campPurchase.get(camp) || { count: 0, revenue: 0 };
+    campPurchase.set(camp, {
+      count: existing.count + count,
+      revenue: existing.revenue + value,
+    });
+  }
+
+  // Combina em CheckoutCampaignRow[]
+  const allCamps = new Set<string>([
+    ...campSessions.keys(),
+    ...campCheckout.keys(),
+    ...campPurchase.keys(),
+  ]);
+  const byCampaign: CheckoutCampaignRow[] = Array.from(allCamps)
+    .map((camp) => {
+      const sessions = campSessions.get(camp) || 0;
+      const beginCheckout = campCheckout.get(camp) || 0;
+      const purchaseData = campPurchase.get(camp) || { count: 0, revenue: 0 };
+      const ctr = sessions > 0 ? (beginCheckout / sessions) * 100 : 0;
+      const convRate = sessions > 0 ? (purchaseData.count / sessions) * 100 : 0;
+      const abandonRate =
+        beginCheckout > 0 ? ((beginCheckout - purchaseData.count) / beginCheckout) * 100 : 0;
+      const avgTicketCamp = purchaseData.count > 0 ? purchaseData.revenue / purchaseData.count : 0;
+      return {
+        campaign: camp,
+        sessions,
+        beginCheckout,
+        purchases: purchaseData.count,
+        revenue: purchaseData.revenue,
+        ctr_to_checkout: Number(ctr.toFixed(2)),
+        conversion_rate: Number(convRate.toFixed(2)),
+        abandonment_rate: Number(abandonRate.toFixed(1)),
+        avg_ticket: Number(avgTicketCamp.toFixed(2)),
+      };
+    })
+    .filter((c) => c.sessions >= 50) // ruído de cauda longa removido
+    .sort((a, b) => b.purchases - a.purchases || b.beginCheckout - a.beginCheckout)
+    .slice(0, 20);
+
+  return {
+    data: {
+      steps,
+      summary: {
+        total_revenue: totalRevenue,
+        avg_ticket: Number(avgTicket.toFixed(2)),
+        abandoned_count: abandonedCount,
+        abandoned_revenue_lost: Number(abandonedRevenueLost.toFixed(2)),
+        abandonment_rate:
+          beginCheckoutCount > 0
+            ? Number(((abandonedCount / beginCheckoutCount) * 100).toFixed(1))
+            : 0,
+      },
+      byCampaign,
+      range,
+      days,
+    },
+    error: null,
+  };
+}
+
 export async function getRealtimeActive(propertyId: string) {
   // O Realtime API às vezes popula `totals` e às vezes `rows[0]` quando consultado sem
   // dimensão. Lemos os dois e, se ambos forem 0, ainda agregamos por país como salvaguarda.

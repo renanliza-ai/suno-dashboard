@@ -553,6 +553,109 @@ export type GA4LandingPagesData = {
   topSources: { source: string; medium: string; sessions: number; users: number }[];
 };
 
+// Tipos do checkout funnel — espelham o retorno de getCheckoutFunnel no server
+export type CheckoutFunnelStep = {
+  stage: string;
+  label: string;
+  matchedAlias: string | null;
+  count: number;
+  pctOfTop: number;
+  dropFromPrev: number;
+  dropAbsoluteFromPrev: number;
+};
+
+export type CheckoutCampaignRow = {
+  campaign: string;
+  sessions: number;
+  beginCheckout: number;
+  purchases: number;
+  revenue: number;
+  ctr_to_checkout: number;
+  conversion_rate: number;
+  abandonment_rate: number;
+  avg_ticket: number;
+};
+
+export type CheckoutFunnelData = {
+  steps: CheckoutFunnelStep[];
+  summary: {
+    total_revenue: number;
+    avg_ticket: number;
+    abandoned_count: number;
+    abandoned_revenue_lost: number;
+    abandonment_rate: number;
+  };
+  byCampaign: CheckoutCampaignRow[];
+  range: { startDate: string; endDate: string };
+  days: number;
+};
+
+export function useGA4CheckoutFunnel(daysOverride?: number) {
+  const { selectedId, selected, useRealData, days: ctxDays, customRange } = useGA4();
+  const days = daysOverride ?? ctxDays;
+  const effectiveCustomRange = daysOverride !== undefined ? null : customRange;
+  const [data, setData] = useState<CheckoutFunnelData | null>(null);
+  const [meta, setMeta] = useState<GA4Meta>({
+    status: "idle",
+    propertyId: null,
+    propertyName: null,
+    fetchedAt: null,
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setData(null);
+    setError(null);
+    if (!useRealData || !selectedId) {
+      setMeta({ status: "idle", propertyId: null, propertyName: null, fetchedAt: null });
+      return;
+    }
+    setMeta({
+      status: "loading",
+      propertyId: selectedId,
+      propertyName: selected?.displayName || null,
+      fetchedAt: null,
+    });
+    const ctrl = new AbortController();
+    const qs = buildDateQS(days, effectiveCustomRange, { propertyId: selectedId });
+    cachedFetch(`/api/ga4/checkout-funnel?${qs.toString()}`, { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((d: { data: CheckoutFunnelData | null; error: string | null }) => {
+        if (d.error) setError(d.error);
+        setData(d.data);
+        setMeta({
+          status: d.data ? "success" : "error",
+          propertyId: selectedId,
+          propertyName: selected?.displayName || null,
+          fetchedAt: Date.now(),
+          sectionErrors: d.error ? { checkout: d.error } : {},
+        });
+      })
+      .catch((e: Error) => {
+        if (e.name !== "AbortError") {
+          setError(e.message || "erro");
+          setMeta({
+            status: "error",
+            propertyId: selectedId,
+            propertyName: selected?.displayName || null,
+            fetchedAt: Date.now(),
+          });
+        }
+      });
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    selectedId,
+    selected,
+    useRealData,
+    days,
+    effectiveCustomRange?.startDate,
+    effectiveCustomRange?.endDate,
+  ]);
+
+  return { data, meta, loading: meta.status === "loading", error };
+}
+
 export function useGA4LandingPages(hostContains: string = "", daysOverride?: number) {
   const { selectedId, selected, useRealData, days: ctxDays, customRange } = useGA4();
   const days = daysOverride ?? ctxDays;
