@@ -28,6 +28,7 @@ import {
   type AnomalyMetric,
   type AnomalySeverity,
 } from "@/lib/ga4-context";
+import { AnomalyDetailModal } from "@/components/anomaly-detail-modal";
 
 const METRIC_ICON: Record<AnomalyMetric, typeof Users> = {
   users: Users,
@@ -85,6 +86,8 @@ export default function AnomaliasPage() {
   const [baselineDays, setBaselineDays] = useState(14);
   const [severityFilter, setSeverityFilter] = useState<"all" | AnomalySeverity>("all");
   const { data, loading, error, refetch } = useGA4Anomalies(baselineDays);
+  // Estado do modal de drill-down — abre quando user clica numa linha de anomalia
+  const [selectedAnomaly, setSelectedAnomaly] = useState<Anomaly | null>(null);
 
   const macroAnomalies = data?.macro || [];
   const channelAnomalies = data?.byChannel || [];
@@ -252,6 +255,9 @@ export default function AnomaliasPage() {
             <div className="mb-6">
               <h3 className="text-sm font-bold uppercase tracking-wider text-[color:var(--muted-foreground)] mb-3 flex items-center gap-2">
                 <Filter size={12} /> Macro · Visão Geral
+                <span className="text-[10px] font-normal text-slate-500 normal-case ml-2">
+                  (clica num card pra ver detalhes)
+                </span>
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3">
                 {macroAnomalies.map((a, i) => {
@@ -259,12 +265,15 @@ export default function AnomaliasPage() {
                   const isCritical = a.severity === "critical";
                   const isAttention = a.severity === "attention";
                   return (
-                    <motion.div
+                    <motion.button
                       key={a.metric}
+                      type="button"
+                      onClick={() => setSelectedAnomaly(a)}
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: i * 0.05 }}
-                      className={`bg-white rounded-2xl border-2 p-4 ${
+                      whileHover={{ y: -2 }}
+                      className={`bg-white rounded-2xl border-2 p-4 text-left cursor-pointer transition hover:shadow-lg ${
                         isCritical
                           ? "border-red-300 shadow-md shadow-red-500/10"
                           : isAttention
@@ -300,7 +309,7 @@ export default function AnomaliasPage() {
                           vs {formatMetricValue(a.metric, a.baseline)} (med {baselineDays}d)
                         </span>
                       </div>
-                    </motion.div>
+                    </motion.button>
                   );
                 })}
               </div>
@@ -310,16 +319,30 @@ export default function AnomaliasPage() {
             <div className="mb-6">
               <h3 className="text-sm font-bold uppercase tracking-wider text-[color:var(--muted-foreground)] mb-3 flex items-center gap-2">
                 <Filter size={12} /> Por Canal · {filteredChannels.length} anomalias detectadas
+                <span className="text-[10px] font-normal text-slate-500 normal-case ml-2">
+                  (clica numa linha pra ver campanhas + páginas)
+                </span>
               </h3>
-              <AnomalyTable rows={filteredChannels.slice(0, 30)} levelLabel="Canal" />
+              <AnomalyTable
+                rows={filteredChannels.slice(0, 30)}
+                levelLabel="Canal"
+                onRowClick={(a) => setSelectedAnomaly(a)}
+              />
             </div>
 
             {/* POR CAMPANHA */}
             <div className="mb-6">
               <h3 className="text-sm font-bold uppercase tracking-wider text-[color:var(--muted-foreground)] mb-3 flex items-center gap-2">
                 <Filter size={12} /> Por Campanha · {filteredCampaigns.length} anomalias detectadas
+                <span className="text-[10px] font-normal text-slate-500 normal-case ml-2">
+                  (clica numa linha pra ver source/medium + páginas)
+                </span>
               </h3>
-              <AnomalyTable rows={filteredCampaigns.slice(0, 30)} levelLabel="Campanha" />
+              <AnomalyTable
+                rows={filteredCampaigns.slice(0, 30)}
+                levelLabel="Campanha"
+                onRowClick={(a) => setSelectedAnomaly(a)}
+              />
             </div>
 
             {/* Rodapé com debug */}
@@ -333,11 +356,28 @@ export default function AnomaliasPage() {
           </>
         )}
       </main>
+
+      {/* Modal de drill-down — abre quando uma anomalia é clicada */}
+      {selectedAnomaly && (
+        <AnomalyDetailModal
+          anomaly={selectedAnomaly}
+          baselineDays={baselineDays}
+          onClose={() => setSelectedAnomaly(null)}
+        />
+      )}
     </MasterGuard>
   );
 }
 
-function AnomalyTable({ rows, levelLabel }: { rows: Anomaly[]; levelLabel: string }) {
+function AnomalyTable({
+  rows,
+  levelLabel,
+  onRowClick,
+}: {
+  rows: Anomaly[];
+  levelLabel: string;
+  onRowClick?: (anomaly: Anomaly) => void;
+}) {
   if (rows.length === 0) {
     return (
       <div className="bg-white rounded-2xl border border-[color:var(--border)] p-8 text-center text-sm text-[color:var(--muted-foreground)]">
@@ -362,12 +402,15 @@ function AnomalyTable({ rows, levelLabel }: { rows: Anomaly[]; levelLabel: strin
           <tbody>
             {rows.map((a, i) => {
               const Icon = METRIC_ICON[a.metric];
+              const clickable = !!onRowClick;
               return (
                 <tr
                   key={`${a.segment}-${a.metric}-${i}`}
+                  onClick={clickable ? () => onRowClick!(a) : undefined}
                   className={`border-t border-[color:var(--border)] ${
                     a.severity === "critical" ? "bg-red-50/30" : a.severity === "attention" ? "bg-amber-50/30" : ""
-                  }`}
+                  } ${clickable ? "cursor-pointer hover:bg-purple-50/50 transition" : ""}`}
+                  title={clickable ? "Clique pra ver drill-down (campanhas, páginas, série diária)" : undefined}
                 >
                   <td className="px-4 py-2.5 font-mono text-xs font-semibold truncate max-w-[280px]" title={a.segment}>
                     {a.segment === "(not set)" ? (
