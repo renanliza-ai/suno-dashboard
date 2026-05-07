@@ -1512,16 +1512,45 @@ export async function getCheckoutFunnel(
     };
   });
 
-  // Query 2: receita total (via purchase event value) — pra estimar valor abandonado
-  const revRes = await runReport(propertyId, {
-    dateRanges: [range.ga4Range],
-    metrics: [{ name: "totalRevenue" }, { name: "purchaseRevenue" }],
-  });
-  const totalRevenue = Number(
-    revRes.data?.totals?.[0]?.metricValues?.[1]?.value ||
-      revRes.data?.totals?.[0]?.metricValues?.[0]?.value ||
-      0
-  );
+  // Query 2: receita total — tenta 3 caminhos pra cobrir setups diferentes:
+  //   (a) purchaseRevenue: popula só quando o evento purchase tem value + currency
+  //   (b) totalRevenue: agrega purchaseRevenue + in_app_purchase + ad_revenue
+  //   (c) eventValue filtrado por purchase: fallback quando dataLayer manda
+  //       só `value` sem `currency` (caso do Renan — bug comum). É o mesmo
+  //       fallback que o painel GA4 nativo faz silenciosamente quando o
+  //       cartão "Receita de compra" mostra valor mas purchaseRevenue=0.
+  const [revRes, eventValueRes] = await Promise.all([
+    runReport(propertyId, {
+      dateRanges: [range.ga4Range],
+      metrics: [{ name: "totalRevenue" }, { name: "purchaseRevenue" }],
+    }),
+    runReport(propertyId, {
+      dateRanges: [range.ga4Range],
+      metrics: [{ name: "eventValue" }],
+      dimensionFilter: {
+        filter: {
+          fieldName: "eventName",
+          inListFilter: { values: ["purchase", "purchase_success"] },
+        },
+      },
+    }),
+  ]);
+  const purchaseRevenue = Number(revRes.data?.totals?.[0]?.metricValues?.[1]?.value || 0);
+  const totalRevenueOfficial = Number(revRes.data?.totals?.[0]?.metricValues?.[0]?.value || 0);
+  const eventValueSum = Number(eventValueRes.data?.totals?.[0]?.metricValues?.[0]?.value || 0);
+
+  // Hierarquia: purchaseRevenue > totalRevenue > eventValue (do purchase)
+  // Se purchaseRevenue=0 mas eventValue>0 → dataLayer está mandando value sem currency.
+  let totalRevenue = purchaseRevenue || totalRevenueOfficial;
+  let revenueSource: "purchaseRevenue" | "totalRevenue" | "eventValue" | "none" = purchaseRevenue
+    ? "purchaseRevenue"
+    : totalRevenueOfficial
+      ? "totalRevenue"
+      : "none";
+  if (totalRevenue === 0 && eventValueSum > 0) {
+    totalRevenue = eventValueSum;
+    revenueSource = "eventValue";
+  }
 
   // Calcula ticket médio com base nos purchases reais (não no count do funnel)
   const purchaseStep = resolvedSteps.find((s) => s.stage === "purchase");
@@ -1651,6 +1680,14 @@ export async function getCheckoutFunnel(
           beginCheckoutCount > 0
             ? Number(((abandonedCount / beginCheckoutCount) * 100).toFixed(1))
             : 0,
+        revenue_source: revenueSource,
+        // Diagnóstico: cada uma das 3 fontes separadamente, pra UI explicar
+        // ao gestor por que escolhemos uma e não outra (transparência total).
+        revenue_diagnostics: {
+          purchaseRevenue,
+          totalRevenue: totalRevenueOfficial,
+          eventValueFromPurchase: eventValueSum,
+        },
       },
       byCampaign,
       range,

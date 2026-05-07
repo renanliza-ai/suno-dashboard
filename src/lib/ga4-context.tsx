@@ -584,6 +584,12 @@ export type CheckoutFunnelData = {
     abandoned_count: number;
     abandoned_revenue_lost: number;
     abandonment_rate: number;
+    revenue_source?: "purchaseRevenue" | "totalRevenue" | "eventValue" | "none";
+    revenue_diagnostics?: {
+      purchaseRevenue: number;
+      totalRevenue: number;
+      eventValueFromPurchase: number;
+    };
   };
   byCampaign: CheckoutCampaignRow[];
   range: { startDate: string; endDate: string };

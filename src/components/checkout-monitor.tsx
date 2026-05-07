@@ -88,6 +88,26 @@ export function CheckoutMonitor() {
 
   const { steps, summary, byCampaign } = data;
 
+  // Diagnóstico de receita — explica de qual métrica GA4 puxamos o número.
+  // Se cair em eventValue, é sinal de que o dataLayer não envia currency
+  // junto com value no evento purchase (problema comum de implementação).
+  const revSource = summary.revenue_source;
+  const revDiag = summary.revenue_diagnostics;
+  const revenueWarning =
+    revSource === "eventValue"
+      ? {
+          severity: "warning" as const,
+          title: "Receita vindo de eventValue (fallback) — recomenda corrigir o dataLayer",
+          body: `purchaseRevenue=R$${revDiag?.purchaseRevenue.toFixed(2) || 0}, mas eventValue=R$${revDiag?.eventValueFromPurchase.toFixed(2) || 0}. Provável causa: o evento purchase está disparando 'value' sem 'currency'. O painel GA4 nativo faz fallback automático e mostra o valor; nós replicamos esse comportamento. Para corrigir: adicione currency: 'BRL' no payload do evento purchase no GTM/dataLayer.`,
+        }
+      : revSource === "none" && (steps.find((s) => s.stage === "purchase")?.count ?? 0) > 0
+        ? {
+            severity: "error" as const,
+            title: "Receita zerada apesar de haver compras — verifique tracking",
+            body: `${steps.find((s) => s.stage === "purchase")?.count} compras detectadas, mas nenhuma das 3 métricas de receita (purchaseRevenue, totalRevenue, eventValue) retornou valor. O evento purchase precisa enviar pelo menos 'value' (e idealmente 'currency').`,
+          }
+        : null;
+
   // Identifica a etapa com maior drop pra diagnóstico automático
   const stepsWithDrop = steps.filter((s, i) => i > 0 && s.dropAbsoluteFromPrev > 0);
   const biggestDropStep = stepsWithDrop.reduce<typeof stepsWithDrop[number] | null>(
@@ -242,12 +262,46 @@ export function CheckoutMonitor() {
           })}
         </div>
 
-        {/* Diagnóstico auto */}
+        {/* Diagnóstico de receita — quando fallback foi usado ou tudo zero */}
+        {revenueWarning && (
+          <div
+            className={`mt-5 p-3 rounded-lg border text-xs flex items-start gap-2 ${
+              revenueWarning.severity === "error"
+                ? "bg-red-50 border-red-200"
+                : "bg-amber-50 border-amber-200"
+            }`}
+          >
+            <AlertTriangle
+              size={14}
+              className={`mt-0.5 shrink-0 ${
+                revenueWarning.severity === "error" ? "text-red-700" : "text-amber-700"
+              }`}
+            />
+            <div>
+              <strong
+                className={
+                  revenueWarning.severity === "error" ? "text-red-900" : "text-amber-900"
+                }
+              >
+                {revenueWarning.title}
+              </strong>
+              <p
+                className={`mt-1 ${
+                  revenueWarning.severity === "error" ? "text-red-800" : "text-amber-800"
+                }`}
+              >
+                {revenueWarning.body}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Diagnóstico auto do funil (drop) */}
         {diagnosisText && (
-          <div className="mt-5 p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs flex items-start gap-2">
+          <div className="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs flex items-start gap-2">
             <AlertTriangle size={14} className="text-amber-700 mt-0.5 shrink-0" />
             <div>
-              <strong className="text-amber-900">Diagnóstico:</strong>
+              <strong className="text-amber-900">Diagnóstico do funil:</strong>
               <span className="text-amber-900 ml-1">{diagnosisText}</span>
             </div>
           </div>
