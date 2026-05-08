@@ -1605,13 +1605,20 @@ function StaleLPsTab() {
   const [gscSiteUsed, setGscSiteUsed] = useState<string | null>(null);
   const [gscAvailableSites, setGscAvailableSites] = useState<string[] | null>(null);
 
-  const fetchGSC = async () => {
+  const fetchGSC = async (overrideSiteUrl?: string) => {
     setGscLoading(true);
     setGscError(null);
     setGscRows(null);
     setGscAvailableSites(null);
     try {
-      const r = await fetch("/api/tracking/stale-lps-gsc?hostFilter=lp.&days=30", {
+      const params = new URLSearchParams({
+        hostFilter: "lp.",
+        days: "30",
+      });
+      if (selected?.displayName) params.set("propertyName", selected.displayName);
+      if (overrideSiteUrl) params.set("siteUrl", overrideSiteUrl);
+
+      const r = await fetch(`/api/tracking/stale-lps-gsc?${params.toString()}`, {
         cache: "no-store",
       });
       const d = await r.json();
@@ -1825,7 +1832,7 @@ function StaleLPsTab() {
               ✓ GSC carregado · {gscRows.length} URLs · {gscSiteUsed}
             </span>
             <button
-              onClick={fetchGSC}
+              onClick={() => fetchGSC()}
               disabled={gscLoading}
               className="text-[11px] px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 inline-flex items-center gap-1.5"
             >
@@ -1835,7 +1842,7 @@ function StaleLPsTab() {
           </div>
         ) : (
           <button
-            onClick={fetchGSC}
+            onClick={() => fetchGSC()}
             disabled={gscLoading}
             className="px-4 py-2 rounded-lg bg-[#7c5cff] text-white text-sm font-semibold hover:bg-[#6b4bf0] disabled:opacity-50 inline-flex items-center gap-2"
           >
@@ -1846,19 +1853,29 @@ function StaleLPsTab() {
       </div>
 
       {gscError && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-xs text-red-900">
-          <strong>Erro ao consultar GSC:</strong> {gscError}
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-xs text-red-900 space-y-2">
+          <div>
+            <strong>Erro ao consultar GSC:</strong> {gscError}
+          </div>
           {gscAvailableSites && gscAvailableSites.length > 0 && (
-            <div className="mt-2">
-              Sites disponíveis na sua conta GSC:
-              <ul className="mt-1 ml-4 list-disc">
-                {gscAvailableSites.map((s) => (
-                  <li key={s} className="font-mono">{s}</li>
-                ))}
-              </ul>
-              <p className="mt-2 text-red-700">
-                Adicione <strong>lp.suno.com.br</strong> ou um <strong>sc-domain:suno.com.br</strong> em <a className="underline" href="https://search.google.com/search-console" target="_blank" rel="noopener noreferrer">search.google.com/search-console</a>.
+            <div>
+              <p className="mb-2">
+                Não consegui escolher o site GSC automaticamente. <strong>Clique num dos sites abaixo</strong> pra
+                forçar a query (a gente vai filtrar por <code className="bg-red-100 px-1 rounded">lp.</code> automaticamente):
               </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+                {gscAvailableSites.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => fetchGSC(s)}
+                    disabled={gscLoading}
+                    className="text-left font-mono text-[11px] px-3 py-2 rounded-md bg-white border border-red-200 hover:bg-red-100 hover:border-red-400 disabled:opacity-50 transition flex items-center gap-2"
+                  >
+                    <Search size={10} />
+                    {s}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>

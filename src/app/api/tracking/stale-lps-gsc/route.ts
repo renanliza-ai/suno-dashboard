@@ -32,10 +32,13 @@ export async function GET(req: NextRequest) {
 
   let siteUrl = req.nextUrl.searchParams.get("siteUrl");
   const hostFilter = req.nextUrl.searchParams.get("hostFilter") || "lp.";
+  const propertyName = (req.nextUrl.searchParams.get("propertyName") || "").toLowerCase();
   const days = Number(req.nextUrl.searchParams.get("days") || 30);
 
-  // Auto-discovery: se siteUrl não foi passado, lista as properties e pega
-  // a primeira que faça sentido pro hostFilter (ex: lp.suno.com.br).
+  // Auto-discovery inteligente: extrai o domínio "raiz" da propriedade
+  // pra achar o sc-domain certo. sc-domains cobrem TODOS os subdomínios
+  // (sc-domain:suno.com.br pega lp.suno.com.br também) — eles são a
+  // escolha preferida quando disponíveis.
   if (!siteUrl) {
     const sitesRes = await listGSCSites();
     if (sitesRes.error || !sitesRes.data) {
@@ -44,24 +47,60 @@ export async function GET(req: NextRequest) {
         { status: 400 }
       );
     }
-    // Procura sites que casem com hostFilter
-    const candidates = sitesRes.data.filter((s) => s.siteUrl.includes(hostFilter));
-    if (candidates.length === 0) {
+    const allSites = sitesRes.data;
+
+    // Mapeia propertyName GA4 → palavra-chave do domínio
+    // "Suno Research – Web" → "suno"
+    // "Statusinvest - Web" → "statusinvest"
+    // "Suno Advisory" → "suno"
+    let domainHint = "";
+    if (propertyName.includes("statusinvest")) domainHint = "statusinvest.com.br";
+    else if (propertyName.includes("suno")) domainHint = "suno.com.br";
+    // Se não temos hint do propertyName, tenta extrair do hostFilter
+    // ("lp.suno.com.br" → "suno.com.br")
+    if (!domainHint && hostFilter.includes(".") && hostFilter !== "lp.") {
+      const parts = hostFilter.split(".");
+      // Remove o "lp" inicial se houver
+      if (parts[0] === "lp") parts.shift();
+      domainHint = parts.join(".");
+    }
+
+    // 1. Prioridade absoluta: sc-domain que case com domainHint
+    // (cobre todos subdomínios, mais robusto)
+    const scDomainMatch = domainHint
+      ? allSites.find((s) => s.siteUrl === `sc-domain:${domainHint}`)
+      : null;
+
+    // 2. Fallback: URL prefix que contenha o domainHint ou hostFilter
+    const urlPrefixMatch = !scDomainMatch
+      ? allSites.find((s) => {
+          if (!s.siteUrl.startsWith("http")) return false;
+          const target = domainHint || hostFilter;
+          return target && s.siteUrl.includes(target);
+        })
+      : null;
+
+    // 3. Último recurso: qualquer sc-domain (sem filtro)
+    const anyScDomain = !scDomainMatch && !urlPrefixMatch
+      ? allSites.find((s) => s.siteUrl.startsWith("sc-domain:") && (
+          domainHint ? s.siteUrl.includes(domainHint) : true
+        ))
+      : null;
+
+    const chosen = scDomainMatch || urlPrefixMatch || anyScDomain;
+
+    if (!chosen) {
       return NextResponse.json(
         {
           error: "no_matching_site",
-          available_sites: sitesRes.data.map((s) => s.siteUrl),
-          hint: `Nenhum site GSC contém "${hostFilter}". Adicione lp.suno.com.br como property no Search Console ou use um sc-domain (ex: sc-domain:suno.com.br) que cobre o subdomínio.`,
+          available_sites: allSites.map((s) => s.siteUrl),
+          domainHint: domainHint || null,
+          hint: `Nenhum site GSC casa com "${domainHint || hostFilter}". Sites disponíveis listados acima — passe ?siteUrl=... explicitamente pra forçar um deles.`,
         },
         { status: 404 }
       );
     }
-    // Prioriza siteOwner > siteFullUser
-    candidates.sort((a, b) => {
-      const order = ["siteOwner", "siteFullUser", "siteRestrictedUser"];
-      return order.indexOf(a.permissionLevel) - order.indexOf(b.permissionLevel);
-    });
-    siteUrl = candidates[0].siteUrl;
+    siteUrl = chosen.siteUrl;
   }
 
   const range = buildGSCDateRange(days);
