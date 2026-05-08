@@ -1604,7 +1604,9 @@ function StaleLPsTab() {
   const { selected, useRealData } = useGA4();
   const { data: pagesDetail, meta } = useGA4PagesDetail();
   const [search, setSearch] = useState("");
-  const [filterStale, setFilterStale] = useState<"all" | "only_stale" | "only_zumbi">("all");
+  const [filterStale, setFilterStale] = useState<
+    "all" | "only_stale" | "only_zumbi" | "only_404" | "only_redirect" | "only_offline"
+  >("all");
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
 
   // hostFilters: CSV de padrões que identificam uma LP. User pode editar
@@ -1622,6 +1624,21 @@ function StaleLPsTab() {
   const [gscError, setGscError] = useState<string | null>(null);
   const [gscSiteUsed, setGscSiteUsed] = useState<string | null>(null);
   const [gscAvailableSites, setGscAvailableSites] = useState<string[] | null>(null);
+
+  // Estado da terceira etapa: Health Check HTTP (status real de cada URL)
+  type HealthResult = {
+    url: string;
+    status: number | null;
+    ok: boolean;
+    redirectTo: string | null;
+    contentType: string | null;
+    error: string | null;
+    durationMs: number;
+  };
+  const [healthMap, setHealthMap] = useState<Map<string, HealthResult>>(new Map());
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [healthProgress, setHealthProgress] = useState({ done: 0, total: 0 });
+  const [healthError, setHealthError] = useState<string | null>(null);
 
   const fetchGSC = async (overrideSiteUrl?: string) => {
     setGscLoading(true);
@@ -1656,6 +1673,43 @@ function StaleLPsTab() {
     }
   };
 
+  // Health check HTTP — bate em cada URL e captura status real
+  const runHealthCheck = async (urls: string[]) => {
+    if (urls.length === 0) return;
+    setHealthLoading(true);
+    setHealthError(null);
+    setHealthProgress({ done: 0, total: urls.length });
+    try {
+      // Quebra em chunks de 50 pra mostrar progresso incremental
+      const CHUNK = 50;
+      const newMap = new Map(healthMap);
+      for (let i = 0; i < urls.length; i += CHUNK) {
+        const slice = urls.slice(i, i + CHUNK);
+        const r = await fetch("/api/tracking/lp-healthcheck", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ urls: slice }),
+          cache: "no-store",
+        });
+        if (!r.ok) {
+          const t = await r.text();
+          setHealthError(`HTTP ${r.status}: ${t.slice(0, 150)}`);
+          break;
+        }
+        const d = (await r.json()) as { results: HealthResult[] };
+        for (const result of d.results) {
+          newMap.set(result.url, result);
+        }
+        setHealthMap(new Map(newMap));
+        setHealthProgress({ done: Math.min(i + CHUNK, urls.length), total: urls.length });
+      }
+    } catch (e) {
+      setHealthError((e as Error).message);
+    } finally {
+      setHealthLoading(false);
+    }
+  };
+
   // Filtra páginas dos hosts configurados — captura LPs próprias + GreatPages
   // + outros providers. Match é por substring dentro do host inteiro
   // (host = "lp.suno.com.br" casa com filtro "lp.").
@@ -1679,6 +1733,7 @@ function StaleLPsTab() {
     isZumbi: boolean; // 🚨 indexada no Google sem tráfego no GA4
     staleReasons: string[];
     gsc?: GSCRow | null;
+    health?: HealthResult | null; // status HTTP real
   };
 
   const STALE_YEAR_PATTERN = /\b(20\d{2})\b/;
@@ -1732,6 +1787,24 @@ function StaleLPsTab() {
           (g.host === p.host && (g.path === p.path || g.path === p.path + "/" || g.path + "/" === p.path))
       );
 
+      // Sintomas vindos do health check HTTP (se já rodou)
+      const health = healthMap.get(url) || null;
+      if (health) {
+        if (health.status === 404) {
+          reasons.push("🔴 404 — página não existe mais");
+        } else if (health.status && health.status >= 500) {
+          reasons.push(`🔴 erro servidor (${health.status})`);
+        } else if (health.status && health.status >= 300 && health.status < 400) {
+          reasons.push(
+            `↪ redirect ${health.status}${
+              health.redirectTo ? ` → ${health.redirectTo.slice(0, 50)}` : ""
+            }`
+          );
+        } else if (health.error) {
+          reasons.push(`offline (${health.error.slice(0, 30)})`);
+        }
+      }
+
       return {
         host: p.host,
         path: p.path,
@@ -1743,9 +1816,10 @@ function StaleLPsTab() {
         isZumbi: false, // só URLs SÓ do GSC podem ser zumbis (computado abaixo)
         staleReasons: reasons,
         gsc: gscMatch || null,
+        health,
       };
     });
-  }, [lpPages, gscRows]);
+  }, [lpPages, gscRows, healthMap]);
 
   // 🚨 LPs ZUMBIS: presentes no GSC (Google indexa) mas SEM tráfego no GA4
   // (não estão em pagesDetail). Crítico — gastam crawl budget sem retorno.
@@ -1758,29 +1832,50 @@ function StaleLPsTab() {
         const fullKey = `${g.host}${g.path}`;
         return !ga4UrlSet.has(g.url) && !ga4PathSet.has(fullKey);
       })
-      .map((g) => ({
-        host: g.host,
-        path: g.path,
-        url: g.url,
-        sessions: 0,
-        users: 0,
-        bounceRate: 0,
-        isStale: true,
-        isZumbi: true,
-        staleReasons: [
+      .map((g) => {
+        const health = healthMap.get(g.url) || null;
+        const reasons: string[] = [
           `🚨 indexada no Google (${g.impressions} impr.) sem tráfego GA4`,
           ...(g.clicks === 0 ? ["zero cliques no SERP"] : [`${g.clicks} cliques`]),
           `posição ${g.position}`,
-        ],
-        gsc: g,
-      }));
-  }, [gscRows, staleRows]);
+        ];
+        if (health) {
+          if (health.status === 404) reasons.unshift("🔴 404 — Google indexa página inexistente!");
+          else if (health.status && health.status >= 500) reasons.unshift(`🔴 erro ${health.status}`);
+          else if (health.status && health.status >= 300 && health.status < 400) {
+            reasons.unshift(
+              `↪ ${health.status}${health.redirectTo ? ` → ${health.redirectTo.slice(0, 40)}` : ""}`
+            );
+          }
+        }
+        return {
+          host: g.host,
+          path: g.path,
+          url: g.url,
+          sessions: 0,
+          users: 0,
+          bounceRate: 0,
+          isStale: true,
+          isZumbi: true,
+          staleReasons: reasons,
+          gsc: g,
+          health,
+        };
+      });
+  }, [gscRows, staleRows, healthMap]);
 
   const allRows = useMemo(() => [...staleRows, ...zumbiRows], [staleRows, zumbiRows]);
 
   const filteredRows = allRows.filter((r) => {
     if (filterStale === "only_stale" && !r.isStale) return false;
     if (filterStale === "only_zumbi" && !r.isZumbi) return false;
+    if (filterStale === "only_404" && r.health?.status !== 404) return false;
+    if (
+      filterStale === "only_redirect" &&
+      !(r.health?.status && r.health.status >= 300 && r.health.status < 400)
+    )
+      return false;
+    if (filterStale === "only_offline" && !r.health?.error) return false;
     if (search) {
       const q = search.toLowerCase();
       return r.host.toLowerCase().includes(q) || r.path.toLowerCase().includes(q);
@@ -1807,6 +1902,13 @@ function StaleLPsTab() {
     (s, r) => s + (r.gsc?.impressions || 0),
     0
   );
+  // Contadores de health (só faz sentido depois de rodar o check)
+  const total404 = allRows.filter((r) => r.health?.status === 404).length;
+  const totalRedirects = allRows.filter(
+    (r) => r.health?.status && r.health.status >= 300 && r.health.status < 400
+  ).length;
+  const totalOffline = allRows.filter((r) => r.health?.error).length;
+  const totalChecked = allRows.filter((r) => r.health).length;
 
   return (
     <div className="space-y-4">
@@ -1925,6 +2027,84 @@ function StaleLPsTab() {
         )}
       </div>
 
+      {/* Health Check HTTP — bate em cada URL pra ver status real */}
+      <div className="bg-white rounded-2xl border border-[color:var(--border)] p-4 flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-2">
+          <Activity size={16} className="text-emerald-600" />
+          <div>
+            <p className="text-sm font-semibold">Verificação de status HTTP</p>
+            <p className="text-[11px] text-slate-500">
+              Bate em cada URL e detecta <strong>404, redirect, timeout, erro 500</strong>. Resolve a
+              dúvida &quot;essa LP tá no ar ou não?&quot; sem precisar abrir cada URL na mão.
+            </p>
+          </div>
+        </div>
+        {totalChecked > 0 ? (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-mono px-2 py-1 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700">
+              ✓ {totalChecked} URLs checadas
+            </span>
+            {total404 > 0 && (
+              <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-red-100 text-red-700">
+                {total404} com 404
+              </span>
+            )}
+            {totalRedirects > 0 && (
+              <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-blue-100 text-blue-700">
+                {totalRedirects} redirects
+              </span>
+            )}
+            {totalOffline > 0 && (
+              <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-amber-100 text-amber-700">
+                {totalOffline} offline
+              </span>
+            )}
+            <button
+              onClick={() => {
+                const urls = Array.from(new Set(allRows.map((r) => r.url)));
+                runHealthCheck(urls);
+              }}
+              disabled={healthLoading}
+              className="text-[11px] px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 inline-flex items-center gap-1.5"
+            >
+              <RefreshCw size={11} className={healthLoading ? "animate-spin" : ""} />
+              Atualizar
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => {
+              const urls = Array.from(new Set(allRows.map((r) => r.url)));
+              if (urls.length === 0) {
+                setHealthError("Nenhuma URL pra verificar. Carregue GA4 e/ou GSC primeiro.");
+                return;
+              }
+              runHealthCheck(urls);
+            }}
+            disabled={healthLoading || allRows.length === 0}
+            className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 inline-flex items-center gap-2"
+          >
+            {healthLoading ? <RefreshCw size={14} className="animate-spin" /> : <Activity size={14} />}
+            {healthLoading
+              ? `Verificando... (${healthProgress.done}/${healthProgress.total})`
+              : `Verificar ${allRows.length} URLs`}
+          </button>
+        )}
+      </div>
+
+      {healthError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-900">
+          <strong>Erro no health check:</strong> {healthError}
+        </div>
+      )}
+
+      {healthLoading && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-900 flex items-center gap-2">
+          <RefreshCw size={12} className="animate-spin" />
+          Checando {healthProgress.done} de {healthProgress.total} URLs...
+        </div>
+      )}
+
       {gscError && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-xs text-red-900 space-y-2">
           <div>
@@ -2016,6 +2196,13 @@ function StaleLPsTab() {
           <option value="all">Todas ({totalLPs + totalZumbis})</option>
           <option value="only_stale">Só suspeitas/stale ({totalStale + totalZumbis})</option>
           <option value="only_zumbi">🚨 Só zumbis ({totalZumbis})</option>
+          {totalChecked > 0 && (
+            <>
+              <option value="only_404">🔴 Só 404 ({total404})</option>
+              <option value="only_redirect">↪ Só redirects ({totalRedirects})</option>
+              <option value="only_offline">⚠ Só offline ({totalOffline})</option>
+            </>
+          )}
         </select>
         <span className="text-[11px] text-slate-500 font-mono">
           mostrando {sortedRows.length}
@@ -2056,6 +2243,9 @@ function StaleLPsTab() {
                 </th>
                 <th className="text-left px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   Path
+                </th>
+                <th className="text-center px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  HTTP
                 </th>
                 <th className="text-right px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   GA4 sessões
@@ -2103,6 +2293,9 @@ function StaleLPsTab() {
                     title={r.path}
                   >
                     {r.path}
+                  </td>
+                  <td className="px-4 py-2.5 text-center">
+                    <HTTPStatusBadge health={r.health || null} />
                   </td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-xs font-bold">
                     {r.sessions === 0 ? (
@@ -2199,32 +2392,121 @@ function StaleLPsTab() {
         <div className="flex items-start gap-2">
           <AlertCircle size={14} className="mt-0.5 shrink-0" />
           <div>
-            <strong>Como usar:</strong>
-            <ul className="mt-1 space-y-1 list-disc ml-4">
+            <strong>Fluxo recomendado de auditoria (3 passos):</strong>
+            <ol className="mt-1 space-y-1 list-decimal ml-4">
               <li>
-                <strong>🚨 Zumbis</strong> — prioridade máxima. Indexadas no Google
-                ({totalImpressionsZumbi > 0 ? formatNumber(totalImpressionsZumbi) : "?"} impressões/30d) sem tráfego no GA4.
-                Estão queimando crawl budget e podendo confundir investidor.
-                <strong> Redirect 301 imediato</strong> pras LPs novas equivalentes.
+                <strong>Carregar GA4</strong> — automático ao abrir a aba. Lista LPs com tráfego no período.
               </li>
               <li>
-                <strong>Stale</strong> — auditoria. Tem tráfego mas com sintomas de abandono.
-                Avaliar caso a caso.
+                <strong>Cruzar com GSC</strong> — botão roxo. Adiciona LPs zumbis (indexadas sem tráfego).
               </li>
               <li>
-                <strong>OK</strong> — LPs ativas e saudáveis. Mantém.
+                <strong>Verificar status HTTP</strong> — botão verde. Bate em cada URL e mostra
+                se é 200 (no ar), 301/302 (já redireciona), 404 (precisa redirect) ou 500 (servidor).
               </li>
-            </ul>
+            </ol>
           </div>
         </div>
-        <div className="border-t border-blue-200 pt-2 text-[11px]">
-          <strong>Fluxo sugerido pro Ricardo:</strong> filtra "🚨 Só zumbis" →
-          copia URLs (botão 📋) → cola num arquivo → manda regras 301 no Cloudflare em massa.
-          Cada zumbi removido melhora SEO geral do domínio (Google deixa de gastar crawl
-          em conteúdo morto).
+        <div className="border-t border-blue-200 pt-2 text-[11px] space-y-1">
+          <p>
+            <strong>Ação prioritária:</strong> filtra <code className="bg-blue-100 px-1 rounded">🔴 Só 404</code>{" "}
+            ou <code className="bg-blue-100 px-1 rounded">🚨 Só zumbis</code>, copia URLs (botão 📋) e
+            manda regras 301 no Cloudflare/nginx pras LPs novas equivalentes.
+          </p>
+          <p>
+            <strong>404 é o mais crítico:</strong> Google indexa página inexistente, usuário clica e cai
+            num &quot;Page Not Found&quot;. Cada um desses corrói SEO + experiência de usuário.
+          </p>
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Badge visual do status HTTP. Cores:
+ *   200/2xx → verde (OK no ar)
+ *   301/302/3xx → azul (redirect — clicar mostra destino no tooltip)
+ *   404 → vermelho (não existe mais)
+ *   500/5xx → vermelho escuro (erro servidor)
+ *   timeout/erro → âmbar
+ *   sem check → cinza fraco
+ */
+function HTTPStatusBadge({
+  health,
+}: {
+  health: {
+    url: string;
+    status: number | null;
+    redirectTo: string | null;
+    error: string | null;
+  } | null;
+}) {
+  if (!health) {
+    return <span className="text-[10px] text-slate-300 italic">não checada</span>;
+  }
+  if (health.error) {
+    return (
+      <span
+        className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-amber-100 text-amber-700 border border-amber-200"
+        title={health.error}
+      >
+        ⚠ offline
+      </span>
+    );
+  }
+  const status = health.status;
+  if (status === null) {
+    return <span className="text-[10px] text-slate-300 italic">—</span>;
+  }
+  // 2xx OK
+  if (status >= 200 && status < 300) {
+    return (
+      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 border border-emerald-200">
+        {status}
+      </span>
+    );
+  }
+  // 3xx Redirect
+  if (status >= 300 && status < 400) {
+    const tooltip = health.redirectTo ? `Redirect → ${health.redirectTo}` : `Redirect ${status}`;
+    return (
+      <span
+        className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 border border-blue-200 cursor-help"
+        title={tooltip}
+      >
+        ↪ {status}
+      </span>
+    );
+  }
+  // 404
+  if (status === 404) {
+    return (
+      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-red-100 text-red-700 border border-red-200">
+        🔴 404
+      </span>
+    );
+  }
+  // 4xx outros
+  if (status >= 400 && status < 500) {
+    return (
+      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-red-100 text-red-700 border border-red-200">
+        {status}
+      </span>
+    );
+  }
+  // 5xx
+  if (status >= 500) {
+    return (
+      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-red-200 text-red-800 border border-red-400">
+        🔴 {status}
+      </span>
+    );
+  }
+  return (
+    <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700">
+      {status}
+    </span>
   );
 }
 
