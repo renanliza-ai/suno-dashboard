@@ -144,7 +144,17 @@ async function auditProperty(propertyId: string, propertyName: string, auditDate
     const activeUsers = readMetric(usersRes, 1);
     const newUsers = readMetric(usersRes, 2);
     if (usersRes.error || totalUsers === null) {
-      audit.errors.push(`users metrics: ${usersRes.error || "no data"}`);
+      // Diagnóstico detalhado: mostra exatamente onde a query falhou
+      const debugInfo = [
+        `error=${usersRes.error || "null"}`,
+        `hasData=${!!usersRes.data}`,
+        `rowsCount=${usersRes.data?.rows?.length ?? "undefined"}`,
+        `totalsCount=${usersRes.data?.totals?.length ?? "undefined"}`,
+        `firstRowMetricsCount=${usersRes.data?.rows?.[0]?.metricValues?.length ?? "undefined"}`,
+        `firstTotalMetricsCount=${usersRes.data?.totals?.[0]?.metricValues?.length ?? "undefined"}`,
+        `dateRange=${dateRange.startDate}→${dateRange.endDate}`,
+      ].join(" | ");
+      audit.errors.push(`users metrics: ${usersRes.error || "no data"} [${debugInfo}]`);
     } else {
       // Fallback: se algumas das 3 métricas não vieram, usa 0 (não é "sem dados")
       const totalUsersV = totalUsers || 0;
