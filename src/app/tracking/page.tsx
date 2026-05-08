@@ -1912,33 +1912,6 @@ function StaleLPsTab() {
 
   return (
     <div className="space-y-4">
-      {/* Banner com a task original */}
-      <div className="rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-300 p-5">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-200 flex items-center justify-center shrink-0">
-            <AlertTriangle size={18} className="text-amber-700" />
-          </div>
-          <div className="flex-1">
-            <h3 className="text-base font-bold text-amber-900 mb-1">
-              Auditoria de LPs antigas — Redirect em massa pendente
-            </h3>
-            <p className="text-sm text-amber-900 mb-2">
-              <strong>@Renan Liza</strong> e <strong>@Ricardo Moura</strong> — várias LPs abertas
-              que já deveriam estar com redirect.
-            </p>
-            <ul className="text-xs text-amber-800 space-y-1.5 leading-relaxed">
-              <li>• Precisamos revisar LPs antigas (Eu Invisto 2025, Always On, Suno Start Perpétuo, Curso Matemática Financeira…)</li>
-              <li>• Fazer redirect em massa de 2025 pra trás. Se cair pratinhos, refaz</li>
-              <li>• Investigar por que essas LPs não aparecem na guia de tracking</li>
-              <li>• <strong>Ideia:</strong> automatizar o pull de tudo o que tá no ar (esta aba é o início disso)</li>
-            </ul>
-            <p className="text-[11px] text-amber-700 mt-3 font-mono italic">
-              Verificação manual: <span className="underline">site:lp.suno.com.br</span> no Google
-            </p>
-          </div>
-        </div>
-      </div>
-
       {/* Configurador de padrões de host — controla GA4 + GSC simultaneamente */}
       <div className="bg-white rounded-2xl border border-[color:var(--border)] p-4">
         <div className="flex items-start gap-2 mb-2">
