@@ -75,6 +75,9 @@ type AreaLogadaAnalysis = {
   subscriptionStatus: {
     available: boolean;
     error: string | null;
+    scope: string | null;
+    dimName: string;
+    errors: { scope: string; error: string | null }[];
     rows: { status: string; users: number }[];
   };
   caveat: string;
@@ -98,6 +101,7 @@ export default function AreaLogadaPage() {
   const [endDate, setEndDate] = useState(today);
   const [pagePath, setPagePath] = useState("/onboarding");
   const [hostname, setHostname] = useState("investidor.suno.com.br");
+  const [subscriptionDim, setSubscriptionDim] = useState("subscription_status");
   const [data, setData] = useState<AreaLogadaAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -112,6 +116,7 @@ export default function AreaLogadaPage() {
         endDate,
         pagePath,
         hostname,
+        subscriptionDim,
       });
       const r = await fetch(`/api/area-logada?${params.toString()}`, { cache: "no-store" });
       if (!r.ok) {
@@ -440,10 +445,25 @@ export default function AreaLogadaPage() {
 
           {/* Status do Plano */}
           <section>
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-700 mb-3 flex items-center gap-2">
-              <CheckCircle2 size={14} className="text-emerald-600" />
-              Status do plano (ativo / pendente / cancelado)
-            </h2>
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                <CheckCircle2 size={14} className="text-emerald-600" />
+                Status do plano (ativo / pendente / cancelado)
+              </h2>
+              <div className="flex items-center gap-2">
+                <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+                  Custom dim:
+                </label>
+                <input
+                  type="text"
+                  value={subscriptionDim}
+                  onChange={(e) => setSubscriptionDim(e.target.value)}
+                  onBlur={fetchAnalysis}
+                  className="px-2 py-1 text-xs font-mono rounded-md border border-[color:var(--border)] focus:outline-none focus:border-emerald-500 w-[180px]"
+                  placeholder="subscription_status"
+                />
+              </div>
+            </div>
             <SubscriptionStatusBlock status={data.subscriptionStatus} />
           </section>
 
@@ -715,69 +735,138 @@ function GeoByPlan({
 function SubscriptionStatusBlock({
   status,
 }: {
-  status: { available: boolean; error: string | null; rows: { status: string; users: number }[] };
+  status: {
+    available: boolean;
+    error: string | null;
+    scope: string | null;
+    dimName: string;
+    errors: { scope: string; error: string | null }[];
+    rows: { status: string; users: number }[];
+  };
 }) {
-  if (!status.available) {
+  // Caso 1: encontrou dado em algum scope
+  if (status.available && status.rows.length > 0) {
+    const total = status.rows.reduce((s, r) => s + r.users, 0);
+    const colorMap: Record<string, { bg: string; color: string; icon: React.ComponentType<{ size?: number; className?: string }> }> = {
+      active: { bg: "bg-emerald-100", color: "#10b981", icon: CheckCircle2 },
+      ativo: { bg: "bg-emerald-100", color: "#10b981", icon: CheckCircle2 },
+      pending: { bg: "bg-amber-100", color: "#f59e0b", icon: Clock },
+      pendente: { bg: "bg-amber-100", color: "#f59e0b", icon: Clock },
+      canceled: { bg: "bg-red-100", color: "#dc2626", icon: XCircle },
+      cancelled: { bg: "bg-red-100", color: "#dc2626", icon: XCircle },
+      cancelado: { bg: "bg-red-100", color: "#dc2626", icon: XCircle },
+      trial: { bg: "bg-blue-100", color: "#3b82f6", icon: Sparkles },
+      expired: { bg: "bg-slate-100", color: "#64748b", icon: XCircle },
+      expirado: { bg: "bg-slate-100", color: "#64748b", icon: XCircle },
+    };
+
     return (
-      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5">
-        <div className="flex items-start gap-2">
-          <AlertCircle size={16} className="text-amber-700 mt-0.5 shrink-0" />
-          <div className="space-y-2 text-sm text-amber-900">
-            <p>
-              <strong>Status do plano não está disponível no GA4 dessa propriedade.</strong> Esse dado não é
-              nativo — vem do <strong>sistema de billing/CRM</strong>.
-            </p>
-            <p className="text-xs">
-              Pra ter aqui no painel, precisa configurar uma <strong>custom dimension</strong> chamada{" "}
-              <code className="bg-amber-100 px-1 rounded">subscription_status</code> (escopo: User) no GA4 Admin →
-              Custom definitions, e popular ela via dataLayer toda vez que o user faz login na NAI:
-            </p>
-            <pre className="bg-amber-100 px-2 py-1 rounded text-[10px] font-mono overflow-x-auto">
-{`// No login, pega o status do user no banco e dispara:
-gtag('set', 'user_properties', {
-  subscription_status: 'active' // ou 'pending' / 'canceled' / 'trial'
-});`}
-            </pre>
-            <p className="text-xs">
-              <strong>Alternativa mais fácil:</strong> integração direta com o sistema de billing (Stripe, RD ou
-              banco interno) — me passa as credenciais e eu monto endpoint dedicado pra ler os status reais sem
-              depender do GA4.
-            </p>
-          </div>
+      <div className="space-y-3">
+        <div className="text-[11px] text-emerald-700 flex items-center gap-1.5 font-mono">
+          <CheckCircle2 size={11} />
+          Encontrei dim <strong>{status.dimName}</strong> escopo{" "}
+          <strong>{status.scope === "user" ? "User-scoped" : status.scope === "event" ? "Event-scoped" : status.scope}</strong> · {status.rows.length} valores únicos · total {formatNumber(total)} users
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {status.rows.map((r) => {
+            const cfg = colorMap[r.status.toLowerCase()] || { bg: "bg-slate-100", color: "#64748b", icon: Activity };
+            const Icon = cfg.icon;
+            const pct = total > 0 ? (r.users / total) * 100 : 0;
+            return (
+              <div key={r.status} className="bg-white rounded-2xl border border-[color:var(--border)] p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-[10px] uppercase font-semibold tracking-wider text-slate-500">{r.status}</div>
+                  <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${cfg.bg}`}>
+                    <Icon size={14} className="" />
+                  </div>
+                </div>
+                <div className="text-2xl font-bold tabular-nums" style={{ color: cfg.color }}>
+                  {formatNumber(r.users)}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">{pct.toFixed(1)}% do total</div>
+              </div>
+            );
+          })}
         </div>
       </div>
     );
   }
 
-  const total = status.rows.reduce((s, r) => s + r.users, 0);
-  const colorMap: Record<string, { bg: string; color: string; icon: React.ComponentType<{ size?: number; className?: string }> }> = {
-    active: { bg: "bg-emerald-100", color: "#10b981", icon: CheckCircle2 },
-    pending: { bg: "bg-amber-100", color: "#f59e0b", icon: Clock },
-    canceled: { bg: "bg-red-100", color: "#dc2626", icon: XCircle },
-    trial: { bg: "bg-blue-100", color: "#3b82f6", icon: Sparkles },
-  };
-
+  // Caso 2: falhou — diagnóstico detalhado mostrando o que tentou
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-      {status.rows.map((r) => {
-        const cfg = colorMap[r.status.toLowerCase()] || { bg: "bg-slate-100", color: "#64748b", icon: Activity };
-        const Icon = cfg.icon;
-        const pct = total > 0 ? (r.users / total) * 100 : 0;
-        return (
-          <div key={r.status} className="bg-white rounded-2xl border border-[color:var(--border)] p-4">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-[10px] uppercase font-semibold tracking-wider text-slate-500">{r.status}</div>
-              <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${cfg.bg}`}>
-                <Icon size={14} className="" />
-              </div>
-            </div>
-            <div className="text-2xl font-bold tabular-nums" style={{ color: cfg.color }}>
-              {formatNumber(r.users)}
-            </div>
-            <div className="text-[11px] text-slate-500 mt-0.5">{pct.toFixed(1)}% do total</div>
+    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5">
+      <div className="flex items-start gap-2">
+        <AlertCircle size={16} className="text-amber-700 mt-0.5 shrink-0" />
+        <div className="space-y-3 text-sm text-amber-900 flex-1">
+          <p>
+            <strong>Não consegui ler a custom dimension &quot;{status.dimName}&quot;.</strong> Tentei os 3 escopos
+            possíveis em paralelo:
+          </p>
+
+          {status.errors && (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-amber-300">
+                  <th className="text-left py-1 font-semibold">Escopo testado</th>
+                  <th className="text-left py-1 font-semibold">Resultado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {status.errors.map((e) => (
+                  <tr key={e.scope} className="border-b border-amber-200">
+                    <td className="py-1.5 font-mono text-[10px]">
+                      {e.scope === "user" ? `customUser:${status.dimName}` :
+                       e.scope === "event" ? `customEvent:${status.dimName}` :
+                       status.dimName}
+                    </td>
+                    <td className="py-1.5 text-[10px]">
+                      {e.error ? (
+                        <span className="text-red-700">❌ {e.error.slice(0, 100)}</span>
+                      ) : (
+                        <span className="text-amber-700">⚠ existe mas retornou 0 rows</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div className="text-xs space-y-2 mt-3 border-t border-amber-300 pt-3">
+            <p className="font-semibold">Possíveis causas:</p>
+            <ol className="list-decimal ml-5 space-y-1">
+              <li>
+                <strong>Custom dimension não foi registrada no GA4 Admin.</strong> Mesmo que você passe via
+                dataLayer, ela só aparece em queries depois de cadastrada em{" "}
+                <code className="bg-amber-100 px-1 rounded">Admin → Custom definitions → Create custom
+                dimensions</code>.
+              </li>
+              <li>
+                <strong>Nome diferente.</strong> Pode estar registrada como{" "}
+                <code className="bg-amber-100 px-1 rounded">subscriptionStatus</code> (camelCase) ou{" "}
+                <code className="bg-amber-100 px-1 rounded">user_subscription_status</code>. Edite o campo &quot;Custom
+                dim&quot; acima e teste outras grafias.
+              </li>
+              <li>
+                <strong>Escopo do dataLayer não bate com o registro.</strong> Se cadastrou como User-scoped,
+                precisa popular via{" "}
+                <code className="bg-amber-100 px-1 rounded">gtag(&apos;set&apos;, &apos;user_properties&apos;, ...)</code>. Se
+                cadastrou como Event-scoped, popula via parâmetro do evento direto:{" "}
+                <code className="bg-amber-100 px-1 rounded">dataLayer.push(&#123; event: &apos;X&apos;, subscription_status: &apos;active&apos; &#125;)</code>.
+              </li>
+              <li>
+                <strong>Sem dados ainda no período.</strong> GA4 leva 24-48h pra processar custom dimensions
+                novas. Se cadastrou recentemente, pode aparecer só amanhã.
+              </li>
+            </ol>
           </div>
-        );
-      })}
+
+          <p className="text-xs">
+            <strong>Como verificar no GA4:</strong> Admin → Custom definitions → procura
+            &quot;subscription&quot; na lista. Vai mostrar o nome exato + escopo (User ou Event).
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

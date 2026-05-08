@@ -43,6 +43,10 @@ export async function GET(req: NextRequest) {
   const endDate = req.nextUrl.searchParams.get("endDate") || new Date().toISOString().slice(0, 10);
   const pagePath = req.nextUrl.searchParams.get("pagePath") || "/onboarding";
   const hostname = req.nextUrl.searchParams.get("hostname") || "investidor.suno.com.br";
+  // Nome da custom dimension de subscription status — configurável caso
+  // o time tenha registrado com nome diferente
+  const subDimName =
+    req.nextUrl.searchParams.get("subscriptionDim") || "subscription_status";
 
   const dateRange = { startDate, endDate };
 
@@ -65,14 +69,69 @@ export async function GET(req: NextRequest) {
     },
   };
 
-  // Subscription Status: tenta query com customUser:subscription_status.
-  // Se a dimension não existir, GA4 retorna erro — capturamos e seguimos.
-  const subscriptionStatusPromise = runReport(propertyId, {
-    dateRanges: [dateRange],
-    dimensions: [{ name: "customUser:subscription_status" }],
-    metrics: [{ name: "totalUsers" }],
-    dimensionFilter: onboardingFilter,
-  }).catch((e) => ({ data: null, error: (e as Error).message }));
+  /**
+   * Subscription Status: GA4 distingue 2 escopos de custom dimension.
+   *
+   *   - customUser:NOME  → registrado como User-scoped (dataLayer
+   *     gtag('set', 'user_properties', { subscription_status: ... }))
+   *   - customEvent:NOME → registrado como Event-scoped (dataLayer
+   *     dataLayer.push({ event: 'X', subscription_status: ... }))
+   *
+   * O Renan disse que passa via dataLayer, mas pode ser qualquer um
+   * dos 2 dependendo de como GTM foi configurado. Tentamos os 2 em
+   * paralelo e usamos o que retornou dado.
+   */
+  type SubsRes = { data: { rows?: { dimensionValues?: { value: string }[]; metricValues?: { value: string }[] }[] } | null; error: string | null };
+
+  const trySubscriptionDim = async (dimName: string): Promise<SubsRes> => {
+    try {
+      const r = await runReport(propertyId, {
+        dateRanges: [dateRange],
+        dimensions: [{ name: dimName }],
+        metrics: [{ name: "totalUsers" }],
+        dimensionFilter: onboardingFilter,
+      });
+      return r;
+    } catch (e) {
+      return { data: null, error: (e as Error).message };
+    }
+  };
+
+  const subscriptionStatusPromise = (async () => {
+    // Tenta os 3 mais prováveis em paralelo
+    const [userScoped, eventScoped, plain] = await Promise.all([
+      trySubscriptionDim(`customUser:${subDimName}`),
+      trySubscriptionDim(`customEvent:${subDimName}`),
+      trySubscriptionDim(subDimName),
+    ]);
+
+    // Pega o que retornou rows com dado
+    const candidates: { res: SubsRes; scope: string }[] = [
+      { res: userScoped, scope: "user" },
+      { res: eventScoped, scope: "event" },
+      { res: plain, scope: "auto" },
+    ];
+
+    const winner = candidates.find(
+      (c) => !c.res.error && (c.res.data?.rows?.length || 0) > 0
+    );
+
+    if (winner) {
+      return { ...winner.res, scope: winner.scope, dimName: subDimName, errors: candidates.map((c) => ({ scope: c.scope, error: c.res.error })) };
+    }
+
+    // Nenhum retornou dado. Retorna primeira tentativa com info de
+    // todos os erros pra UI mostrar diagnóstico.
+    return {
+      data: null,
+      error:
+        candidates.find((c) => c.res.error)?.res.error ||
+        `nenhum scope retornou dados pra '${subDimName}'`,
+      scope: null,
+      dimName: subDimName,
+      errors: candidates.map((c) => ({ scope: c.scope, error: c.res.error })),
+    };
+  })();
 
   const [
     onboardingTotalRes,
@@ -286,22 +345,36 @@ export async function GET(req: NextRequest) {
     }))
     .filter((r) => r.type);
 
-  // Subscription Status — pode falhar se custom dim não existir
-  const subscriptionStatus =
-    subscriptionStatusRes && "error" in subscriptionStatusRes && subscriptionStatusRes.error
-      ? {
-          available: false,
-          error: subscriptionStatusRes.error,
-          rows: [],
-        }
-      : {
-          available: true,
-          error: null,
-          rows: ((subscriptionStatusRes as { data: { rows?: { dimensionValues?: { value: string }[]; metricValues?: { value: string }[] }[] } | null }).data?.rows || []).map((r) => ({
-            status: r.dimensionValues?.[0]?.value || "(unknown)",
-            users: Number(r.metricValues?.[0]?.value || 0),
-          })),
-        };
+  // Subscription Status — agora retorna scope (user/event/auto) que funcionou
+  type SubsResponse = {
+    data: { rows?: { dimensionValues?: { value: string }[]; metricValues?: { value: string }[] }[] } | null;
+    error: string | null;
+    scope: string | null;
+    dimName: string;
+    errors: { scope: string; error: string | null }[];
+  };
+  const subRes = subscriptionStatusRes as SubsResponse;
+
+  const subscriptionStatus = subRes.error
+    ? {
+        available: false,
+        error: subRes.error,
+        scope: null,
+        dimName: subRes.dimName,
+        errors: subRes.errors,
+        rows: [],
+      }
+    : {
+        available: true,
+        error: null,
+        scope: subRes.scope,
+        dimName: subRes.dimName,
+        errors: subRes.errors,
+        rows: (subRes.data?.rows || []).map((r) => ({
+          status: r.dimensionValues?.[0]?.value || "(unknown)",
+          users: Number(r.metricValues?.[0]?.value || 0),
+        })),
+      };
 
   return NextResponse.json(
     {
