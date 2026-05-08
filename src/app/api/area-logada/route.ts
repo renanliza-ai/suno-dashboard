@@ -83,13 +83,16 @@ export async function GET(req: NextRequest) {
    */
   type SubsRes = { data: { rows?: { dimensionValues?: { value: string }[]; metricValues?: { value: string }[] }[] } | null; error: string | null };
 
-  const trySubscriptionDim = async (dimName: string): Promise<SubsRes> => {
+  // 2 modos de query: GLOBAL (toda property) e FILTERED (só /onboarding)
+  // Depois mesclamos pra mostrar os 2 panoramas — global mostra a base
+  // total de assinantes da property, filtrado mostra só quem passou no path.
+  const trySubscriptionDim = async (dimName: string, applyFilter: boolean): Promise<SubsRes> => {
     try {
       const r = await runReport(propertyId, {
         dateRanges: [dateRange],
         dimensions: [{ name: dimName }],
         metrics: [{ name: "totalUsers" }],
-        dimensionFilter: onboardingFilter,
+        ...(applyFilter ? { dimensionFilter: onboardingFilter } : {}),
       });
       return r;
     } catch (e) {
@@ -98,38 +101,61 @@ export async function GET(req: NextRequest) {
   };
 
   const subscriptionStatusPromise = (async () => {
-    // Tenta os 3 mais prováveis em paralelo
-    const [userScoped, eventScoped, plain] = await Promise.all([
-      trySubscriptionDim(`customUser:${subDimName}`),
-      trySubscriptionDim(`customEvent:${subDimName}`),
-      trySubscriptionDim(subDimName),
+    // Tenta os 3 escopos × 2 modos (global e filtered) — 6 queries paralelas
+    const [
+      userScopedG, userScopedF,
+      eventScopedG, eventScopedF,
+      plainG, plainF,
+    ] = await Promise.all([
+      trySubscriptionDim(`customUser:${subDimName}`, false),
+      trySubscriptionDim(`customUser:${subDimName}`, true),
+      trySubscriptionDim(`customEvent:${subDimName}`, false),
+      trySubscriptionDim(`customEvent:${subDimName}`, true),
+      trySubscriptionDim(subDimName, false),
+      trySubscriptionDim(subDimName, true),
     ]);
 
-    // Pega o que retornou rows com dado
-    const candidates: { res: SubsRes; scope: string }[] = [
-      { res: userScoped, scope: "user" },
-      { res: eventScoped, scope: "event" },
-      { res: plain, scope: "auto" },
+    type Candidate = { resG: SubsRes; resF: SubsRes; scope: string };
+    const candidates: Candidate[] = [
+      { resG: userScopedG, resF: userScopedF, scope: "user" },
+      { resG: eventScopedG, resF: eventScopedF, scope: "event" },
+      { resG: plainG, resF: plainF, scope: "auto" },
     ];
 
+    // Pega o primeiro escopo que retornou rows na query GLOBAL (mais
+    // permissiva — se nem ela retornou, é problema de configuração)
     const winner = candidates.find(
-      (c) => !c.res.error && (c.res.data?.rows?.length || 0) > 0
+      (c) => !c.resG.error && (c.resG.data?.rows?.length || 0) > 0
     );
 
+    const parseRows = (res: SubsRes) =>
+      (res.data?.rows || []).map((r) => ({
+        status: r.dimensionValues?.[0]?.value || "(unknown)",
+        users: Number(r.metricValues?.[0]?.value || 0),
+      }));
+
     if (winner) {
-      return { ...winner.res, scope: winner.scope, dimName: subDimName, errors: candidates.map((c) => ({ scope: c.scope, error: c.res.error })) };
+      return {
+        data: winner.resG.data,
+        error: null,
+        scope: winner.scope,
+        dimName: subDimName,
+        rowsGlobal: parseRows(winner.resG),
+        rowsFiltered: parseRows(winner.resF),
+        errors: candidates.map((c) => ({ scope: c.scope, error: c.resG.error })),
+      };
     }
 
-    // Nenhum retornou dado. Retorna primeira tentativa com info de
-    // todos os erros pra UI mostrar diagnóstico.
     return {
       data: null,
       error:
-        candidates.find((c) => c.res.error)?.res.error ||
+        candidates.find((c) => c.resG.error)?.resG.error ||
         `nenhum scope retornou dados pra '${subDimName}'`,
       scope: null,
       dimName: subDimName,
-      errors: candidates.map((c) => ({ scope: c.scope, error: c.res.error })),
+      rowsGlobal: [],
+      rowsFiltered: [],
+      errors: candidates.map((c) => ({ scope: c.scope, error: c.resG.error })),
     };
   })();
 
@@ -345,12 +371,14 @@ export async function GET(req: NextRequest) {
     }))
     .filter((r) => r.type);
 
-  // Subscription Status — agora retorna scope (user/event/auto) que funcionou
+  // Subscription Status — retorna 2 panoramas (global da property + filtrado por página)
   type SubsResponse = {
     data: { rows?: { dimensionValues?: { value: string }[]; metricValues?: { value: string }[] }[] } | null;
     error: string | null;
     scope: string | null;
     dimName: string;
+    rowsGlobal: { status: string; users: number }[];
+    rowsFiltered: { status: string; users: number }[];
     errors: { scope: string; error: string | null }[];
   };
   const subRes = subscriptionStatusRes as SubsResponse;
@@ -362,7 +390,8 @@ export async function GET(req: NextRequest) {
         scope: null,
         dimName: subRes.dimName,
         errors: subRes.errors,
-        rows: [],
+        rowsGlobal: [],
+        rowsFiltered: [],
       }
     : {
         available: true,
@@ -370,10 +399,8 @@ export async function GET(req: NextRequest) {
         scope: subRes.scope,
         dimName: subRes.dimName,
         errors: subRes.errors,
-        rows: (subRes.data?.rows || []).map((r) => ({
-          status: r.dimensionValues?.[0]?.value || "(unknown)",
-          users: Number(r.metricValues?.[0]?.value || 0),
-        })),
+        rowsGlobal: subRes.rowsGlobal,
+        rowsFiltered: subRes.rowsFiltered,
       };
 
   return NextResponse.json(

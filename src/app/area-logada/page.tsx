@@ -78,7 +78,8 @@ type AreaLogadaAnalysis = {
     scope: string | null;
     dimName: string;
     errors: { scope: string; error: string | null }[];
-    rows: { status: string; users: number }[];
+    rowsGlobal: { status: string; users: number }[];
+    rowsFiltered: { status: string; users: number }[];
   };
   caveat: string;
 };
@@ -464,7 +465,7 @@ export default function AreaLogadaPage() {
                 />
               </div>
             </div>
-            <SubscriptionStatusBlock status={data.subscriptionStatus} />
+            <SubscriptionStatusBlock status={data.subscriptionStatus} pagePath={pagePath} />
           </section>
 
           {/* ICP / Afinidades */}
@@ -734,6 +735,7 @@ function GeoByPlan({
 
 function SubscriptionStatusBlock({
   status,
+  pagePath,
 }: {
   status: {
     available: boolean;
@@ -741,56 +743,105 @@ function SubscriptionStatusBlock({
     scope: string | null;
     dimName: string;
     errors: { scope: string; error: string | null }[];
-    rows: { status: string; users: number }[];
+    rowsGlobal: { status: string; users: number }[];
+    rowsFiltered: { status: string; users: number }[];
   };
+  pagePath: string;
 }) {
-  // Caso 1: encontrou dado em algum scope
-  if (status.available && status.rows.length > 0) {
-    const total = status.rows.reduce((s, r) => s + r.users, 0);
-    const colorMap: Record<string, { bg: string; color: string; icon: React.ComponentType<{ size?: number; className?: string }> }> = {
-      active: { bg: "bg-emerald-100", color: "#10b981", icon: CheckCircle2 },
-      ativo: { bg: "bg-emerald-100", color: "#10b981", icon: CheckCircle2 },
-      pending: { bg: "bg-amber-100", color: "#f59e0b", icon: Clock },
-      pendente: { bg: "bg-amber-100", color: "#f59e0b", icon: Clock },
-      canceled: { bg: "bg-red-100", color: "#dc2626", icon: XCircle },
-      cancelled: { bg: "bg-red-100", color: "#dc2626", icon: XCircle },
-      cancelado: { bg: "bg-red-100", color: "#dc2626", icon: XCircle },
-      trial: { bg: "bg-blue-100", color: "#3b82f6", icon: Sparkles },
-      expired: { bg: "bg-slate-100", color: "#64748b", icon: XCircle },
-      expirado: { bg: "bg-slate-100", color: "#64748b", icon: XCircle },
-    };
+  const colorMap: Record<string, { bg: string; color: string; icon: React.ComponentType<{ size?: number; className?: string }> }> = {
+    active: { bg: "bg-emerald-100", color: "#10b981", icon: CheckCircle2 },
+    ativo: { bg: "bg-emerald-100", color: "#10b981", icon: CheckCircle2 },
+    pending: { bg: "bg-amber-100", color: "#f59e0b", icon: Clock },
+    pendente: { bg: "bg-amber-100", color: "#f59e0b", icon: Clock },
+    canceled: { bg: "bg-red-100", color: "#dc2626", icon: XCircle },
+    cancelled: { bg: "bg-red-100", color: "#dc2626", icon: XCircle },
+    cancelado: { bg: "bg-red-100", color: "#dc2626", icon: XCircle },
+    trial: { bg: "bg-blue-100", color: "#3b82f6", icon: Sparkles },
+    expired: { bg: "bg-slate-100", color: "#64748b", icon: XCircle },
+    expirado: { bg: "bg-slate-100", color: "#64748b", icon: XCircle },
+  };
+
+  const renderCards = (rows: { status: string; users: number }[], total: number) => (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {rows.map((r) => {
+        const cfg = colorMap[r.status.toLowerCase()] || { bg: "bg-slate-100", color: "#64748b", icon: Activity };
+        const Icon = cfg.icon;
+        const pct = total > 0 ? (r.users / total) * 100 : 0;
+        return (
+          <div key={r.status} className="bg-white rounded-2xl border border-[color:var(--border)] p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[10px] uppercase font-semibold tracking-wider text-slate-500">{r.status}</div>
+              <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${cfg.bg}`}>
+                <Icon size={14} className="" />
+              </div>
+            </div>
+            <div className="text-2xl font-bold tabular-nums" style={{ color: cfg.color }}>
+              {formatNumber(r.users)}
+            </div>
+            <div className="text-[11px] text-slate-500 mt-0.5">{pct.toFixed(1)}% do total</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  // Caso 1: encontrou dado (pelo menos no global)
+  if (status.available && (status.rowsGlobal.length > 0 || status.rowsFiltered.length > 0)) {
+    const totalGlobal = status.rowsGlobal.reduce((s, r) => s + r.users, 0);
+    const totalFiltered = status.rowsFiltered.reduce((s, r) => s + r.users, 0);
 
     return (
-      <div className="space-y-3">
+      <div className="space-y-5">
         <div className="text-[11px] text-emerald-700 flex items-center gap-1.5 font-mono">
           <CheckCircle2 size={11} />
           Encontrei dim <strong>{status.dimName}</strong> escopo{" "}
-          <strong>{status.scope === "user" ? "User-scoped" : status.scope === "event" ? "Event-scoped" : status.scope}</strong> · {status.rows.length} valores únicos · total {formatNumber(total)} users
+          <strong>{status.scope === "user" ? "User-scoped" : status.scope === "event" ? "Event-scoped" : status.scope}</strong>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {status.rows.map((r) => {
-            const cfg = colorMap[r.status.toLowerCase()] || { bg: "bg-slate-100", color: "#64748b", icon: Activity };
-            const Icon = cfg.icon;
-            const pct = total > 0 ? (r.users / total) * 100 : 0;
-            return (
-              <div key={r.status} className="bg-white rounded-2xl border border-[color:var(--border)] p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="text-[10px] uppercase font-semibold tracking-wider text-slate-500">{r.status}</div>
-                  <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${cfg.bg}`}>
-                    <Icon size={14} className="" />
-                  </div>
-                </div>
-                <div className="text-2xl font-bold tabular-nums" style={{ color: cfg.color }}>
-                  {formatNumber(r.users)}
-                </div>
-                <div className="text-[11px] text-slate-500 mt-0.5">{pct.toFixed(1)}% do total</div>
-              </div>
-            );
-          })}
+
+        {/* PANORAMA 1: GLOBAL — toda property no período */}
+        {status.rowsGlobal.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+              <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                🌐 Global da property — {formatNumber(totalGlobal)} users
+              </h3>
+              <span className="text-[10px] text-slate-500 font-mono">
+                todos os usuários da property no período
+              </span>
+            </div>
+            {renderCards(status.rowsGlobal, totalGlobal)}
+          </div>
+        )}
+
+        {/* PANORAMA 2: FILTRADO — só quem passou em /onboarding */}
+        <div>
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+            <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
+              🎯 Quem passou em <code className="bg-slate-100 px-1 rounded">{pagePath}</code> — {formatNumber(totalFiltered)} users
+            </h3>
+            <span className="text-[10px] text-slate-500 font-mono">
+              só os que visitaram a página
+            </span>
+          </div>
+          {status.rowsFiltered.length > 0 ? (
+            renderCards(status.rowsFiltered, totalFiltered)
+          ) : (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-900">
+              <strong>Nenhum user com subscription_status passou em {pagePath} no período.</strong>{" "}
+              Possíveis causas: (a) /onboarding é página de pré-login (user ainda não tem status atribuído ali);
+              (b) tracking de subscription_status só dispara depois do login na NAI; (c) volume baixo no recorte.
+              Use o panorama global acima pra ver a base total.
+            </div>
+          )}
         </div>
       </div>
     );
   }
+
+  // Continua pro caso de erro abaixo
+  // (intencional — fallthrough)
+  // Marker pra limpar warning de unused vars; o bloco abaixo ainda renderiza.
+  // void(0);
 
   // Caso 2: falhou — diagnóstico detalhado mostrando o que tentou
   return (
