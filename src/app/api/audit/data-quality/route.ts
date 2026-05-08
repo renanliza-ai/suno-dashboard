@@ -139,7 +139,20 @@ async function auditProperty(propertyId: string, propertyName: string, auditDate
         { name: "activeUsers" },
         { name: "newUsers" },
       ],
+      // FORÇA o GA4 a retornar totals[0] mesmo sem dimensão. Sem isso, em
+      // algumas properties a resposta vinha vazia e o audit explodia em
+      // "users metrics: no data".
+      metricAggregations: ["TOTAL"],
     });
+    // Log temporário pra diagnosticar response vazio (aparece no Vercel logs)
+    console.log(`[AUDIT-USERS] ${propertyName}:`, JSON.stringify({
+      error: usersRes.error,
+      hasData: !!usersRes.data,
+      rowsCount: usersRes.data?.rows?.length,
+      totalsCount: usersRes.data?.totals?.length,
+      firstRowMetrics: usersRes.data?.rows?.[0]?.metricValues,
+      firstTotalMetrics: usersRes.data?.totals?.[0]?.metricValues,
+    }));
     const totalUsers = readMetric(usersRes, 0);
     const activeUsers = readMetric(usersRes, 1);
     const newUsers = readMetric(usersRes, 2);
@@ -185,8 +198,16 @@ async function auditProperty(propertyId: string, propertyName: string, auditDate
   // ============================================================
   try {
     const [keyEventsRes, conversionsRes] = await Promise.all([
-      runReport(propertyId, { dateRanges: [dateRange], metrics: [{ name: "keyEvents" }] }),
-      runReport(propertyId, { dateRanges: [dateRange], metrics: [{ name: "conversions" }] }),
+      runReport(propertyId, {
+        dateRanges: [dateRange],
+        metrics: [{ name: "keyEvents" }],
+        metricAggregations: ["TOTAL"],
+      }),
+      runReport(propertyId, {
+        dateRanges: [dateRange],
+        metrics: [{ name: "conversions" }],
+        metricAggregations: ["TOTAL"],
+      }),
     ]);
     const keyEv = readMetric(keyEventsRes, 0) || 0;
     const conv = readMetric(conversionsRes, 0) || 0;
@@ -276,14 +297,17 @@ async function auditProperty(propertyId: string, propertyName: string, auditDate
       runReport(propertyId, {
         dateRanges: [{ startDate: dayMinus1, endDate: dayMinus1 }],
         metrics: [{ name: "sessions" }, { name: "totalUsers" }],
+        metricAggregations: ["TOTAL"],
       }),
       runReport(propertyId, {
         dateRanges: [{ startDate: dayMinus2, endDate: dayMinus2 }],
         metrics: [{ name: "sessions" }, { name: "totalUsers" }],
+        metricAggregations: ["TOTAL"],
       }),
       runReport(propertyId, {
         dateRanges: [{ startDate: sameDoWLastWeek, endDate: sameDoWLastWeek }],
         metrics: [{ name: "sessions" }, { name: "totalUsers" }],
+        metricAggregations: ["TOTAL"],
       }),
     ]);
 

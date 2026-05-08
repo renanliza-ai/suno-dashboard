@@ -131,6 +131,7 @@ type RunReportBody = {
   dateRanges: { startDate: string; endDate: string }[];
   dimensions?: { name: string }[];
   metrics?: { name: string }[];
+  metricAggregations?: ("TOTAL" | "MINIMUM" | "MAXIMUM" | "COUNT")[];
   orderBys?: {
     metric?: { metricName: string };
     dimension?: { dimensionName: string; orderType?: "ALPHANUMERIC" | "CASE_INSENSITIVE_ALPHANUMERIC" | "NUMERIC" };
