@@ -77,6 +77,26 @@ function calcVariance(a: number, b: number): number {
   return Math.abs((a - b) / Math.max(a, b)) * 100;
 }
 
+/**
+ * Lê metricValues de runReport — quando a query NÃO tem dimensões, o GA4
+ * coloca o resultado em `rows[0]`, não em `totals[0]`. Quando tem dimensão
+ * + metricAggregations, aí sim popula `totals[0]`. Esse helper tenta os
+ * dois lugares e retorna o número convertido na posição requisitada, ou
+ * `null` se nem rows[0] nem totals[0] existem (sinal de "sem dados").
+ */
+function readMetric(
+  res: { data: { rows?: { metricValues?: { value: string }[] }[]; totals?: { metricValues?: { value: string }[] }[] } | null; error: string | null },
+  index = 0
+): number | null {
+  // Prioridade 1: rows[0] (queries sem dimensão)
+  const fromRows = res.data?.rows?.[0]?.metricValues?.[index]?.value;
+  if (fromRows !== undefined) return Number(fromRows);
+  // Prioridade 2: totals[0] (queries com dimensão + metricAggregations)
+  const fromTotals = res.data?.totals?.[0]?.metricValues?.[index]?.value;
+  if (fromTotals !== undefined) return Number(fromTotals);
+  return null;
+}
+
 function pickStatus(variance: number): "ok" | "warning" | "error" {
   if (variance >= VARIANCE_ERROR_PCT) return "error";
   if (variance >= VARIANCE_WARNING_PCT) return "warning";
@@ -120,18 +140,21 @@ async function auditProperty(propertyId: string, propertyName: string, auditDate
         { name: "newUsers" },
       ],
     });
-    if (usersRes.error || !usersRes.data?.totals?.[0]) {
+    const totalUsers = readMetric(usersRes, 0);
+    const activeUsers = readMetric(usersRes, 1);
+    const newUsers = readMetric(usersRes, 2);
+    if (usersRes.error || totalUsers === null) {
       audit.errors.push(`users metrics: ${usersRes.error || "no data"}`);
     } else {
-      const v = usersRes.data.totals[0].metricValues!.map((m) => Number(m.value || 0));
-      const totalUsers = v[0];
-      const activeUsers = v[1];
-      const newUsers = v[2];
-      const variance = calcVariance(totalUsers, activeUsers);
+      // Fallback: se algumas das 3 métricas não vieram, usa 0 (não é "sem dados")
+      const totalUsersV = totalUsers || 0;
+      const activeUsersV = activeUsers || 0;
+      const newUsersV = newUsers || 0;
+      const variance = calcVariance(totalUsersV, activeUsersV);
       audit.comparisons.push({
         set: "users",
         label: "Usuários — totalUsers (nosso painel) vs activeUsers (GA4 UI)",
-        values: { totalUsers, activeUsers, newUsers },
+        values: { totalUsers: totalUsersV, activeUsers: activeUsersV, newUsers: newUsersV },
         variance_pct: { totalUsers_vs_activeUsers: Number(variance.toFixed(2)) },
         status: pickStatus(variance),
         threshold_pct: VARIANCE_WARNING_PCT,
@@ -155,8 +178,8 @@ async function auditProperty(propertyId: string, propertyName: string, auditDate
       runReport(propertyId, { dateRanges: [dateRange], metrics: [{ name: "keyEvents" }] }),
       runReport(propertyId, { dateRanges: [dateRange], metrics: [{ name: "conversions" }] }),
     ]);
-    const keyEv = Number(keyEventsRes.data?.totals?.[0]?.metricValues?.[0]?.value || 0);
-    const conv = Number(conversionsRes.data?.totals?.[0]?.metricValues?.[0]?.value || 0);
+    const keyEv = readMetric(keyEventsRes, 0) || 0;
+    const conv = readMetric(conversionsRes, 0) || 0;
 
     if (keyEventsRes.error && conversionsRes.error) {
       audit.errors.push(`conversion metrics both failed: ${keyEventsRes.error}`);
@@ -254,9 +277,9 @@ async function auditProperty(propertyId: string, propertyName: string, auditDate
       }),
     ]);
 
-    const s1 = Number(d1.data?.totals?.[0]?.metricValues?.[0]?.value || 0);
-    const s2 = Number(d2.data?.totals?.[0]?.metricValues?.[0]?.value || 0);
-    const sWeek = Number(dWeek.data?.totals?.[0]?.metricValues?.[0]?.value || 0);
+    const s1 = readMetric(d1, 0) || 0;
+    const s2 = readMetric(d2, 0) || 0;
+    const sWeek = readMetric(dWeek, 0) || 0;
 
     // Se D-1 < 70% de D-2 OU < 70% de sameDoWLastWeek → freshness warning
     if (s2 > 0 && s1 < s2 * 0.7) {
