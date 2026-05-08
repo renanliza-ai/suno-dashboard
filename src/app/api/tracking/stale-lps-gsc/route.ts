@@ -32,6 +32,13 @@ export async function GET(req: NextRequest) {
 
   let siteUrl = req.nextUrl.searchParams.get("siteUrl");
   const hostFilter = req.nextUrl.searchParams.get("hostFilter") || "lp.";
+  // hostFilters: CSV de padrões pra capturar todos providers de LP
+  // Ex: "lp.,lp2.,greatpages,materiais." — combina LP própria + GreatPages
+  const hostFiltersRaw = req.nextUrl.searchParams.get("hostFilters") || hostFilter;
+  const hostFilters = hostFiltersRaw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
   const propertyName = (req.nextUrl.searchParams.get("propertyName") || "").toLowerCase();
   const days = Number(req.nextUrl.searchParams.get("days") || 30);
 
@@ -105,23 +112,30 @@ export async function GET(req: NextRequest) {
 
   const range = buildGSCDateRange(days);
 
-  // Query GSC: top 1000 URLs com filter por hostFilter
+  // Query GSC: top 1000 URLs com filtro por múltiplos padrões.
+  // GSC API: filters dentro do mesmo group são AND. Pra OR entre vários
+  // filtros (lp., lp2., greatpages, etc), usamos um regex que combina todos.
+  // Ex: ["lp.", "greatpages"] vira regex /(lp\.|greatpages)/i
+  const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pageFilter =
+    hostFilters.length === 1
+      ? {
+          dimension: "page" as const,
+          operator: "contains" as const,
+          expression: hostFilters[0],
+        }
+      : {
+          dimension: "page" as const,
+          operator: "includingRegex" as const,
+          expression: `(${hostFilters.map(escapeRegex).join("|")})`,
+        };
+
   const result = await runGSCQuery(siteUrl, {
     startDate: range.startDate,
     endDate: range.endDate,
     dimensions: ["page"],
     rowLimit: 1000,
-    dimensionFilterGroups: [
-      {
-        filters: [
-          {
-            dimension: "page",
-            operator: "contains",
-            expression: hostFilter,
-          },
-        ],
-      },
-    ],
+    dimensionFilterGroups: [{ filters: [pageFilter] }],
   });
 
   if (result.error) {

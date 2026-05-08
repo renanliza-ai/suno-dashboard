@@ -1591,12 +1591,30 @@ type GSCRow = {
   position: number;
 };
 
+// Padrões default que indicam "isso é uma landing page".
+// Inclui:
+//   - lp.* (LPs próprias)
+//   - lp2.*, materiais.*, pages.* (provavelmente apontam pra GreatPages)
+//   - greatpages.com.br (host nativo do GreatPages quando não tem CNAME)
+//   - unbounce.com (alternativa comum)
+//   - vidaro.* (já vi alguns Suno usando)
+const DEFAULT_LP_HOST_FILTERS = "lp.,lp2.,materiais.,pages.,greatpages,unbounce";
+
 function StaleLPsTab() {
   const { selected, useRealData } = useGA4();
   const { data: pagesDetail, meta } = useGA4PagesDetail();
   const [search, setSearch] = useState("");
   const [filterStale, setFilterStale] = useState<"all" | "only_stale" | "only_zumbi">("all");
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
+
+  // hostFilters: CSV de padrões que identificam uma LP. User pode editar
+  // pra incluir subdomínios proprietários da Suno (ex: "lp.,lp2.,materiais.")
+  const [hostFiltersInput, setHostFiltersInput] = useState(DEFAULT_LP_HOST_FILTERS);
+  const [hostFiltersApplied, setHostFiltersApplied] = useState(DEFAULT_LP_HOST_FILTERS);
+  const hostFilters = useMemo(
+    () => hostFiltersApplied.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
+    [hostFiltersApplied]
+  );
 
   // Estado da segunda etapa: GSC (URLs indexadas no Google)
   const [gscRows, setGscRows] = useState<GSCRow[] | null>(null);
@@ -1612,7 +1630,9 @@ function StaleLPsTab() {
     setGscAvailableSites(null);
     try {
       const params = new URLSearchParams({
-        hostFilter: "lp.",
+        // Manda os mesmos hostFilters que o GA4 está usando — garante
+        // que a lista cruzada pegue LP1 + LP2/GreatPages
+        hostFilters: hostFiltersApplied,
         days: "30",
       });
       if (selected?.displayName) params.set("propertyName", selected.displayName);
@@ -1636,14 +1656,16 @@ function StaleLPsTab() {
     }
   };
 
-  // Filtra páginas de hosts "lp.*" — são as landing pages
+  // Filtra páginas dos hosts configurados — captura LPs próprias + GreatPages
+  // + outros providers. Match é por substring dentro do host inteiro
+  // (host = "lp.suno.com.br" casa com filtro "lp.").
   const lpPages = useMemo(() => {
     if (!pagesDetail?.pages) return [];
     return pagesDetail.pages.filter((p) => {
       const host = (p.host || "").toLowerCase();
-      return host.startsWith("lp.") || host.includes(".lp.");
+      return hostFilters.some((f) => host.includes(f));
     });
-  }, [pagesDetail]);
+  }, [pagesDetail, hostFilters]);
 
   // Marca cada LP com sintomas de "stale"
   type StaleLPRow = {
@@ -1815,6 +1837,57 @@ function StaleLPsTab() {
         </div>
       </div>
 
+      {/* Configurador de padrões de host — controla GA4 + GSC simultaneamente */}
+      <div className="bg-white rounded-2xl border border-[color:var(--border)] p-4">
+        <div className="flex items-start gap-2 mb-2">
+          <Tag size={14} className="text-[#7c5cff] mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold">Padrões de host considerados como LP</p>
+            <p className="text-[11px] text-slate-500">
+              Captura LPs próprias + LP2 (GreatPages) + outros providers. Edite a lista pra
+              incluir subdomínios próprios da Suno (ex:{" "}
+              <code className="bg-slate-100 px-1 rounded text-[10px]">materiais.</code>,{" "}
+              <code className="bg-slate-100 px-1 rounded text-[10px]">campanhas.</code>).
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            type="text"
+            value={hostFiltersInput}
+            onChange={(e) => setHostFiltersInput(e.target.value)}
+            placeholder="lp.,lp2.,greatpages,materiais."
+            className="flex-1 min-w-[260px] px-3 py-2 text-xs font-mono rounded-lg border border-[color:var(--border)] focus:outline-none focus:border-[#7c5cff]"
+          />
+          <button
+            onClick={() => {
+              setHostFiltersApplied(hostFiltersInput);
+              if (gscRows) fetchGSC();
+            }}
+            className="px-3 py-2 rounded-lg bg-[#7c5cff] text-white text-xs font-semibold hover:bg-[#6b4bf0] transition"
+          >
+            Aplicar
+          </button>
+          <button
+            onClick={() => {
+              setHostFiltersInput(DEFAULT_LP_HOST_FILTERS);
+              setHostFiltersApplied(DEFAULT_LP_HOST_FILTERS);
+            }}
+            className="px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-700 text-[11px] hover:bg-slate-50 transition"
+          >
+            Resetar
+          </button>
+        </div>
+        <div className="text-[10px] text-slate-500 mt-2 font-mono">
+          Filtros aplicados:{" "}
+          {hostFilters.map((f) => (
+            <span key={f} className="inline-block mr-1 px-1.5 py-0.5 rounded bg-purple-50 text-purple-700">
+              {f}
+            </span>
+          ))}
+        </div>
+      </div>
+
       {/* Botão pra carregar GSC (segunda etapa) */}
       <div className="bg-white rounded-2xl border border-[color:var(--border)] p-4 flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2">
@@ -1889,7 +1962,10 @@ function StaleLPsTab() {
           </div>
           <div className="text-2xl font-bold tabular-nums">{totalLPs}</div>
           <div className="text-[11px] text-slate-500 mt-0.5">
-            hosts <code className="bg-slate-100 px-1 rounded">lp.*</code> com tráfego
+            {Array.from(new Set(lpPages.map((p) => p.host))).slice(0, 3).join(", ") ||
+              "sem hosts detectados"}
+            {Array.from(new Set(lpPages.map((p) => p.host))).length > 3 &&
+              ` +${Array.from(new Set(lpPages.map((p) => p.host))).length - 3}`}
           </div>
         </div>
         <div className="bg-white rounded-xl border-2 border-amber-300 p-4">
