@@ -61,7 +61,7 @@ const statusByMod = (mod: number): TrackingStatus => {
   return "error";
 };
 
-type Tab = "pages" | "utm" | "phantom" | "crossdevice";
+type Tab = "pages" | "utm" | "phantom" | "crossdevice" | "stale_lps";
 
 const baseAlerts = [
   { time: "há 12min", severity: "critical", page: "/lp/premium-30", message: "Página nova sem GTM instalado", detail: "Deploy às 10:42. Nenhum evento." },
@@ -761,6 +761,7 @@ export default function TrackingPage() {
             { id: "utm", label: "UTM Audit", icon: Tag },
             { id: "phantom", label: "Jornada Fantasma", icon: Ghost },
             { id: "crossdevice", label: "Cross-Device", icon: Layers },
+            { id: "stale_lps", label: "LPs antigas / Redirects pendentes", icon: AlertTriangle },
           ] as { id: Tab; label: string; icon: typeof Eye }[]).map((t) => {
             const Icon = t.icon;
             const active = tab === t.id;
@@ -1205,6 +1206,9 @@ export default function TrackingPage() {
             </div>
           </div>
         )}
+
+        {/* TAB: LPs antigas / Redirects pendentes */}
+        {tab === "stale_lps" && <StaleLPsTab />}
       </main>
 
       {/* Dialogs */}
@@ -1560,6 +1564,354 @@ export default function TrackingPage() {
         )}
       </Dialog>
     </MasterGuard>
+  );
+}
+
+/**
+ * LPs antigas / Redirects pendentes — pega dados de pagesDetail (GA4) e
+ * filtra hosts que começam com "lp." pra listar landing pages que ainda
+ * estão recebendo tráfego (no ar). Marca como "stale" as que têm:
+ *   - Path com ano antigo no nome (-2024-, -2025-, etc) ou
+ *   - Nome de campanha sazonal (black-friday, natal, fim-ano, etc) ou
+ *   - Volume baixo (< 100 sessões no período)
+ *
+ * Tarefa nasceu de print do Renan: várias LPs do site:lp.suno.com.br ainda
+ * indexadas pelo Google sem redirect (Suno Start Perpétuo, Curso Matemática
+ * Financeira, Faça parte da elite, etc). Antes era impossível auditar isso
+ * sem rodar `site:lp.suno.com.br` manualmente no Google.
+ */
+function StaleLPsTab() {
+  const { selected, useRealData } = useGA4();
+  const { data: pagesDetail, meta } = useGA4PagesDetail();
+  const [search, setSearch] = useState("");
+  const [filterStale, setFilterStale] = useState<"all" | "only_stale">("all");
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
+
+  // Filtra páginas de hosts "lp.*" — são as landing pages
+  const lpPages = useMemo(() => {
+    if (!pagesDetail?.pages) return [];
+    return pagesDetail.pages.filter((p) => {
+      const host = (p.host || "").toLowerCase();
+      return host.startsWith("lp.") || host.includes(".lp.");
+    });
+  }, [pagesDetail]);
+
+  // Marca cada LP com sintomas de "stale"
+  type StaleLPRow = {
+    host: string;
+    path: string;
+    url: string;
+    sessions: number;
+    users: number;
+    bounceRate: number;
+    isStale: boolean;
+    staleReasons: string[];
+  };
+
+  const STALE_YEAR_PATTERN = /\b(20\d{2})\b/;
+  const SEASONAL_KEYWORDS = [
+    "black-friday", "blackfriday", "natal", "fim-ano", "fimano",
+    "ano-novo", "anonovo", "carnaval", "junina", "halloween",
+    "cyber-monday", "cybermonday", "promo", "promocao",
+    "ofertas-imperdiveis", "queima-estoque", "lancamento",
+    "always-on", "alwayson", "perpetuo", "perpétuo",
+    "relampago", "relâmpago", "limited", "expirou", "ultima-chance",
+  ];
+
+  const staleRows: StaleLPRow[] = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    return lpPages.map((p) => {
+      const reasons: string[] = [];
+      const pathLower = p.path.toLowerCase();
+
+      // Ano antigo no path
+      const yearMatch = pathLower.match(STALE_YEAR_PATTERN);
+      if (yearMatch) {
+        const year = parseInt(yearMatch[1]);
+        if (year < currentYear) {
+          reasons.push(`ano antigo no path (${year})`);
+        }
+      }
+
+      // Palavra sazonal
+      for (const kw of SEASONAL_KEYWORDS) {
+        if (pathLower.includes(kw)) {
+          reasons.push(`sazonal: "${kw}"`);
+          break;
+        }
+      }
+
+      // Volume baixo (< 100 sessões) — sinal de LP esquecida
+      if (p.sessions < 100) {
+        reasons.push(`baixo volume (${p.sessions} sessões)`);
+      }
+
+      // Bounce muito alto (> 80%) com pouco volume — indica LP morta
+      if (p.bounceRate > 80 && p.sessions < 500) {
+        reasons.push(`bounce ${p.bounceRate.toFixed(0)}% + volume baixo`);
+      }
+
+      return {
+        host: p.host,
+        path: p.path,
+        url: p.url || `https://${p.host}${p.path}`,
+        sessions: p.sessions,
+        users: p.users,
+        bounceRate: p.bounceRate,
+        isStale: reasons.length > 0,
+        staleReasons: reasons,
+      };
+    });
+  }, [lpPages]);
+
+  const filteredRows = staleRows.filter((r) => {
+    if (filterStale === "only_stale" && !r.isStale) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      return r.host.toLowerCase().includes(q) || r.path.toLowerCase().includes(q);
+    }
+    return true;
+  });
+
+  const sortedRows = [...filteredRows].sort((a, b) => {
+    // Stale primeiro, dentro disso por sessões desc
+    if (a.isStale !== b.isStale) return a.isStale ? -1 : 1;
+    return b.sessions - a.sessions;
+  });
+
+  const totalStale = staleRows.filter((r) => r.isStale).length;
+  const totalLPs = staleRows.length;
+  const totalSessionsStale = staleRows
+    .filter((r) => r.isStale)
+    .reduce((s, r) => s + r.sessions, 0);
+
+  return (
+    <div className="space-y-4">
+      {/* Banner com a task original */}
+      <div className="rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-300 p-5">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-amber-200 flex items-center justify-center shrink-0">
+            <AlertTriangle size={18} className="text-amber-700" />
+          </div>
+          <div className="flex-1">
+            <h3 className="text-base font-bold text-amber-900 mb-1">
+              Auditoria de LPs antigas — Redirect em massa pendente
+            </h3>
+            <p className="text-sm text-amber-900 mb-2">
+              <strong>@Renan Liza</strong> e <strong>@Ricardo Moura</strong> — várias LPs abertas
+              que já deveriam estar com redirect.
+            </p>
+            <ul className="text-xs text-amber-800 space-y-1.5 leading-relaxed">
+              <li>• Precisamos revisar LPs antigas (Eu Invisto 2025, Always On, Suno Start Perpétuo, Curso Matemática Financeira…)</li>
+              <li>• Fazer redirect em massa de 2025 pra trás. Se cair pratinhos, refaz</li>
+              <li>• Investigar por que essas LPs não aparecem na guia de tracking</li>
+              <li>• <strong>Ideia:</strong> automatizar o pull de tudo o que tá no ar (esta aba é o início disso)</li>
+            </ul>
+            <p className="text-[11px] text-amber-700 mt-3 font-mono italic">
+              Verificação manual: <span className="underline">site:lp.suno.com.br</span> no Google
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* KPIs */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
+          <div className="text-[10px] uppercase text-slate-500 font-semibold tracking-wider mb-1">
+            LPs vivas no período
+          </div>
+          <div className="text-2xl font-bold tabular-nums">{totalLPs}</div>
+          <div className="text-[11px] text-slate-500 mt-0.5">
+            hosts <code className="bg-slate-100 px-1 rounded">lp.*</code> com tráfego
+          </div>
+        </div>
+        <div className="bg-white rounded-xl border-2 border-amber-300 p-4">
+          <div className="text-[10px] uppercase text-amber-700 font-semibold tracking-wider mb-1">
+            Suspeitas de redirect pendente
+          </div>
+          <div className="text-2xl font-bold text-amber-700 tabular-nums">{totalStale}</div>
+          <div className="text-[11px] text-amber-700 mt-0.5">
+            sazonal / ano antigo / baixo volume / bounce alto
+          </div>
+        </div>
+        <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
+          <div className="text-[10px] uppercase text-slate-500 font-semibold tracking-wider mb-1">
+            Sessões em LPs stale
+          </div>
+          <div className="text-2xl font-bold tabular-nums">
+            {formatNumber(totalSessionsStale)}
+          </div>
+          <div className="text-[11px] text-slate-500 mt-0.5">
+            tráfego que deveria estar em LPs novas
+          </div>
+        </div>
+      </div>
+
+      {/* Filtros */}
+      <div className="bg-white rounded-2xl border border-[color:var(--border)] p-4 flex items-center gap-3 flex-wrap">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Buscar por host ou path..."
+          className="flex-1 min-w-[200px] px-3 py-2 text-sm rounded-lg border border-[color:var(--border)] focus:outline-none focus:border-[#7c5cff]"
+        />
+        <select
+          value={filterStale}
+          onChange={(e) => setFilterStale(e.target.value as typeof filterStale)}
+          className="text-xs font-medium px-3 py-2 rounded-lg border border-[color:var(--border)] bg-white"
+        >
+          <option value="all">Todas as LPs ({totalLPs})</option>
+          <option value="only_stale">Só suspeitas ({totalStale})</option>
+        </select>
+        <span className="text-[11px] text-slate-500 font-mono">
+          mostrando {sortedRows.length}
+        </span>
+      </div>
+
+      {/* Tabela */}
+      <div className="bg-white rounded-2xl border border-[color:var(--border)] overflow-hidden">
+        {meta.status === "loading" && (
+          <div className="p-12 text-center text-sm text-slate-500">
+            Carregando páginas do GA4...
+          </div>
+        )}
+        {!useRealData && (
+          <div className="p-12 text-center text-sm text-slate-500">
+            Selecione uma propriedade GA4 no header pra carregar as LPs.
+          </div>
+        )}
+        {useRealData && meta.status === "success" && sortedRows.length === 0 && (
+          <div className="p-12 text-center text-sm text-slate-500">
+            Nenhuma LP encontrada com filtro atual.
+            {totalLPs === 0 && (
+              <p className="mt-2 text-xs">
+                Esta propriedade ({selected?.displayName}) não tem hosts <code className="bg-slate-100 px-1 rounded">lp.*</code> com tráfego no período.
+              </p>
+            )}
+          </div>
+        )}
+        {sortedRows.length > 0 && (
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50/50 border-b border-[color:var(--border)]">
+              <tr>
+                <th className="text-left px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Status
+                </th>
+                <th className="text-left px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Host
+                </th>
+                <th className="text-left px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Path
+                </th>
+                <th className="text-right px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Sessões
+                </th>
+                <th className="text-right px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Bounce
+                </th>
+                <th className="text-left px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Sintomas
+                </th>
+                <th className="text-center px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Ações
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedRows.map((r) => (
+                <tr
+                  key={`${r.host}|${r.path}`}
+                  className={`border-b border-slate-100 hover:bg-slate-50/40 ${
+                    r.isStale ? "bg-amber-50/30" : ""
+                  }`}
+                >
+                  <td className="px-4 py-2.5">
+                    {r.isStale ? (
+                      <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-amber-100 text-amber-700 border border-amber-200">
+                        Stale
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 border border-emerald-200">
+                        OK
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 font-mono text-[11px] text-slate-600">{r.host}</td>
+                  <td
+                    className="px-4 py-2.5 font-mono text-xs max-w-[280px] truncate"
+                    title={r.path}
+                  >
+                    {r.path}
+                  </td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-xs font-bold">
+                    {formatNumber(r.sessions)}
+                  </td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-xs">
+                    {r.bounceRate.toFixed(0)}%
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {r.staleReasons.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {r.staleReasons.map((reason, i) => (
+                          <span
+                            key={i}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800"
+                          >
+                            {reason}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-[10px] text-slate-400 italic">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 text-center">
+                    <div className="inline-flex gap-1">
+                      <a
+                        href={r.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] px-2 py-1 rounded-md border border-slate-200 hover:bg-slate-50 text-slate-700 inline-flex items-center gap-1"
+                        title="Abrir LP em nova aba"
+                      >
+                        <ExternalLink size={10} />
+                      </a>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(r.url);
+                          setCopiedPath(r.path);
+                          setTimeout(() => setCopiedPath(null), 1500);
+                        }}
+                        className="text-[10px] px-2 py-1 rounded-md border border-slate-200 hover:bg-slate-50 text-slate-700 inline-flex items-center gap-1"
+                        title="Copiar URL"
+                      >
+                        {copiedPath === r.path ? (
+                          <CheckCircle2 size={10} className="text-emerald-600" />
+                        ) : (
+                          <Copy size={10} />
+                        )}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Hint pra ação */}
+      <div className="rounded-xl bg-blue-50 border border-blue-200 p-4 text-xs text-blue-900 flex items-start gap-2">
+        <AlertCircle size={14} className="mt-0.5 shrink-0" />
+        <div>
+          <strong>Próximo passo sugerido:</strong> exportar essa lista, filtrar por "Stale", e
+          gerar regras de redirect (301) no Cloudflare/nginx pra mandar pras LPs novas equivalentes.
+          Pra começar a alimentar essa aba também via Search Console (não só GA4), peça o token
+          de Search Console pro Renan.
+        </div>
+      </div>
+    </div>
   );
 }
 
