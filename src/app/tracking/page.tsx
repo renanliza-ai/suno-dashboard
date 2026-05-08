@@ -29,6 +29,7 @@ import {
   Server,
   Zap,
   Shield,
+  Search,
 } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import {
@@ -1580,12 +1581,53 @@ export default function TrackingPage() {
  * Financeira, Faça parte da elite, etc). Antes era impossível auditar isso
  * sem rodar `site:lp.suno.com.br` manualmente no Google.
  */
+type GSCRow = {
+  url: string;
+  host: string;
+  path: string;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+};
+
 function StaleLPsTab() {
   const { selected, useRealData } = useGA4();
   const { data: pagesDetail, meta } = useGA4PagesDetail();
   const [search, setSearch] = useState("");
-  const [filterStale, setFilterStale] = useState<"all" | "only_stale">("all");
+  const [filterStale, setFilterStale] = useState<"all" | "only_stale" | "only_zumbi">("all");
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
+
+  // Estado da segunda etapa: GSC (URLs indexadas no Google)
+  const [gscRows, setGscRows] = useState<GSCRow[] | null>(null);
+  const [gscLoading, setGscLoading] = useState(false);
+  const [gscError, setGscError] = useState<string | null>(null);
+  const [gscSiteUsed, setGscSiteUsed] = useState<string | null>(null);
+  const [gscAvailableSites, setGscAvailableSites] = useState<string[] | null>(null);
+
+  const fetchGSC = async () => {
+    setGscLoading(true);
+    setGscError(null);
+    setGscRows(null);
+    setGscAvailableSites(null);
+    try {
+      const r = await fetch("/api/tracking/stale-lps-gsc?hostFilter=lp.&days=30", {
+        cache: "no-store",
+      });
+      const d = await r.json();
+      if (d.error) {
+        setGscError(d.error);
+        if (d.available_sites) setGscAvailableSites(d.available_sites);
+        return;
+      }
+      setGscRows(d.rows || []);
+      setGscSiteUsed(d.siteUrl || null);
+    } catch (e) {
+      setGscError((e as Error).message);
+    } finally {
+      setGscLoading(false);
+    }
+  };
 
   // Filtra páginas de hosts "lp.*" — são as landing pages
   const lpPages = useMemo(() => {
@@ -1605,7 +1647,9 @@ function StaleLPsTab() {
     users: number;
     bounceRate: number;
     isStale: boolean;
+    isZumbi: boolean; // 🚨 indexada no Google sem tráfego no GA4
     staleReasons: string[];
+    gsc?: GSCRow | null;
   };
 
   const STALE_YEAR_PATTERN = /\b(20\d{2})\b/;
@@ -1651,21 +1695,63 @@ function StaleLPsTab() {
         reasons.push(`bounce ${p.bounceRate.toFixed(0)}% + volume baixo`);
       }
 
+      const url = p.url || `https://${p.host}${p.path}`;
+      // Procura match no GSC (URL exata)
+      const gscMatch = gscRows?.find(
+        (g) =>
+          g.url === url ||
+          (g.host === p.host && (g.path === p.path || g.path === p.path + "/" || g.path + "/" === p.path))
+      );
+
       return {
         host: p.host,
         path: p.path,
-        url: p.url || `https://${p.host}${p.path}`,
+        url,
         sessions: p.sessions,
         users: p.users,
         bounceRate: p.bounceRate,
         isStale: reasons.length > 0,
+        isZumbi: false, // só URLs SÓ do GSC podem ser zumbis (computado abaixo)
         staleReasons: reasons,
+        gsc: gscMatch || null,
       };
     });
-  }, [lpPages]);
+  }, [lpPages, gscRows]);
 
-  const filteredRows = staleRows.filter((r) => {
+  // 🚨 LPs ZUMBIS: presentes no GSC (Google indexa) mas SEM tráfego no GA4
+  // (não estão em pagesDetail). Crítico — gastam crawl budget sem retorno.
+  const zumbiRows: StaleLPRow[] = useMemo(() => {
+    if (!gscRows || gscRows.length === 0) return [];
+    const ga4UrlSet = new Set(staleRows.map((r) => r.url));
+    const ga4PathSet = new Set(staleRows.map((r) => `${r.host}${r.path}`));
+    return gscRows
+      .filter((g) => {
+        const fullKey = `${g.host}${g.path}`;
+        return !ga4UrlSet.has(g.url) && !ga4PathSet.has(fullKey);
+      })
+      .map((g) => ({
+        host: g.host,
+        path: g.path,
+        url: g.url,
+        sessions: 0,
+        users: 0,
+        bounceRate: 0,
+        isStale: true,
+        isZumbi: true,
+        staleReasons: [
+          `🚨 indexada no Google (${g.impressions} impr.) sem tráfego GA4`,
+          ...(g.clicks === 0 ? ["zero cliques no SERP"] : [`${g.clicks} cliques`]),
+          `posição ${g.position}`,
+        ],
+        gsc: g,
+      }));
+  }, [gscRows, staleRows]);
+
+  const allRows = useMemo(() => [...staleRows, ...zumbiRows], [staleRows, zumbiRows]);
+
+  const filteredRows = allRows.filter((r) => {
     if (filterStale === "only_stale" && !r.isStale) return false;
+    if (filterStale === "only_zumbi" && !r.isZumbi) return false;
     if (search) {
       const q = search.toLowerCase();
       return r.host.toLowerCase().includes(q) || r.path.toLowerCase().includes(q);
@@ -1674,16 +1760,24 @@ function StaleLPsTab() {
   });
 
   const sortedRows = [...filteredRows].sort((a, b) => {
-    // Stale primeiro, dentro disso por sessões desc
+    // Zumbis primeiro (mais críticos), depois stale, depois OK; dentro disso por impressões/sessões desc
+    if (a.isZumbi !== b.isZumbi) return a.isZumbi ? -1 : 1;
     if (a.isStale !== b.isStale) return a.isStale ? -1 : 1;
-    return b.sessions - a.sessions;
+    const aValue = a.gsc?.impressions || a.sessions || 0;
+    const bValue = b.gsc?.impressions || b.sessions || 0;
+    return bValue - aValue;
   });
 
   const totalStale = staleRows.filter((r) => r.isStale).length;
   const totalLPs = staleRows.length;
+  const totalZumbis = zumbiRows.length;
   const totalSessionsStale = staleRows
     .filter((r) => r.isStale)
     .reduce((s, r) => s + r.sessions, 0);
+  const totalImpressionsZumbi = zumbiRows.reduce(
+    (s, r) => s + (r.gsc?.impressions || 0),
+    0
+  );
 
   return (
     <div className="space-y-4">
@@ -1714,11 +1808,67 @@ function StaleLPsTab() {
         </div>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-3 gap-3">
+      {/* Botão pra carregar GSC (segunda etapa) */}
+      <div className="bg-white rounded-2xl border border-[color:var(--border)] p-4 flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-2">
+          <Search size={16} className="text-[#7c5cff]" />
+          <div>
+            <p className="text-sm font-semibold">Cruzamento com Google Search Console</p>
+            <p className="text-[11px] text-slate-500">
+              Detecta LPs <strong>indexadas no Google</strong> mesmo sem tráfego no GA4 (zumbis no SERP)
+            </p>
+          </div>
+        </div>
+        {gscRows ? (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono px-2 py-1 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700">
+              ✓ GSC carregado · {gscRows.length} URLs · {gscSiteUsed}
+            </span>
+            <button
+              onClick={fetchGSC}
+              disabled={gscLoading}
+              className="text-[11px] px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 inline-flex items-center gap-1.5"
+            >
+              <RefreshCw size={11} className={gscLoading ? "animate-spin" : ""} />
+              Atualizar
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={fetchGSC}
+            disabled={gscLoading}
+            className="px-4 py-2 rounded-lg bg-[#7c5cff] text-white text-sm font-semibold hover:bg-[#6b4bf0] disabled:opacity-50 inline-flex items-center gap-2"
+          >
+            {gscLoading ? <RefreshCw size={14} className="animate-spin" /> : <Search size={14} />}
+            {gscLoading ? "Buscando no GSC..." : "Cruzar com Google Search Console"}
+          </button>
+        )}
+      </div>
+
+      {gscError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-xs text-red-900">
+          <strong>Erro ao consultar GSC:</strong> {gscError}
+          {gscAvailableSites && gscAvailableSites.length > 0 && (
+            <div className="mt-2">
+              Sites disponíveis na sua conta GSC:
+              <ul className="mt-1 ml-4 list-disc">
+                {gscAvailableSites.map((s) => (
+                  <li key={s} className="font-mono">{s}</li>
+                ))}
+              </ul>
+              <p className="mt-2 text-red-700">
+                Adicione <strong>lp.suno.com.br</strong> ou um <strong>sc-domain:suno.com.br</strong> em <a className="underline" href="https://search.google.com/search-console" target="_blank" rel="noopener noreferrer">search.google.com/search-console</a>.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* KPIs — agora 4 cards (incluindo zumbis) */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
           <div className="text-[10px] uppercase text-slate-500 font-semibold tracking-wider mb-1">
-            LPs vivas no período
+            LPs vivas (GA4)
           </div>
           <div className="text-2xl font-bold tabular-nums">{totalLPs}</div>
           <div className="text-[11px] text-slate-500 mt-0.5">
@@ -1727,22 +1877,31 @@ function StaleLPsTab() {
         </div>
         <div className="bg-white rounded-xl border-2 border-amber-300 p-4">
           <div className="text-[10px] uppercase text-amber-700 font-semibold tracking-wider mb-1">
-            Suspeitas de redirect pendente
+            Suspeitas (stale)
           </div>
           <div className="text-2xl font-bold text-amber-700 tabular-nums">{totalStale}</div>
           <div className="text-[11px] text-amber-700 mt-0.5">
-            sazonal / ano antigo / baixo volume / bounce alto
+            sazonal / ano antigo / volume baixo
+          </div>
+        </div>
+        <div className="bg-white rounded-xl border-2 border-red-300 p-4">
+          <div className="text-[10px] uppercase text-red-700 font-semibold tracking-wider mb-1">
+            🚨 Zumbis (GSC sem GA4)
+          </div>
+          <div className="text-2xl font-bold text-red-700 tabular-nums">{totalZumbis}</div>
+          <div className="text-[11px] text-red-700 mt-0.5">
+            {gscRows ? `${formatNumber(totalImpressionsZumbi)} impressões/30d` : "carregue o GSC pra ver"}
           </div>
         </div>
         <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
           <div className="text-[10px] uppercase text-slate-500 font-semibold tracking-wider mb-1">
-            Sessões em LPs stale
+            Sessões em stale
           </div>
           <div className="text-2xl font-bold tabular-nums">
             {formatNumber(totalSessionsStale)}
           </div>
           <div className="text-[11px] text-slate-500 mt-0.5">
-            tráfego que deveria estar em LPs novas
+            tráfego que poderia migrar
           </div>
         </div>
       </div>
@@ -1761,8 +1920,9 @@ function StaleLPsTab() {
           onChange={(e) => setFilterStale(e.target.value as typeof filterStale)}
           className="text-xs font-medium px-3 py-2 rounded-lg border border-[color:var(--border)] bg-white"
         >
-          <option value="all">Todas as LPs ({totalLPs})</option>
-          <option value="only_stale">Só suspeitas ({totalStale})</option>
+          <option value="all">Todas ({totalLPs + totalZumbis})</option>
+          <option value="only_stale">Só suspeitas/stale ({totalStale + totalZumbis})</option>
+          <option value="only_zumbi">🚨 Só zumbis ({totalZumbis})</option>
         </select>
         <span className="text-[11px] text-slate-500 font-mono">
           mostrando {sortedRows.length}
@@ -1805,10 +1965,13 @@ function StaleLPsTab() {
                   Path
                 </th>
                 <th className="text-right px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                  Sessões
+                  GA4 sessões
                 </th>
                 <th className="text-right px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                  Bounce
+                  GSC impr/cliques
+                </th>
+                <th className="text-right px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Posição
                 </th>
                 <th className="text-left px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   Sintomas
@@ -1821,13 +1984,17 @@ function StaleLPsTab() {
             <tbody>
               {sortedRows.map((r) => (
                 <tr
-                  key={`${r.host}|${r.path}`}
+                  key={`${r.host}|${r.path}|${r.isZumbi ? "z" : "g"}`}
                   className={`border-b border-slate-100 hover:bg-slate-50/40 ${
-                    r.isStale ? "bg-amber-50/30" : ""
+                    r.isZumbi ? "bg-red-50/40" : r.isStale ? "bg-amber-50/30" : ""
                   }`}
                 >
                   <td className="px-4 py-2.5">
-                    {r.isStale ? (
+                    {r.isZumbi ? (
+                      <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-red-100 text-red-700 border border-red-200">
+                        🚨 Zumbi
+                      </span>
+                    ) : r.isStale ? (
                       <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-amber-100 text-amber-700 border border-amber-200">
                         Stale
                       </span>
@@ -1845,10 +2012,43 @@ function StaleLPsTab() {
                     {r.path}
                   </td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-xs font-bold">
-                    {formatNumber(r.sessions)}
+                    {r.sessions === 0 ? (
+                      <span className="text-slate-300 italic font-normal">0</span>
+                    ) : (
+                      formatNumber(r.sessions)
+                    )}
                   </td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-xs">
-                    {r.bounceRate.toFixed(0)}%
+                    {r.gsc ? (
+                      <span>
+                        <strong>{formatNumber(r.gsc.impressions)}</strong>
+                        <span className="text-slate-400">
+                          {" / "}
+                          {formatNumber(r.gsc.clicks)}
+                        </span>
+                      </span>
+                    ) : gscRows ? (
+                      <span className="text-slate-300 italic">não indexada</span>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-xs">
+                    {r.gsc ? (
+                      <span
+                        className={
+                          r.gsc.position <= 5
+                            ? "text-emerald-600 font-bold"
+                            : r.gsc.position <= 15
+                              ? "text-amber-600"
+                              : "text-slate-500"
+                        }
+                      >
+                        {r.gsc.position}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-2.5">
                     {r.staleReasons.length > 0 ? (
@@ -1902,13 +2102,33 @@ function StaleLPsTab() {
       </div>
 
       {/* Hint pra ação */}
-      <div className="rounded-xl bg-blue-50 border border-blue-200 p-4 text-xs text-blue-900 flex items-start gap-2">
-        <AlertCircle size={14} className="mt-0.5 shrink-0" />
-        <div>
-          <strong>Próximo passo sugerido:</strong> exportar essa lista, filtrar por "Stale", e
-          gerar regras de redirect (301) no Cloudflare/nginx pra mandar pras LPs novas equivalentes.
-          Pra começar a alimentar essa aba também via Search Console (não só GA4), peça o token
-          de Search Console pro Renan.
+      <div className="rounded-xl bg-blue-50 border border-blue-200 p-4 text-xs text-blue-900 space-y-2">
+        <div className="flex items-start gap-2">
+          <AlertCircle size={14} className="mt-0.5 shrink-0" />
+          <div>
+            <strong>Como usar:</strong>
+            <ul className="mt-1 space-y-1 list-disc ml-4">
+              <li>
+                <strong>🚨 Zumbis</strong> — prioridade máxima. Indexadas no Google
+                ({totalImpressionsZumbi > 0 ? formatNumber(totalImpressionsZumbi) : "?"} impressões/30d) sem tráfego no GA4.
+                Estão queimando crawl budget e podendo confundir investidor.
+                <strong> Redirect 301 imediato</strong> pras LPs novas equivalentes.
+              </li>
+              <li>
+                <strong>Stale</strong> — auditoria. Tem tráfego mas com sintomas de abandono.
+                Avaliar caso a caso.
+              </li>
+              <li>
+                <strong>OK</strong> — LPs ativas e saudáveis. Mantém.
+              </li>
+            </ul>
+          </div>
+        </div>
+        <div className="border-t border-blue-200 pt-2 text-[11px]">
+          <strong>Fluxo sugerido pro Ricardo:</strong> filtra "🚨 Só zumbis" →
+          copia URLs (botão 📋) → cola num arquivo → manda regras 301 no Cloudflare em massa.
+          Cada zumbi removido melhora SEO geral do domínio (Google deixa de gastar crawl
+          em conteúdo morto).
         </div>
       </div>
     </div>
