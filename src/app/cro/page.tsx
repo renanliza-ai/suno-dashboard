@@ -878,8 +878,120 @@ export default function CROPage() {
     { key: "impact", label: "Impacto Potencial", value: impactLabel, sub: "/mês", color: "#ef4444", detail: `Soma dos impactos estimados se as recomendações da propriedade ${propertyName} forem implementadas.` },
   ];
 
+  // ============================================================
+  // ⚠ Recomendações REAIS via /api/cro/recommendations
+  // Antes: array hardcoded com /relatorios, /carteiras, "Premium 30"
+  // — não mudava nunca. Agora: 6 queries paralelas GA4 → gera 5-10
+  // recomendações específicas da property selecionada.
+  // ============================================================
+  type ApiRecommendation = {
+    id: string;
+    iconName: "AlertTriangle" | "Lightbulb" | "Zap" | "MousePointerClick" | "Target" | "TrendingUp";
+    colorClass: string;
+    priority: "Alta" | "Média" | "Baixa";
+    title: string;
+    desc: string;
+    action: string;
+    impact: string;
+    effort: "baixo" | "médio" | "alto";
+    owner: string;
+    steps: string[];
+    confidence: "Alta" | "Média" | "Baixa";
+    evidence: string;
+    hypothesis: string;
+    costEstimate: string;
+    risk: "baixo" | "médio" | "alto";
+    riskNotes: string;
+    primaryKPI: string;
+    secondaryKPIs: string[];
+    testWindow: string;
+    rollback: string;
+    affectedSegments: string[];
+  };
+
+  const [apiRecs, setApiRecs] = useState<ApiRecommendation[] | null>(null);
+  const [apiRecsLoading, setApiRecsLoading] = useState(false);
+  const [apiRecsGeneratedAt, setApiRecsGeneratedAt] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!useRealData || !selectedId) {
+      setApiRecs(null);
+      return;
+    }
+    let cancelled = false;
+    const requestPropertyId = selectedId;
+    setApiRecsLoading(true);
+    const params = new URLSearchParams({
+      propertyId: selectedId,
+      propertyName: propertyName,
+      days: "30",
+    });
+    fetch(`/api/cro/recommendations?${params.toString()}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d: { propertyId?: string; recommendations?: ApiRecommendation[]; generatedAt?: string; error?: string }) => {
+        if (cancelled) return;
+        // Anti race-condition: descarta se property mudou
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
+        if (d.error || !d.recommendations) {
+          setApiRecs(null);
+          return;
+        }
+        setApiRecs(d.recommendations);
+        setApiRecsGeneratedAt(d.generatedAt || null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setApiRecs(null);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setApiRecsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, propertyName, useRealData]);
+
+  // Mapa de string → componente (porque ícones são funções React não serializáveis)
+  const ICON_MAP: Record<string, typeof AlertTriangle> = {
+    AlertTriangle,
+    Lightbulb,
+    Zap,
+    MousePointerClick,
+    Target,
+    TrendingUp,
+  };
+
   // Insights dinâmicos: páginas reais com bounce alto viram insights reais.
   const dynamicInsights: Insight[] = useMemo(() => {
+    // ⚠ PRIORIDADE 1: recomendações do endpoint real (data-driven)
+    if (apiRecs && apiRecs.length > 0) {
+      return apiRecs.map((r) => ({
+        icon: ICON_MAP[r.iconName] || AlertTriangle,
+        color: r.colorClass,
+        priority: r.priority,
+        title: r.title,
+        desc: r.desc,
+        action: r.action,
+        impact: r.impact,
+        effort: r.effort,
+        owner: r.owner,
+        steps: r.steps,
+        confidence: r.confidence,
+        evidence: r.evidence,
+        hypothesis: r.hypothesis,
+        costEstimate: r.costEstimate,
+        risk: r.risk,
+        riskNotes: r.riskNotes,
+        primaryKPI: r.primaryKPI,
+        secondaryKPIs: r.secondaryKPIs,
+        testWindow: r.testWindow,
+        rollback: r.rollback,
+        affectedSegments: r.affectedSegments,
+      }));
+    }
+
+    // Fallback: lógica antiga (usado quando endpoint falha ou ainda carregando)
     if (!realPagesAvailable) {
       // Embaralha levemente os mocks com base na seed pra dar diferença visível
       return insights.map((it, i) => ({
@@ -999,7 +1111,8 @@ export default function CROPage() {
 
     // Mantém os insights estratégicos do mock após os dinâmicos + Meta Connector
     return [...dyn, metaConnectorInsight, ...insights.slice(0, 3)];
-  }, [realPagesAvailable, pagesDetail, displayPageScores, propertyName, seed]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [realPagesAvailable, pagesDetail, displayPageScores, propertyName, seed, apiRecs]);
 
   // Sugestões do dia — array de 5 personalizadas por propriedade.
   // A primeira (índice 0) é o "topo do dia" — a mais alinhada com o estado real da propriedade.
@@ -1285,9 +1398,31 @@ export default function CROPage() {
         <div className="bg-white rounded-2xl border border-[color:var(--border)] p-6">
           <div className="mb-5 flex items-start justify-between gap-4 flex-wrap">
             <div>
-              <h3 className="text-base font-semibold">Insights & Ações Recomendadas</h3>
+              <h3 className="text-base font-semibold flex items-center gap-2 flex-wrap">
+                Insights & Ações Recomendadas
+                {/* Badge: indica se as recomendações são data-driven (vindas do endpoint)
+                    ou fallback (mock + dinâmico mínimo). Resolve dúvida do Renan
+                    "as sugestões não estão mudando" — agora dá pra ver na hora */}
+                {apiRecsLoading ? (
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 inline-flex items-center gap-1">
+                    <Activity size={10} className="animate-pulse" />
+                    Carregando GA4...
+                  </span>
+                ) : apiRecs && apiRecs.length > 0 ? (
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">
+                    ✓ DATA-DRIVEN · {apiRecs.length} recomendações da property
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                    ⚠ FALLBACK (selecione property GA4)
+                  </span>
+                )}
+              </h3>
               <p className="text-sm text-[color:var(--muted-foreground)] mt-0.5">
-                Priorizado por impacto em receita · aceite, recuse ou clique para ver plano completo
+                {apiRecs && apiRecsGeneratedAt
+                  ? `Geradas em ${new Date(apiRecsGeneratedAt).toLocaleString("pt-BR")} · `
+                  : ""}
+                Priorizado por ICE score (Impact × Confidence ÷ Effort) · aceite, recuse ou clique para plano completo
               </p>
             </div>
             {/* Resumo de decisões + filtro */}
