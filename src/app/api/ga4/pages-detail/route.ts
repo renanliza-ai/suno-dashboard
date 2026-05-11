@@ -67,7 +67,7 @@ export async function GET(req: NextRequest) {
   });
 
   if (detailRes.error || !detailRes.data?.rows) {
-    return NextResponse.json({ error: detailRes.error || "no rows", pages: [] });
+    return NextResponse.json({ propertyId, error: detailRes.error || "no rows", pages: [] });
   }
 
   // 2) Entrances: GA4 expõe "sessions" agregado por landingPage. Buscamos em paralelo
@@ -134,13 +134,14 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json(
     {
+      propertyId, // anti race-condition
       pages,
       hosts,
       days,
       hostContains,
     },
     {
-      headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=1800" },
+      headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=600" },
     }
   );
 }

@@ -54,7 +54,7 @@ export async function GET(req: NextRequest) {
   });
 
   if (pagesRes.error || !pagesRes.data?.rows) {
-    return NextResponse.json({ error: pagesRes.error || "no rows", rows: [] });
+    return NextResponse.json({ propertyId, error: pagesRes.error || "no rows", rows: [] });
   }
 
   let pages = pagesRes.data.rows.map((r) => {
@@ -132,6 +132,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json(
     {
+      propertyId, // anti race-condition
       pages,
       sourceBreakdown: filteredSourceRows,
       topSources,
@@ -139,7 +140,7 @@ export async function GET(req: NextRequest) {
       hostContains,
     },
     {
-      headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=1800" },
+      headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=600" },
     }
   );
 }

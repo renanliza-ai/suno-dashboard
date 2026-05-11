@@ -91,13 +91,16 @@ export async function POST(req: NextRequest) {
   );
 
   if (error) {
-    return NextResponse.json({ error, results: [], breakdownDimension }, { status: 200 });
+    return NextResponse.json(
+      { propertyId, error, results: [], breakdownDimension },
+      { status: 200 }
+    );
   }
 
   return NextResponse.json(
-    { results: data || [], days, breakdownDimension },
+    { propertyId, results: data || [], days, breakdownDimension },
     {
-      headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=1800" },
+      headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=600" },
     }
   );
 }
@@ -117,6 +120,6 @@ export async function GET(req: NextRequest) {
   }
   const urls = urlsParam.split(",").map((u) => u.trim()).filter(Boolean);
   const { data, error } = await getLPChannels(propertyId, urls, days, null, null, breakdownDimension);
-  if (error) return NextResponse.json({ error, results: [], breakdownDimension });
-  return NextResponse.json({ results: data || [], days, breakdownDimension });
+  if (error) return NextResponse.json({ propertyId, error, results: [], breakdownDimension });
+  return NextResponse.json({ propertyId, results: data || [], days, breakdownDimension });
 }

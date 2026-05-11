@@ -13,9 +13,14 @@ export async function GET(req: NextRequest) {
   const startDate = req.nextUrl.searchParams.get("startDate");
   const endDate = req.nextUrl.searchParams.get("endDate");
   const { data, error } = await getReportsByChannel(propertyId, days, startDate, endDate);
-  if (error) return NextResponse.json({ error, rows: [], usedCustomDim: false }, { status: 500 });
+  if (error)
+    return NextResponse.json(
+      { propertyId, error, rows: [], usedCustomDim: false },
+      { status: 500 }
+    );
 
-  return NextResponse.json(data, {
-    headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=1800" },
+  // anti race-condition: cliente valida que resposta é da property atual
+  return NextResponse.json({ propertyId, ...data }, {
+    headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=600" },
   });
 }

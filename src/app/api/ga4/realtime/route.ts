@@ -60,6 +60,7 @@ export async function GET(req: NextRequest) {
   const chosenPages = pagesPrimary.length > 0 ? pagesPrimary : pagesFallback;
 
   return NextResponse.json({
+    propertyId, // anti race-condition entre polls de realtime quando troca property
     active: active.data?.active ?? 0,
     pages:
       chosenPages.map((r) => ({

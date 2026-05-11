@@ -694,6 +694,7 @@ export function useGA4LandingPages(hostContains: string = "", daysOverride?: num
       setMeta({ status: "idle", propertyId: null, propertyName: null, fetchedAt: null });
       return;
     }
+    const requestPropertyId = selectedId;
     setMeta({
       status: "loading",
       propertyId: selectedId,
@@ -706,6 +707,8 @@ export function useGA4LandingPages(hostContains: string = "", daysOverride?: num
     cachedFetch(`/api/ga4/landing-pages?${qs.toString()}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
+        // Anti race-condition
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
         if (d.error && !d.pages?.length) {
           setError(d.error);
           setMeta({
@@ -893,14 +896,15 @@ export function useGA4LPChannels(
   const urlsKey = urls.join("|");
 
   useEffect(() => {
+    // Reset imediato ao trocar property — evita ver dados de outra prop
+    setResults([]);
+    setError(null);
     if (!useRealData || !selectedId || urls.length === 0) {
-      setResults([]);
-      setError(null);
       return;
     }
+    const requestPropertyId = selectedId;
     const ctrl = new AbortController();
     setLoading(true);
-    setError(null);
     fetch("/api/ga4/lp-channels", {
       method: "POST",
       signal: ctrl.signal,
@@ -915,7 +919,9 @@ export function useGA4LPChannels(
       }),
     })
       .then((r) => r.json())
-      .then((d: { results?: LPChannelsResult[]; error?: string }) => {
+      .then((d: { results?: LPChannelsResult[]; error?: string; propertyId?: string }) => {
+        // Anti race-condition
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
         if (d.error) setError(d.error);
         setResults(d.results || []);
       })
@@ -958,6 +964,7 @@ export function useGA4PagesDetail(hostContains: string = "", daysOverride?: numb
       setMeta({ status: "idle", propertyId: null, propertyName: null, fetchedAt: null });
       return;
     }
+    const requestPropertyId = selectedId;
     setMeta({
       status: "loading",
       propertyId: selectedId,
@@ -970,6 +977,8 @@ export function useGA4PagesDetail(hostContains: string = "", daysOverride?: numb
     cachedFetch(`/api/ga4/pages-detail?${qs.toString()}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
+        // Anti race-condition
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
         if (d.error && !d.pages?.length) {
           setError(d.error);
           setMeta({
@@ -1029,13 +1038,17 @@ export function useGA4Realtime(pollMs = 30000) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Reset imediato ao trocar property — evita ver realtime de outra
+    setData(null);
+    setError(null);
     if (!useRealData || !selectedId) {
-      setData(null);
       setMeta({ status: "idle", propertyId: null, propertyName: null, fetchedAt: null });
       return;
     }
     let cancelled = false;
     const ctrl = new AbortController();
+    // Captura propertyId pra validação em cada poll
+    const requestPropertyId = selectedId;
 
     const run = async (isFirst: boolean) => {
       if (isFirst) {
@@ -1047,12 +1060,14 @@ export function useGA4Realtime(pollMs = 30000) {
         });
       }
       try {
-        const r = await fetch(`/api/ga4/realtime?propertyId=${selectedId}`, {
+        const r = await fetch(`/api/ga4/realtime?propertyId=${requestPropertyId}`, {
           signal: ctrl.signal,
           cache: "no-store",
         });
         const d = await r.json();
         if (cancelled) return;
+        // Anti race-condition: descarta se property mudou no meio do fetch
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
         if (d.error) throw new Error(d.error);
         setData(d);
         setError(null);

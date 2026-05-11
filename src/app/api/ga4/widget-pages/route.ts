@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
   });
 
   if (eventsRes.error) {
-    return NextResponse.json({ error: eventsRes.error, pages: [] }, { status: 200 });
+    return NextResponse.json({ propertyId, error: eventsRes.error, pages: [] }, { status: 200 });
   }
 
   // Agrupa por (host + pagePath) e coleta os eventos que casam com o filtro
@@ -128,6 +128,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json(
     {
+      propertyId, // anti race-condition
       pages: pagesWithWidget,
       totals: {
         pages: pagesWithWidget.length,
@@ -139,7 +140,7 @@ export async function GET(req: NextRequest) {
       query: { eventContains, days, hostContains, limit },
     },
     {
-      headers: { "Cache-Control": "private, max-age=600, stale-while-revalidate=3600" },
+      headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=600" },
     }
   );
 }
