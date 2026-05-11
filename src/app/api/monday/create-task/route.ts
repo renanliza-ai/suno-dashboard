@@ -49,20 +49,35 @@ type CreateItemResp = {
 
 // Cache leve do group_id resolvido por nome — evita chamada extra a cada item
 let __cachedGroupId: { boardId: string; groupName: string; groupId: string } | null = null;
+// Cache da lista de grupos pra mostrar no erro quando nenhum casa
+let __cachedGroups: { boardId: string; groups: { id: string; title: string }[] } | null = null;
+
+type ResolveResult = {
+  groupId: string;
+  found: boolean; // true se achou pelo nome OU pelo fallback
+  availableGroups: { id: string; title: string }[];
+  error: string | null;
+};
 
 async function resolveGroupId(
   apiToken: string,
   boardId: string,
-  groupName: string,
+  groupName: string | undefined,
   fallbackId: string
-): Promise<string> {
-  // Se já resolvemos antes pra esse board+nome, retorna o cache
+): Promise<ResolveResult> {
+  // Cache hit
   if (
+    groupName &&
     __cachedGroupId &&
     __cachedGroupId.boardId === boardId &&
     __cachedGroupId.groupName === groupName
   ) {
-    return __cachedGroupId.groupId;
+    return {
+      groupId: __cachedGroupId.groupId,
+      found: true,
+      availableGroups: __cachedGroups?.groups || [],
+      error: null,
+    };
   }
 
   try {
@@ -78,16 +93,60 @@ async function resolveGroupId(
     });
     const data = (await res.json()) as {
       data?: { boards?: { groups?: { id: string; title: string }[] }[] };
+      errors?: { message: string }[];
     };
+    if (data.errors && data.errors.length > 0) {
+      return {
+        groupId: fallbackId,
+        found: false,
+        availableGroups: [],
+        error: `Erro ao listar grupos: ${data.errors[0].message}`,
+      };
+    }
     const groups = data.data?.boards?.[0]?.groups || [];
-    const found = groups.find(
-      (g) => g.title.toLowerCase().trim() === groupName.toLowerCase().trim()
-    );
-    const resolvedId = found?.id || fallbackId;
-    __cachedGroupId = { boardId, groupName, groupId: resolvedId };
-    return resolvedId;
-  } catch {
-    return fallbackId;
+    __cachedGroups = { boardId, groups };
+
+    // Tenta achar pelo nome (case-insensitive + trim)
+    if (groupName) {
+      const found = groups.find(
+        (g) => g.title.toLowerCase().trim() === groupName.toLowerCase().trim()
+      );
+      if (found) {
+        __cachedGroupId = { boardId, groupName, groupId: found.id };
+        return { groupId: found.id, found: true, availableGroups: groups, error: null };
+      }
+    }
+
+    // Não achou pelo nome — testa se o fallback existe nos grupos retornados
+    const fallbackExists = groups.find((g) => g.id === fallbackId);
+    if (fallbackExists) {
+      return { groupId: fallbackId, found: true, availableGroups: groups, error: null };
+    }
+
+    // Nem o nome nem o fallback existem — retorna o primeiro grupo como
+    // último recurso pra não bloquear a operação totalmente
+    if (groups.length > 0) {
+      return {
+        groupId: groups[0].id,
+        found: false,
+        availableGroups: groups,
+        error: `Nem o grupo "${groupName || fallbackId}" foi encontrado. Usando o primeiro grupo do board ("${groups[0].title}") como fallback.`,
+      };
+    }
+
+    return {
+      groupId: fallbackId,
+      found: false,
+      availableGroups: [],
+      error: "Board não tem nenhum grupo cadastrado.",
+    };
+  } catch (e) {
+    return {
+      groupId: fallbackId,
+      found: false,
+      availableGroups: [],
+      error: `Falha ao listar grupos: ${(e as Error).message}`,
+    };
   }
 }
 
@@ -110,9 +169,13 @@ export async function POST(req: NextRequest) {
   }
 
   // Resolve o group_id real — preferimos por nome (mais robusto a renomeações)
-  const groupId = groupName
-    ? await resolveGroupId(apiToken, boardId, groupName, groupIdFallback)
-    : groupIdFallback;
+  // O resolveGroupId já testa nome + fallback + lista grupos disponíveis pra debug
+  const groupResolution = await resolveGroupId(apiToken, boardId, groupName, groupIdFallback);
+  const groupId = groupResolution.groupId;
+  // Se houve erro na resolução (grupo não encontrado etc), guardamos pra
+  // incluir no payload de retorno caso o create_item também falhe
+  const groupWarning = groupResolution.error;
+  const availableGroups = groupResolution.availableGroups;
 
   type InsightPayload = {
     title: string;
@@ -331,12 +394,23 @@ export async function POST(req: NextRequest) {
   }
 
   if (mondayResp.errors && mondayResp.errors.length > 0) {
+    const errMsg = mondayResp.errors[0].message;
+    const isGroupError = /group/i.test(errMsg);
     return NextResponse.json(
       {
         ok: false,
-        error: "graphql_error",
+        error: isGroupError ? "group_not_found" : "graphql_error",
         details: mondayResp.errors,
-        message: mondayResp.errors[0].message,
+        message: errMsg,
+        // Quando é erro de grupo, inclui lista pra UI mostrar
+        boardId,
+        attemptedGroupId: groupId,
+        attemptedGroupName: groupName || null,
+        availableGroups,
+        groupWarning,
+        hint: isGroupError
+          ? `Grupo "${groupName || groupId}" não existe no board ${boardId}. Atualize MONDAY_GROUP_NAME no .env.local com um dos nomes listados em availableGroups, ou MONDAY_GROUP_ID com um dos IDs.`
+          : null,
       },
       { status: 500 }
     );
@@ -348,6 +422,8 @@ export async function POST(req: NextRequest) {
         ok: false,
         error: mondayResp.error_code,
         message: mondayResp.error_message,
+        availableGroups,
+        groupWarning,
       },
       { status: 500 }
     );
@@ -398,5 +474,53 @@ export async function POST(req: NextRequest) {
       boardId: created.board.id,
       url: itemUrl,
     },
+    // Aviso quando o grupo escolhido foi fallback (nem o nome nem o ID original foram encontrados)
+    groupWarning,
+  });
+}
+
+/**
+ * GET /api/monday/create-task?action=list-groups
+ *
+ * Endpoint de diagnóstico — retorna a lista de grupos disponíveis no board
+ * configurado. Útil pra UI mostrar opções quando "Group not found" acontece.
+ */
+export async function GET(req: NextRequest) {
+  const action = req.nextUrl.searchParams.get("action");
+  if (action !== "list-groups") {
+    return NextResponse.json(
+      { error: "use ?action=list-groups" },
+      { status: 400 }
+    );
+  }
+  const apiToken = process.env.MONDAY_API_TOKEN;
+  const boardId = process.env.MONDAY_BOARD_ID;
+  const groupName = process.env.MONDAY_GROUP_NAME;
+  const groupIdFallback = process.env.MONDAY_GROUP_ID || "topics";
+
+  if (!apiToken || !boardId) {
+    return NextResponse.json(
+      { error: "MONDAY_API_TOKEN ou MONDAY_BOARD_ID não configurado" },
+      { status: 500 }
+    );
+  }
+
+  const resolution = await resolveGroupId(apiToken, boardId, groupName, groupIdFallback);
+
+  return NextResponse.json({
+    boardId,
+    configured: {
+      groupName: groupName || null,
+      groupIdFallback,
+    },
+    resolved: {
+      groupId: resolution.groupId,
+      found: resolution.found,
+    },
+    availableGroups: resolution.availableGroups,
+    warning: resolution.error,
+    instructions: resolution.found
+      ? "Configuração OK — group resolveu corretamente."
+      : `Adicione ao .env.local: MONDAY_GROUP_NAME="<um dos nomes acima>" OU MONDAY_GROUP_ID="<um dos IDs acima>". Depois faça redeploy.`,
   });
 }

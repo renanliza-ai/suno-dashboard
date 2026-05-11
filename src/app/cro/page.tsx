@@ -677,9 +677,14 @@ export default function CROPage() {
   }
 
   // Estado de criação de task no Monday — para feedback UI
-  const [mondayState, setMondayState] = useState<
-    Record<string, { status: "creating" | "created" | "failed"; url?: string; error?: string }>
-  >({});
+  type MondayItemState = {
+    status: "creating" | "created" | "failed";
+    url?: string;
+    error?: string;
+    availableGroups?: { id: string; title: string }[];
+    hint?: string;
+  };
+  const [mondayState, setMondayState] = useState<Record<string, MondayItemState>>({});
 
   /**
    * "Aceitar sugestão" — ensina o copiloto a trazer mais insights assim.
@@ -763,12 +768,22 @@ export default function CROPage() {
         item?: { url: string; id: string };
         message?: string;
         error?: string;
+        availableGroups?: { id: string; title: string }[];
+        hint?: string;
       };
       if (data.ok && data.item) {
         setMondayState((prev) => ({ ...prev, [key]: { status: "created", url: data.item!.url } }));
       } else {
         const msg = data.message || data.error || "erro desconhecido";
-        setMondayState((prev) => ({ ...prev, [key]: { status: "failed", error: msg } }));
+        setMondayState((prev) => ({
+          ...prev,
+          [key]: {
+            status: "failed",
+            error: msg,
+            availableGroups: data.availableGroups,
+            hint: data.hint,
+          },
+        }));
       }
     } catch (e) {
       setMondayState((prev) => ({
@@ -2079,9 +2094,40 @@ export default function CROPage() {
                   )}
                 </div>
                 {mondayState[key]?.status === "failed" && (
-                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-md">
-                    ⚠ Falha ao criar no Monday: {mondayState[key].error}. Verifique o token em <code>.env.local</code>.
-                  </p>
+                  <div className="text-[11px] bg-amber-50 border border-amber-200 px-3 py-2 rounded-md space-y-2">
+                    <div className="text-amber-900">
+                      <strong>⚠ Falha ao criar no Monday:</strong> {mondayState[key].error}
+                    </div>
+                    {mondayState[key].hint && (
+                      <div className="text-amber-800 text-[10px]">{mondayState[key].hint}</div>
+                    )}
+                    {mondayState[key].availableGroups && mondayState[key].availableGroups!.length > 0 && (
+                      <div className="bg-white rounded-md p-2 border border-amber-100 space-y-1">
+                        <div className="text-[10px] uppercase font-semibold text-amber-700 tracking-wider">
+                          Grupos disponíveis neste board:
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                          {mondayState[key].availableGroups!.map((g) => (
+                            <div
+                              key={g.id}
+                              className="flex items-center justify-between text-[10px] font-mono bg-amber-50/60 px-2 py-1 rounded"
+                            >
+                              <span className="text-amber-900 truncate">{g.title}</span>
+                              <span className="text-amber-600 ml-2">{g.id}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="text-[10px] text-amber-800 pt-1 border-t border-amber-100 mt-1">
+                          <strong>Como corrigir:</strong> edite{" "}
+                          <code className="bg-amber-100 px-1 rounded">.env.local</code> →{" "}
+                          <code className="bg-amber-100 px-1 rounded">MONDAY_GROUP_NAME=&quot;&lt;nome acima&gt;&quot;</code>{" "}
+                          ou{" "}
+                          <code className="bg-amber-100 px-1 rounded">MONDAY_GROUP_ID=&quot;&lt;id acima&gt;&quot;</code>{" "}
+                          e redeploy.
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
