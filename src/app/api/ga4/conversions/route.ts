@@ -19,12 +19,13 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json(
     {
+      propertyId, // anti race-condition
       conversions: conversions.data,
       funnel: funnel.data,
       errors: { conversions: conversions.error, funnel: funnel.error },
     },
     {
-      headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=1800" },
+      headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=600" },
     }
   );
 }

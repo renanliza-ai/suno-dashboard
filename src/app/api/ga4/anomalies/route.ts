@@ -42,13 +42,17 @@ export async function GET(req: NextRequest) {
   const { data, error } = await getAnomalies(propertyId, baselineDays);
 
   if (error) {
-    return NextResponse.json({ error, anomalies: null }, { status: 200 });
+    return NextResponse.json({ error, anomalies: null, propertyId }, { status: 200 });
   }
 
-  return NextResponse.json(data, {
+  // ⚠ Inclui propertyId no payload pra cliente validar (anti race-condition
+  // entre trocas rápidas de property — sem isso a resposta da property
+  // antiga podia sobrescrever a nova)
+  return NextResponse.json({ ...data, propertyId }, {
     headers: {
-      // Cache 30min — anomalias mudam pouco durante o dia (já compara D-1 fechado)
-      "Cache-Control": "private, max-age=1800, stale-while-revalidate=3600",
+      // Reduzido pra 60s — anomalias mudam pouco mas cache longo bloqueava
+      // refresh ao trocar de property. SWR mantém UI responsiva.
+      "Cache-Control": "private, max-age=60, stale-while-revalidate=300",
     },
   });
 }

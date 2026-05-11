@@ -347,6 +347,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json(
     {
+      propertyId, // ⚠ anti race-condition: cliente valida que resposta é da property atual
       level,
       segment,
       metric,
@@ -358,7 +359,8 @@ export async function GET(req: NextRequest) {
       drilldowns,
     },
     {
-      headers: { "Cache-Control": "private, max-age=600" },
+      // Cache reduzido pra evitar mostrar drill-down da property antiga
+      headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=300" },
     }
   );
 }

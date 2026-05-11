@@ -24,6 +24,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json(
     {
+      propertyId, // ⚠ inclui propertyId pra cliente validar (anti race-condition)
       kpis: kpis.data,
       trend: trend.data,
       pages: pages.data,
@@ -39,10 +40,8 @@ export async function GET(req: NextRequest) {
     },
     {
       headers: {
-        // Cache 5 min no browser, serve stale por 30 min enquanto revalida em background.
-        // Combina com cache em memória dos hooks (TTL 3 min) para resposta instantânea
-        // em troca de aba ou perguntas repetidas no chat.
-        "Cache-Control": "private, max-age=300, stale-while-revalidate=1800",
+        // Cache reduzido — antes era 5min e bloqueava refresh ao trocar property
+        "Cache-Control": "private, max-age=60, stale-while-revalidate=600",
       },
     }
   );

@@ -33,6 +33,7 @@ type DrillDown = {
 };
 
 type AnomalyDetailResponse = {
+  propertyId?: string;
   level: string;
   segment: string;
   metric: string;
@@ -65,8 +66,12 @@ export function AnomalyDetailModal({
     setLoading(true);
     setError(null);
     setData(null);
+    // ⚠ Captura o propertyId no momento de abrir o modal — se o user trocar
+    // de property enquanto o modal está aberto, a resposta da property antiga
+    // será descartada
+    const requestPropertyId = selectedId;
     const params = new URLSearchParams({
-      propertyId: selectedId,
+      propertyId: requestPropertyId,
       level: anomaly.level,
       segment: anomaly.segment,
       metric: anomaly.metric,
@@ -76,6 +81,8 @@ export function AnomalyDetailModal({
       .then((r) => r.json())
       .then((d: AnomalyDetailResponse) => {
         if (cancelled) return;
+        // Anti race-condition: descarta se property mudou
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
         if (d.error) setError(d.error);
         else setData(d);
       })

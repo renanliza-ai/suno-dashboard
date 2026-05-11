@@ -282,6 +282,8 @@ export function useGA4Overview(daysOverride?: number) {
       setMeta({ status: "idle", propertyId: null, propertyName: null, fetchedAt: null });
       return;
     }
+    // ⚠ Guarda propertyId desta execução pra validar a resposta
+    const requestPropertyId = selectedId;
     setMeta({
       status: "loading",
       propertyId: selectedId,
@@ -293,6 +295,8 @@ export function useGA4Overview(daysOverride?: number) {
     cachedFetch(`/api/ga4/overview?${qs.toString()}`, { signal: controller.signal })
       .then((r) => r.json())
       .then((d) => {
+        // Anti race-condition: descarta se property mudou no meio do fetch
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
         const errs = d.errors || {};
         const anyErr = errs.kpis || errs.trend || errs.pages || errs.events;
         const allNull = !d.kpis && !d.trend && !d.pages && !d.events;
@@ -376,6 +380,7 @@ export function useGA4Reports(daysOverride?: number) {
       setMeta({ status: "idle", propertyId: null, propertyName: null, fetchedAt: null });
       return;
     }
+    const requestPropertyId = selectedId;
     setMeta({
       status: "loading",
       propertyId: selectedId,
@@ -387,6 +392,8 @@ export function useGA4Reports(daysOverride?: number) {
     cachedFetch(`/api/ga4/reports?${qs.toString()}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
+        // Anti race-condition
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
         if (d.error) setError(d.error);
         setRows(d.rows || null);
         setUsedCustomDim(Boolean(d.usedCustomDim));
@@ -457,6 +464,7 @@ export function useGA4Conversions(daysOverride?: number) {
       setMeta({ status: "idle", propertyId: null, propertyName: null, fetchedAt: null });
       return;
     }
+    const requestPropertyId = selectedId;
     setMeta({
       status: "loading",
       propertyId: selectedId,
@@ -468,6 +476,8 @@ export function useGA4Conversions(daysOverride?: number) {
     cachedFetch(`/api/ga4/conversions?${qs.toString()}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
+        // Anti race-condition: descarta se property mudou no meio do fetch
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
         const errs = d.errors || {};
         const anyErr = errs.conversions || errs.funnel;
         const allNull = !d.conversions && !d.funnel;
@@ -616,6 +626,7 @@ export function useGA4CheckoutFunnel(daysOverride?: number) {
       setMeta({ status: "idle", propertyId: null, propertyName: null, fetchedAt: null });
       return;
     }
+    const requestPropertyId = selectedId;
     setMeta({
       status: "loading",
       propertyId: selectedId,
@@ -626,7 +637,9 @@ export function useGA4CheckoutFunnel(daysOverride?: number) {
     const qs = buildDateQS(days, effectiveCustomRange, { propertyId: selectedId });
     cachedFetch(`/api/ga4/checkout-funnel?${qs.toString()}`, { signal: ctrl.signal })
       .then((r) => r.json())
-      .then((d: { data: CheckoutFunnelData | null; error: string | null }) => {
+      .then((d: { data: CheckoutFunnelData | null; error: string | null; propertyId?: string }) => {
+        // Anti race-condition
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
         if (d.error) setError(d.error);
         setData(d.data);
         setMeta({
@@ -787,20 +800,32 @@ export function useGA4Anomalies(baselineDays = 14) {
   const refetch = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
+    // ⚠ CRÍTICO: sempre limpa dados ao trocar de property/baseline.
+    // Sem isso, dados da property anterior vazam na UI até o novo
+    // fetch retornar — bug que confundiu o user (Suno Research mostrava
+    // canais com source 'statusinvest').
+    setData(null);
+    setError(null);
+
     if (!useRealData || !selectedId) {
-      setData(null);
-      setError(null);
       return;
     }
+    // Guarda o propertyId desta execução pra validar a resposta
+    // antes de aplicar (anti race-condition entre trocas rápidas)
+    const requestPropertyId = selectedId;
     const ctrl = new AbortController();
     setLoading(true);
-    setError(null);
     fetch(
       `/api/ga4/anomalies?propertyId=${selectedId}&baselineDays=${baselineDays}`,
       { signal: ctrl.signal }
     )
       .then((r) => r.json())
       .then((d: AnomaliesData & { error?: string }) => {
+        // Valida: a resposta é da property que ainda está selecionada?
+        // Se o user trocou de property no meio do fetch, descarta.
+        if (d.propertyId && d.propertyId !== requestPropertyId) {
+          return;
+        }
         if (d.error) {
           setError(d.error);
           setData(null);
