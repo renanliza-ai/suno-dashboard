@@ -160,7 +160,7 @@ export default function EventosPage() {
   }, [eventRows]);
 
   return (
-    <main className="ml-20 p-8 max-w-[1600px]">
+    <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
       <motion.div
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -195,7 +195,7 @@ export default function EventosPage() {
       )}
 
       {/* KPI cards */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {isLoading || hasError ? (
           [0, 1, 2, 3].map((i) => (
             <div key={i} className="bg-white rounded-2xl border border-[color:var(--border)] p-5">
@@ -239,7 +239,7 @@ export default function EventosPage() {
       </div>
 
       {/* Charts */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="col-span-2 bg-white rounded-2xl border border-[color:var(--border)] p-6">
           <h3 className="text-sm font-semibold mb-1 flex items-center gap-2">
             <Activity size={16} className="text-[#7c5cff]" />
@@ -564,7 +564,7 @@ function EventDetailModal({
         </div>
 
         <div className="p-6 space-y-5">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <Stat label="Contagem" value={formatNumber(event.count)} />
             <Stat label="Usuários" value={event.users ? formatNumber(event.users) : "—"} />
             <Stat label="Share" value={`${share}%`} />

@@ -72,7 +72,7 @@ export default function AudienciaPage() {
   }, [seed, factor, realTotal]);
 
   return (
-    <main className="ml-20 p-8 max-w-[1600px]">
+    <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
       <motion.div
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -123,7 +123,7 @@ export default function AudienciaPage() {
         {useRealData && <DataStatus meta={meta} />}
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {[
           { label: "DAU", value: formatNumber(stats.dau), sub: "Ativos hoje", icon: Activity },
           { label: "WAU", value: formatNumber(stats.wau), sub: "Últimos 7 dias", icon: Users },
@@ -149,7 +149,7 @@ export default function AudienciaPage() {
         })}
       </div>
 
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="bg-white rounded-2xl border border-[color:var(--border)] p-6">
           <h3 className="text-base font-semibold flex items-center gap-2 mb-4">
             <UserCheck size={14} className="text-[#7c5cff]" />
@@ -231,13 +231,13 @@ export default function AudienciaPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="col-span-2 bg-white rounded-2xl border border-[color:var(--border)] p-6">
           <h3 className="text-base font-semibold flex items-center gap-2 mb-4">
             <MapPin size={14} className="text-[#7c5cff]" />
             Distribuição por Estado
           </h3>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
             {audienceByState.map((s, i) => (
               <motion.div
                 key={s.state}

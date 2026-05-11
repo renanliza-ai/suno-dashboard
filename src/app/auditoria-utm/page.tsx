@@ -122,7 +122,7 @@ function Content() {
   };
 
   return (
-    <main className="ml-20 p-8 max-w-[1400px]">
+    <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1400px]">
       <motion.div
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -215,7 +215,7 @@ function Content() {
       {data && (
         <div className="space-y-6">
           {/* Summary KPIs */}
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <KpiCard
               label="Sessões totais"
               value={data.totalSessions.toLocaleString("pt-BR")}
@@ -257,7 +257,7 @@ function Content() {
                 Mesmo canal sendo gravado de jeitos diferentes — GA4 trata como canais separados,
                 PowerBI/sunocode normaliza.
               </p>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {data.sourceVariations.length > 0 && (
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-2">

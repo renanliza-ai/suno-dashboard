@@ -61,12 +61,23 @@ const masterNav: NavItem[] = [
   { icon: MessageSquare, label: "Copiloto Log", href: "/copiloto-log", description: "Histórico do chat" },
 ];
 
-function NavLink({ item, pathname, masterAccent = false }: { item: NavItem; pathname: string; masterAccent?: boolean }) {
+function NavLink({
+  item,
+  pathname,
+  masterAccent = false,
+  onClick,
+}: {
+  item: NavItem;
+  pathname: string;
+  masterAccent?: boolean;
+  onClick?: () => void;
+}) {
   const Icon = item.icon;
   const isActive = pathname === item.href;
   return (
     <Link
       href={item.href}
+      onClick={onClick}
       className={cn(
         "w-11 h-11 rounded-xl flex items-center justify-center transition-all group relative",
         isActive
@@ -105,15 +116,36 @@ function GroupLabel({ children }: { children: string }) {
   );
 }
 
-export function Sidebar() {
+export function Sidebar({
+  mobileOpen = false,
+  onMobileClose,
+}: {
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
+}) {
   const pathname = usePathname();
   const { data: session } = useSession();
   const isMaster = Boolean((session?.user as { isMaster?: boolean } | undefined)?.isMaster);
   const liveActive = pathname === "/live";
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-20 bg-white border-r border-[color:var(--border)] flex flex-col items-center py-6 z-20">
-      <Link href="/">
+    <>
+      {/* Backdrop overlay — só em mobile, quando aberto */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-30 md:hidden"
+          onClick={onMobileClose}
+          aria-label="Fechar menu"
+        />
+      )}
+      <aside
+        className={cn(
+          "fixed left-0 top-0 h-screen w-20 bg-white border-r border-[color:var(--border)] flex flex-col items-center py-6 z-40 transition-transform duration-200",
+          // Desktop: sempre visível. Mobile: slide-in
+          mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+        )}
+      >
+      <Link href="/" onClick={onMobileClose}>
         <SunoLogo size={44} variant="mark" className="shadow-lg shadow-black/20 rounded-xl" />
       </Link>
 
@@ -138,20 +170,20 @@ export function Sidebar() {
         </span>
       </Link>
 
-      <nav className="mt-6 flex flex-col gap-1.5 flex-1">
+      <nav className="mt-6 flex flex-col gap-1.5 flex-1 overflow-y-auto">
         {/* Dashboard sempre primeiro (visão geral) */}
-        <NavLink item={dashboardItem} pathname={pathname} />
+        <NavLink item={dashboardItem} pathname={pathname} onClick={onMobileClose} />
 
         {/* GRUPO: Aquisição */}
         <GroupLabel>Aquisição</GroupLabel>
         {aquisicaoNav.map((item) => (
-          <NavLink key={item.href} item={item} pathname={pathname} />
+          <NavLink key={item.href} item={item} pathname={pathname} onClick={onMobileClose} />
         ))}
 
         {/* GRUPO: Comportamento */}
         <GroupLabel>Comportamento</GroupLabel>
         {comportamentoNav.map((item) => (
-          <NavLink key={item.href} item={item} pathname={pathname} />
+          <NavLink key={item.href} item={item} pathname={pathname} onClick={onMobileClose} />
         ))}
 
         {/* GRUPO: Master (oculto para não-masters) */}
@@ -162,7 +194,7 @@ export function Sidebar() {
               <Crown size={11} className="text-amber-500" />
             </div>
             {masterNav.map((item) => (
-              <NavLink key={item.href} item={item} pathname={pathname} masterAccent />
+              <NavLink key={item.href} item={item} pathname={pathname} masterAccent onClick={onMobileClose} />
             ))}
           </>
         )}
@@ -170,6 +202,7 @@ export function Sidebar() {
 
       <Link
         href="/configuracoes"
+        onClick={onMobileClose}
         className="w-11 h-11 rounded-xl flex items-center justify-center text-[color:var(--muted-foreground)] hover:bg-[color:var(--muted)] transition group relative"
         title="Configurações"
       >
@@ -178,6 +211,7 @@ export function Sidebar() {
           Configurações
         </span>
       </Link>
-    </aside>
+      </aside>
+    </>
   );
 }

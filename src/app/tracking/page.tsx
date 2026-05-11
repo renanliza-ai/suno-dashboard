@@ -133,7 +133,7 @@ function PageDetailDialog({ page, onClose }: { page: TrackingPage | null; onClos
         </div>
 
         {/* KPIs de tracking */}
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
           {[
             { label: "Pageviews 30d", value: formatNumber(page.pageviews30d) },
             { label: "Leads 30d", value: formatNumber(page.leadCount30d) },
@@ -152,7 +152,7 @@ function PageDetailDialog({ page, onClose }: { page: TrackingPage | null; onClos
         {/* Status por item */}
         <div>
           <h3 className="text-sm font-semibold mb-2">Saúde do tracking</h3>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {[
               { key: "gtm", label: "GTM Container", status: page.gtm, detail: page.gtmContainer || "—" },
               { key: "events", label: "Eventos base (page_view, scroll_depth, engagement)", status: page.events, detail: "Validação DataLayer" },
@@ -251,7 +251,7 @@ function UTMDetailDialog({ row, onClose }: { row: UTMRow | null; onClose: () => 
           ))}
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="rounded-xl border border-[color:var(--border)] p-3">
             <p className="text-xs text-[color:var(--muted-foreground)]">Sessões</p>
             <p className="text-2xl font-bold tabular-nums">{formatNumber(row.sessions)}</p>
@@ -530,7 +530,7 @@ export default function TrackingPage() {
 
   return (
     <MasterGuard>
-      <main className="ml-20 p-8 max-w-[1600px]">
+      <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
         <Header />
 
         <div className="flex items-center gap-2 mb-6 flex-wrap">
@@ -727,7 +727,7 @@ export default function TrackingPage() {
         </motion.div>
 
         {/* KPIs */}
-        <div className="grid grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           {[
             { label: "Páginas Ativas", value: pages.length, icon: Eye, color: "#7c5cff", bg: "bg-violet-50" },
             { label: "Tracking OK", value: okCount, icon: CheckCircle2, color: "#10b981", bg: "bg-emerald-50" },
@@ -783,7 +783,7 @@ export default function TrackingPage() {
 
         {/* TAB: Pages */}
         {tab === "pages" && (
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="col-span-2 bg-white rounded-2xl border border-[color:var(--border)] overflow-hidden">
               <div className="p-5 border-b border-[color:var(--border)] flex items-center justify-between">
                 <div>
@@ -927,7 +927,7 @@ export default function TrackingPage() {
         {/* TAB: UTM Audit */}
         {tab === "utm" && (
           <div className="space-y-4">
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
                 <p className="text-xs text-[color:var(--muted-foreground)]">UTMs analisadas</p>
                 <p className="text-2xl font-bold mt-1">{utmRows.length}</p>
@@ -1037,7 +1037,7 @@ export default function TrackingPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
                 <p className="text-xs text-[color:var(--muted-foreground)]">Jornadas fantasma detectadas (30d)</p>
                 <p className="text-2xl font-bold mt-1">{formatNumber(phantomJourneys.length * 842)}</p>
@@ -1122,7 +1122,7 @@ export default function TrackingPage() {
         {/* TAB: Cross-Device */}
         {tab === "crossdevice" && (
           <div className="space-y-4">
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
                 <Users size={14} className="text-[#7c5cff]" />
                 <p className="text-xs text-[color:var(--muted-foreground)] mt-2">Usuários totais</p>
@@ -1159,7 +1159,7 @@ export default function TrackingPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="bg-white rounded-2xl border border-[color:var(--border)] p-5">
                 <h3 className="text-base font-semibold mb-4 flex items-center gap-2">
                   <TrendingUp size={14} className="text-[#7c5cff]" />
@@ -1422,7 +1422,7 @@ export default function TrackingPage() {
           </div>
 
           {/* Impacto esperado */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
             <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3">
               <p className="text-[10px] uppercase font-bold text-emerald-600">Conversões recuperadas</p>
               <p className="text-lg font-bold mt-1 text-emerald-800">
@@ -1511,7 +1511,7 @@ export default function TrackingPage() {
       >
         {selectedPhantom && (
           <div className="space-y-4 text-sm">
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div className="rounded-xl bg-[color:var(--muted)] p-3">
                 <p className="text-[10px] uppercase font-semibold text-[color:var(--muted-foreground)]">
                   First Touch
@@ -1525,7 +1525,7 @@ export default function TrackingPage() {
                 <p className="text-sm font-semibold mt-1">{selectedPhantom.lastTouch}</p>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
               <div className="rounded-xl border border-[color:var(--border)] p-3 text-center">
                 <p className="text-xs text-[color:var(--muted-foreground)]">Sessões</p>
                 <p className="text-xl font-bold">{selectedPhantom.sessions}</p>

@@ -78,7 +78,7 @@ export default function ConversoesPage() {
   const abandonRow = goals.find((g) => g.event === "abandoned_checkout")!;
 
   return (
-    <main className="ml-20 p-8 max-w-[1600px]">
+    <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
       <Header />
 
       <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
@@ -128,7 +128,7 @@ export default function ConversoesPage() {
          ============================================================ */}
       <CheckoutMonitor />
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {isLoading || hasError ? (
           [0, 1, 2, 3].map((i) => (
             <div key={i} className="bg-white rounded-2xl border border-[color:var(--border)] p-5">
@@ -284,7 +284,7 @@ export default function ConversoesPage() {
       </button>
 
       {/* Tendência por evento */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="col-span-2 bg-white rounded-2xl border border-[color:var(--border)] p-6">
           <h3 className="text-base font-semibold flex items-center gap-2 mb-4">
             <Zap size={14} className="text-[#7c5cff]" />
@@ -403,7 +403,7 @@ export default function ConversoesPage() {
       >
         {selectedGoal && (
           <div className="space-y-4 text-sm">
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
               <div className="rounded-xl bg-[color:var(--muted)] p-3">
                 <p className="text-[10px] uppercase font-semibold text-[color:var(--muted-foreground)]">Contagem</p>
                 <p className="text-lg font-bold tabular-nums">{formatNumber(selectedGoal.count)}</p>
@@ -484,7 +484,7 @@ export default function ConversoesPage() {
                 {abandonedCheckoutRule.lastValidation.matchRate}% match
               </span>
             </div>
-            <div className="grid grid-cols-4 gap-2 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
               <div>
                 <p className="text-[10px] uppercase text-emerald-700 font-semibold">begin_checkout</p>
                 <p className="font-bold tabular-nums">
@@ -519,7 +519,7 @@ export default function ConversoesPage() {
             <p className="text-sm font-semibold mb-3 flex items-center gap-2">
               <RefreshCw size={14} className="text-[#7c5cff]" /> Recuperação por e-mail
             </p>
-            <div className="grid grid-cols-4 gap-2 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
               <div>
                 <p className="text-[10px] uppercase text-[color:var(--muted-foreground)]">Abertura</p>
                 <p className="font-bold">{abandonedCheckoutRule.recovery.emailRecoveryOpen}%</p>

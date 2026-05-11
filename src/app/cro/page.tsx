@@ -1095,7 +1095,7 @@ export default function CROPage() {
 
   return (
     <MasterGuard>
-      <main className="ml-20 p-8 max-w-[1600px]">
+      <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
         <Header />
 
         <div className="flex items-center gap-2 mb-6 flex-wrap">
@@ -1113,7 +1113,7 @@ export default function CROPage() {
         </div>
 
         {/* KPIs clicáveis */}
-        <div className="grid grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           {metrics.map((m, i) => (
             <motion.button
               key={m.label}
@@ -1139,7 +1139,7 @@ export default function CROPage() {
           ))}
         </div>
 
-        <div className="grid grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           {/* Páginas clicáveis */}
           <div className="col-span-2 bg-white rounded-2xl border border-[color:var(--border)] p-6">
             <div className="mb-5">
@@ -1210,7 +1210,7 @@ export default function CROPage() {
                 {dynDaily.rationale}
               </p>
               {/* Mini-grid: impact / ROI / effort */}
-              <div className="grid grid-cols-3 gap-2 mb-4 text-xs">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-4 text-xs">
                 <div className="bg-white/10 rounded-md p-2">
                   <p className="text-white/70 text-[10px] uppercase">Impacto</p>
                   <p className="font-bold mt-0.5">{dynDaily.impact}</p>
@@ -1657,7 +1657,7 @@ export default function CROPage() {
       >
         {selectedPage && (
           <div className="space-y-4">
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
               {[
                 { k: "LCP", v: `${selectedPage.lcp}s`, good: selectedPage.lcp < 2.5 },
                 { k: "CLS", v: selectedPage.cls, good: selectedPage.cls < 0.1 },

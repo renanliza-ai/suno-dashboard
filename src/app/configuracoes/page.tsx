@@ -7,7 +7,7 @@ import { AccountLogo } from "@/components/account-logo";
 
 export default function ConfiguracoesPage() {
   return (
-    <main className="ml-20 p-8 max-w-[1600px]">
+    <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
       <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
           <span className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#7c5cff] to-[#5b3dd4] flex items-center justify-center shadow-lg shadow-purple-500/30">
@@ -20,7 +20,7 @@ export default function ConfiguracoesPage() {
         </p>
       </motion.div>
 
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="col-span-2 bg-white rounded-2xl border border-[color:var(--border)] p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -36,7 +36,7 @@ export default function ConfiguracoesPage() {
               GMP-CLI · OAuth ativo
             </span>
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {accounts.map((a, i) => (
               <motion.div
                 key={a}
@@ -96,7 +96,7 @@ export default function ConfiguracoesPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {[
           { title: "Google Analytics 4", desc: "Propriedades GA4 via GMP-CLI", status: "Conectado", icon: Database, connected: true },
           { title: "Google Ads", desc: "Campanhas e custos", status: "Pendente", icon: LinkIcon, connected: false },

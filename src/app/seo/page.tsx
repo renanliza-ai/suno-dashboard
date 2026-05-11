@@ -92,7 +92,7 @@ export default function SEOPage() {
   }
 
   return (
-    <main className="ml-20 p-8 max-w-[1600px]">
+    <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
       <Header />
 
       {/* Pills de contexto */}
@@ -169,7 +169,7 @@ export default function SEOPage() {
       </div>
 
       {/* KPIs — clicks/impressions/ctr/position */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {[
           {
             label: "Cliques orgânicos",
@@ -483,7 +483,7 @@ export default function SEOPage() {
       >
         {selectedQuery && (
           <div className="space-y-4 text-sm">
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
               <div className="rounded-xl bg-[color:var(--muted)] p-3">
                 <p className="text-[10px] uppercase font-bold text-[color:var(--muted-foreground)]">Cliques</p>
                 <p className="text-xl font-bold mt-1">{formatNumber(selectedQuery.clicks)}</p>

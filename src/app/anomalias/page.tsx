@@ -111,7 +111,7 @@ export default function AnomaliasPage() {
 
   return (
     <MasterGuard>
-      <main className="ml-20 p-8 max-w-[1600px]">
+      <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
         <Header />
 
         {/* Pills + meta */}

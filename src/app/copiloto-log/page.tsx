@@ -146,7 +146,7 @@ export default function CopilotoLogPage() {
 
   return (
     <MasterGuard>
-      <main className="ml-20 p-8 max-w-[1600px]">
+      <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
         <Header />
 
         <div className="flex items-center gap-2 mb-6 flex-wrap">
@@ -172,7 +172,7 @@ export default function CopilotoLogPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           {[
             { label: "Perguntas totais", value: formatNumber(totalQuestions), icon: MessageSquare, color: "#7c5cff", bg: "bg-violet-50" },
             { label: "Usuários únicos", value: uniqueUsers, icon: Users, color: "#10b981", bg: "bg-emerald-50" },
@@ -200,7 +200,7 @@ export default function CopilotoLogPage() {
           })}
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="col-span-2 bg-white rounded-2xl border border-[color:var(--border)] overflow-hidden">
             <div className="p-5 border-b border-[color:var(--border)] flex items-center gap-3 flex-wrap">
               <div>
@@ -352,7 +352,7 @@ export default function CopilotoLogPage() {
             <blockquote className="rounded-xl bg-[color:var(--muted)] p-4 border-l-4 border-[#7c5cff] italic">
               “{selected.text}”
             </blockquote>
-            <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
               <div className="rounded-lg bg-[color:var(--muted)] p-2.5">
                 <p className="text-[10px] uppercase font-semibold text-[color:var(--muted-foreground)]">Usuário</p>
                 <p className="font-semibold mt-0.5">{selected.userName}</p>

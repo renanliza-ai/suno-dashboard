@@ -90,7 +90,7 @@ function AuditoriaContent() {
   }, []);
 
   return (
-    <main className="ml-20 p-8 max-w-[1400px]">
+    <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1400px]">
       <motion.div
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -132,7 +132,7 @@ function AuditoriaContent() {
           <Info size={14} className="text-blue-600" />
           Mapeamento — o que cada card do painel significa em termos de GA4
         </h3>
-        <div className="grid grid-cols-2 gap-3 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
           <MappingRow
             label="Usuários Ativos"
             metric="totalUsers"
@@ -198,7 +198,7 @@ function AuditoriaContent() {
       {report && (
         <>
           {/* Summary card */}
-          <div className="grid grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             <SummaryCard
               icon={CheckCircle2}
               label="OK"

@@ -83,3 +83,50 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #d9d6e6; border-radius: 999px; }
 ::-webkit-scrollbar-thumb:hover { background: #b9b3cf; }
+
+/* ==========================================================================
+ * Responsividade global — mobile-first fixes pra evitar quebrar layout
+ * ========================================================================== */
+
+/* Nunca permite scroll horizontal no body — garante que nada vaze o viewport.
+ * Componentes que precisam de overflow horizontal (tabelas grandes) usam
+ * <div class="overflow-x-auto"> localmente. */
+html,
+body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
+/* Tabelas: scroll horizontal em mobile sem quebrar layout */
+@media (max-width: 768px) {
+  /* Tabelas em mobile: força nowrap pra evitar quebra esquisita */
+  table {
+    font-size: 12px;
+  }
+
+  /* h1/h2 grandes precisam encolher em mobile */
+  h1.text-3xl {
+    font-size: 1.5rem;
+    line-height: 1.75rem;
+  }
+
+  /* Cards com max-width fixo precisam ser fluidos */
+  .max-w-\[1600px\],
+  .max-w-\[1400px\],
+  .max-w-\[1280px\] {
+    max-width: 100% !important;
+  }
+}
+
+/* Recharts: o ResponsiveContainer não respeita width 100% em alguns containers
+ * quando o pai é flex. Força width auto. */
+.recharts-responsive-container {
+  max-width: 100%;
+}
+
+/* PeriodPicker e elementos absolutos: garante que não vazem em mobile */
+@media (max-width: 768px) {
+  [class*="absolute"][class*="right-"] {
+    max-width: calc(100vw - 2rem);
+  }
+}

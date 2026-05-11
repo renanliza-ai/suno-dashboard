@@ -154,7 +154,7 @@ export default function AreaLogadaPage() {
   }, [data]);
 
   return (
-    <main className="ml-20 p-8 max-w-[1400px]">
+    <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1400px]">
       <motion.div
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -398,7 +398,7 @@ export default function AreaLogadaPage() {
               <CreditCard size={14} className="text-amber-600" />
               Compras no mesmo período (paralelo, não cruzado)
             </h2>
-            <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
               <KpiCard label="Transações" value={formatNumber(data.purchases.transactions)} color="#f59e0b" icon={CreditCard} />
               <KpiCard label="Receita total" value={formatBRL(data.purchases.totalRevenue || data.purchases.purchaseRevenue)} color="#10b981" icon={TrendingUp} />
               <KpiCard
