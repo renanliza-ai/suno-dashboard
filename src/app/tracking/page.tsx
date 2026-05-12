@@ -64,12 +64,11 @@ const statusByMod = (mod: number): TrackingStatus => {
 
 type Tab = "pages" | "utm" | "phantom" | "crossdevice" | "stale_lps";
 
-const baseAlerts = [
-  { time: "há 12min", severity: "critical", page: "/lp/premium-30", message: "Página nova sem GTM instalado", detail: "Deploy às 10:42. Nenhum evento." },
-  { time: "há 1h", severity: "critical", page: "/lp/consultoria-vip", message: "Container GTM removido", detail: "GTM-XSN8K3L não encontrado desde 09:15." },
-  { time: "há 3h", severity: "warning", page: "/lp/black-friday-2026", message: "scroll_depth duplicado em 18% sessões", detail: "Possível listener duplicado." },
-  { time: "há 5h", severity: "warning", page: "/relatorios", message: "generate_lead não implementado", detail: "CTA de newsletter sem evento." },
-];
+// ⚠ baseAlerts hardcoded REMOVIDO em 12/05/2026.
+// Antes esse array gerava alertas fakes como "/lp/premium-30 sem GTM"
+// que apareciam como se fossem reais. Confundiu Renan ao ver alerta
+// de "página sem GTM" numa página que tinha GTM instalado.
+// Substituído por verificação ao vivo via /api/tracking/gtm-check.
 
 function StatusIcon({ status, size = 16 }: { status: TrackingStatus; size?: number }) {
   if (status === "ok") return <CheckCircle2 size={size} className="text-emerald-500" />;
@@ -303,7 +302,14 @@ export default function TrackingPage() {
   const [filter, setFilter] = useState<"all" | "ok" | "warning" | "error">("all");
   const [selectedPage, setSelectedPage] = useState<TrackingPage | null>(null);
   const [selectedUTM, setSelectedUTM] = useState<UTMRow | null>(null);
-  const [selectedAlert, setSelectedAlert] = useState<(typeof baseAlerts)[number] | null>(null);
+  const [selectedAlert, setSelectedAlert] = useState<{
+    time: string;
+    severity: "critical" | "warning";
+    page: string;
+    message: string;
+    detail: string;
+    isLiveVerified?: boolean;
+  } | null>(null);
   const [selectedPhantom, setSelectedPhantom] = useState<(typeof phantomJourneys)[number] | null>(null);
 
   // GA4 — propriedade selecionada no header
@@ -392,26 +398,174 @@ export default function TrackingPage() {
     });
   }, [seed, realPagesAvailable, pagesDetail]);
 
-  // Alertas seedados — primeiro alerta aponta para a página com pior status.
-  const alerts = useMemo(() => {
-    const worst = [...displayPages].sort((a, b) => {
-      const order: Record<TrackingStatus, number> = { error: 0, missing: 1, warning: 2, ok: 3 };
-      return order[a.status] - order[b.status];
-    })[0];
-    return baseAlerts.map((a, i) => {
-      const minutesAgo = ((seed + i * 11) % 240) + 5;
-      const timeLabel =
-        minutesAgo < 60
-          ? `há ${minutesAgo}min`
-          : `há ${Math.floor(minutesAgo / 60)}h`;
-      if (i === 0 && worst) {
-        return { ...a, page: worst.shortPath || a.page, time: timeLabel };
-      }
-      return { ...a, time: timeLabel };
-    });
-  }, [seed, displayPages]);
+  // ============================================================
+  // ⚠ VERIFICAÇÃO REAL DE GTM/Pixels — substitui o mock anterior
+  // Bate em cada URL listada e detecta GTM/dataLayer/GA4/pixels
+  // baseado no HTML real. Antes os alertas eram hardcoded.
+  // ============================================================
+  type GTMCheckResult = {
+    url: string;
+    fetchedOk: boolean;
+    httpStatus: number | null;
+    hasGTM: boolean;
+    gtmIds: string[];
+    hasDataLayer: boolean;
+    hasGtag: boolean;
+    ga4Ids: string[];
+    metaPixelIds: string[];
+    detectedPixels: string[];
+    error: string | null;
+    durationMs: number;
+  };
 
-  const pages = displayPages;
+  const [gtmChecks, setGtmChecks] = useState<Map<string, GTMCheckResult>>(new Map());
+  const [gtmCheckLoading, setGtmCheckLoading] = useState(false);
+  const [gtmCheckError, setGtmCheckError] = useState<string | null>(null);
+  const [gtmCheckedAt, setGtmCheckedAt] = useState<number | null>(null);
+
+  const runGTMCheck = async () => {
+    const urls = displayPages
+      .map((p) => p.url)
+      .filter((u): u is string => Boolean(u && u.startsWith("http")));
+    if (urls.length === 0) return;
+    setGtmCheckLoading(true);
+    setGtmCheckError(null);
+    try {
+      const r = await fetch("/api/tracking/gtm-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ urls: urls.slice(0, 30) }), // limita a 30 pra ser rápido
+        cache: "no-store",
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        setGtmCheckError(`HTTP ${r.status}: ${t.slice(0, 150)}`);
+        return;
+      }
+      const d = (await r.json()) as { results: GTMCheckResult[] };
+      const m = new Map<string, GTMCheckResult>();
+      for (const result of d.results) m.set(result.url, result);
+      setGtmChecks(m);
+      setGtmCheckedAt(Date.now());
+    } catch (e) {
+      setGtmCheckError((e as Error).message);
+    } finally {
+      setGtmCheckLoading(false);
+    }
+  };
+
+  // Auto-roda GTM check ao trocar property/abrir a aba pela 1ª vez
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (realPagesAvailable && displayPages.length > 0 && gtmChecks.size === 0) {
+      runGTMCheck();
+    }
+    // Não inclui runGTMCheck nas deps pra não disparar em re-render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [realPagesAvailable, selectedId]);
+
+  // Aplica resultados reais SOBRE o displayPages (sobrescreve status do gtm)
+  const verifiedPages: TrackingPage[] = useMemo(() => {
+    if (gtmChecks.size === 0) return displayPages;
+    return displayPages.map((p) => {
+      const check = p.url ? gtmChecks.get(p.url) : null;
+      if (!check) return p;
+      // Sobrescreve status baseado em dados reais:
+      // - GTM presente = "ok"
+      // - GTM ausente mas página carregou = "missing" (faltou)
+      // - Página não carregou = "error"
+      let gtm: TrackingStatus = p.gtm;
+      let status: TrackingStatus = p.status;
+      if (check.error) {
+        gtm = "error";
+        status = "error";
+      } else if (check.fetchedOk) {
+        if (check.hasGTM) {
+          gtm = "ok";
+          // Mantém status geral baseado em outros sinais (events, etc)
+          if (status === "error" && p.events !== "error") status = "warning";
+        } else {
+          // Sem GTM = problema crítico
+          gtm = "missing";
+          status = "error";
+        }
+      }
+      return { ...p, gtm, status };
+    });
+  }, [displayPages, gtmChecks]);
+
+  // ============================================================
+  // ALERTAS REAIS — baseados em dados do GTM check, não hardcoded
+  // ============================================================
+  type RealAlert = {
+    time: string;
+    severity: "critical" | "warning";
+    page: string;
+    message: string;
+    detail: string;
+    isLiveVerified: boolean; // diferencia ao vivo vs estimativa
+  };
+
+  const alerts: RealAlert[] = useMemo(() => {
+    // Se a verificação ao vivo rodou, usa só dados reais
+    if (gtmChecks.size > 0) {
+      const realAlerts: RealAlert[] = [];
+
+      // Páginas sem GTM detectado
+      for (const p of verifiedPages) {
+        if (!p.url) continue;
+        const check = gtmChecks.get(p.url);
+        if (!check) continue;
+
+        if (check.error) {
+          realAlerts.push({
+            time: "ao vivo",
+            severity: "critical",
+            page: p.shortPath || p.url,
+            message: `Página não carregou: ${check.error}`,
+            detail: `URL ${p.url} retornou ${check.httpStatus || "erro"}.`,
+            isLiveVerified: true,
+          });
+        } else if (check.fetchedOk && !check.hasGTM) {
+          realAlerts.push({
+            time: "ao vivo",
+            severity: "critical",
+            page: p.shortPath || p.url,
+            message: "GTM não detectado no HTML",
+            detail: `Fetch de ${p.url} retornou HTTP ${check.httpStatus} mas não contém googletagmanager.com/gtm.js. ${check.hasDataLayer ? "dataLayer presente porém sem GTM." : "Sem dataLayer também."}`,
+            isLiveVerified: true,
+          });
+        } else if (check.hasGTM && !check.hasDataLayer) {
+          realAlerts.push({
+            time: "ao vivo",
+            severity: "warning",
+            page: p.shortPath || p.url,
+            message: "GTM presente mas sem dataLayer",
+            detail: `${check.gtmIds.join(", ")} carregando mas dataLayer.push não foi detectado. Eventos podem não estar sendo enviados.`,
+            isLiveVerified: true,
+          });
+        } else if (check.hasGTM && check.ga4Ids.length === 0 && check.gtmIds.length > 0 && !check.gtmIds[0].includes("[ID em script")) {
+          realAlerts.push({
+            time: "ao vivo",
+            severity: "warning",
+            page: p.shortPath || p.url,
+            message: "GTM ativo mas nenhum GA4 ID detectado",
+            detail: `Container ${check.gtmIds.join(", ")} carrega mas nenhuma tag GA4 (G-XXXXXXX) foi encontrada no HTML inicial. Pode estar em tag pause/carregando lazy.`,
+            isLiveVerified: true,
+          });
+        }
+      }
+
+      return realAlerts.slice(0, 10); // limita
+    }
+
+    // Fallback: sem GTM check rodado — não mostramos alertas hardcoded falsos.
+    // Mostramos apenas estado de "verificação não rodada"
+    return [];
+  }, [verifiedPages, gtmChecks]);
+
+  // Usa verifiedPages (com status REAL do GTM check quando rodado) em vez de displayPages
+  const pages = verifiedPages;
   const filtered = filter === "all" ? pages : pages.filter((p) => p.status === filter);
   const okCount = pages.filter((p) => p.status === "ok").length;
   const warnCount = pages.filter((p) => p.status === "warning").length;
@@ -787,9 +941,25 @@ export default function TrackingPage() {
             <div className="col-span-2 bg-white rounded-2xl border border-[color:var(--border)] overflow-hidden">
               <div className="p-5 border-b border-[color:var(--border)] flex items-center justify-between">
                 <div>
-                  <h3 className="text-base font-semibold">Status das Páginas</h3>
+                  <h3 className="text-base font-semibold flex items-center gap-2 flex-wrap">
+                    Status das Páginas
+                    {gtmChecks.size > 0 ? (
+                      <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-700 border border-emerald-200">
+                        ✓ {gtmChecks.size} verificadas ao vivo
+                      </span>
+                    ) : (
+                      <span
+                        className="text-[9px] font-semibold px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-700 border border-amber-200"
+                        title="Status mostrado é estimativa baseada em GA4. Clique em 'Verificar URLs' no card de Alertas pra rodar auditoria real."
+                      >
+                        ⚠ estimativa (rode verificação)
+                      </span>
+                    )}
+                  </h3>
                   <p className="text-sm text-[color:var(--muted-foreground)] mt-0.5">
-                    Clique em qualquer linha para ver detalhes, URL completa e eventos.
+                    {gtmChecks.size > 0
+                      ? "Coluna GTM mostra dado REAL do HTML da página. Outras colunas ainda são derivadas do GA4."
+                      : "Clique em qualquer linha para ver detalhes. Pra validar GTM de verdade, rode a verificação no card Alertas."}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -883,16 +1053,70 @@ export default function TrackingPage() {
 
             {/* Alertas */}
             <div className="bg-white rounded-2xl border border-[color:var(--border)] p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-semibold flex items-center gap-2">
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <h3 className="text-base font-semibold flex items-center gap-2 flex-wrap">
                   <Activity size={16} />
-                  Alertas Recentes
+                  Alertas — verificação ao vivo
+                  {gtmCheckedAt && gtmChecks.size > 0 ? (
+                    <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-700 border border-emerald-200">
+                      ✓ ao vivo · {gtmChecks.size} URLs
+                    </span>
+                  ) : (
+                    <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
+                      aguardando verificação
+                    </span>
+                  )}
                 </h3>
                 <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-md font-semibold">
                   {alerts.filter((a) => a.severity === "critical").length} críticos
                 </span>
               </div>
+              <p className="text-[11px] text-slate-500 mb-3">
+                Bate em cada URL real, busca <code className="bg-slate-100 px-1 rounded text-[10px]">googletagmanager.com/gtm.js</code> no HTML
+                + dataLayer + tags GA4. Não são alertas mock.
+              </p>
+
+              {/* Botão re-verificar + status */}
+              <div className="flex items-center gap-2 mb-3 flex-wrap">
+                <button
+                  onClick={runGTMCheck}
+                  disabled={gtmCheckLoading || pages.length === 0}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50 inline-flex items-center gap-1.5"
+                >
+                  <Activity size={11} className={gtmCheckLoading ? "animate-pulse" : ""} />
+                  {gtmCheckLoading
+                    ? "Verificando..."
+                    : gtmChecks.size > 0
+                    ? "Re-verificar"
+                    : `Verificar ${Math.min(pages.length, 30)} URLs`}
+                </button>
+                {gtmCheckedAt && (
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    última: {new Date(gtmCheckedAt).toLocaleTimeString("pt-BR")}
+                  </span>
+                )}
+              </div>
+
+              {gtmCheckError && (
+                <div className="mb-3 p-2 rounded-md bg-red-50 border border-red-200 text-[11px] text-red-700">
+                  <strong>Erro:</strong> {gtmCheckError}
+                </div>
+              )}
+
               <div className="space-y-3 max-h-[520px] overflow-y-auto">
+                {alerts.length === 0 && !gtmCheckLoading && gtmChecks.size > 0 && (
+                  <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-800 flex items-center gap-2">
+                    <CheckCircle2 size={16} />
+                    <span>
+                      <strong>Tudo ok!</strong> Todas as {gtmChecks.size} URLs verificadas têm GTM instalado e funcionando.
+                    </span>
+                  </div>
+                )}
+                {alerts.length === 0 && gtmChecks.size === 0 && (
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-600">
+                    Clique em <strong>Verificar URLs</strong> acima pra rodar a auditoria real de GTM nas páginas listadas.
+                  </div>
+                )}
                 {alerts.map((a, i) => (
                   <motion.button
                     key={i}
@@ -904,21 +1128,39 @@ export default function TrackingPage() {
                       a.severity === "critical" ? "bg-red-50 border-red-500" : "bg-amber-50 border-amber-500"
                     }`}
                   >
-                    <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center justify-between mb-1 flex-wrap gap-1">
                       <span className="text-xs font-mono font-medium">{a.page}</span>
-                      <span className="text-[10px] text-[color:var(--muted-foreground)]">{a.time}</span>
+                      <span className="flex items-center gap-1">
+                        {a.isLiveVerified && (
+                          <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">
+                            ao vivo
+                          </span>
+                        )}
+                        <span className="text-[10px] text-[color:var(--muted-foreground)]">{a.time}</span>
+                      </span>
                     </div>
                     <p className="text-sm font-semibold mb-1">{a.message}</p>
                     <p className="text-xs text-[color:var(--muted-foreground)]">{a.detail}</p>
                   </motion.button>
                 ))}
               </div>
-              <div className="mt-4 pt-4 border-t border-[color:var(--border)] flex items-center justify-between text-xs text-[color:var(--muted-foreground)]">
+              <div className="mt-4 pt-4 border-t border-[color:var(--border)] flex items-center justify-between text-xs text-[color:var(--muted-foreground)] flex-wrap gap-2">
                 <span className="flex items-center gap-1.5">
                   <Tag size={12} />
-                  Container GTM-XSN8K3L
+                  {(() => {
+                    // Pega o GTM ID mais comum nas verificações
+                    const idCount = new Map<string, number>();
+                    for (const check of gtmChecks.values()) {
+                      for (const id of check.gtmIds) {
+                        if (id.startsWith("GTM-") && !id.includes("[ID")) {
+                          idCount.set(id, (idCount.get(id) || 0) + 1);
+                        }
+                      }
+                    }
+                    const top = [...idCount.entries()].sort((a, b) => b[1] - a[1])[0];
+                    return top ? `Container mais comum: ${top[0]} (${top[1]} URLs)` : "Container: aguardando verificação";
+                  })()}
                 </span>
-                <button className="text-[#7c5cff] font-medium hover:underline">Ver todos</button>
               </div>
             </div>
           </div>
