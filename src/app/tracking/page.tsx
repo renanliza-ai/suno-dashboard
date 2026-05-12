@@ -30,6 +30,7 @@ import {
   Zap,
   Shield,
   Search,
+  Info,
 } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import {
@@ -2541,7 +2542,100 @@ function StaleLPsTab() {
         </div>
       </div>
 
-      {/* Filtros */}
+      {/* Legenda — explicação dos status pra time leigo */}
+      <details className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+        <summary className="text-sm font-semibold cursor-pointer flex items-center gap-2 text-blue-900">
+          <Info size={14} />
+          O que significa cada status? (clica pra entender)
+        </summary>
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-blue-900">
+          <div className="bg-white rounded-lg p-3 border border-blue-200 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 border border-emerald-200">
+                OK
+              </span>
+              <span className="font-semibold">Página saudável</span>
+            </div>
+            <p className="text-[11px] text-slate-600 leading-snug">
+              Está no ar (HTTP 200), tem tráfego no GA4 e nenhum sintoma de abandono. Mantém.
+            </p>
+          </div>
+
+          <div className="bg-white rounded-lg p-3 border border-amber-200 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-amber-100 text-amber-700 border border-amber-200">
+                Stale
+              </span>
+              <span className="font-semibold">Suspeita de abandono</span>
+            </div>
+            <p className="text-[11px] text-slate-600 leading-snug">
+              Tem tráfego no GA4 mas com sintomas: <strong>ano antigo no nome</strong> (ex: -2024-),{" "}
+              <strong>palavra sazonal</strong> (black-friday, perpétuo, relâmpago), <strong>volume baixo</strong> ou{" "}
+              <strong>bounce alto + sessões baixas</strong>. Vale auditar pra decidir se redireciona ou mantém.
+            </p>
+          </div>
+
+          <div className="bg-white rounded-lg p-3 border border-red-200 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-red-100 text-red-700 border border-red-200">
+                🚨 Zumbi
+              </span>
+              <span className="font-semibold">Indexada no Google sem tráfego</span>
+            </div>
+            <p className="text-[11px] text-slate-600 leading-snug">
+              O <strong>Google mostra essa página no SERP</strong> (tem impressões no Search Console), mas <strong>ninguém clica</strong> ou{" "}
+              <strong>nada chega no GA4</strong>. Está queimando crawl budget e podendo confundir o investidor. <strong>Redirect 301 urgente</strong>.
+            </p>
+          </div>
+
+          <div className="bg-white rounded-lg p-3 border border-red-200 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-red-100 text-red-700 border border-red-200">
+                🔴 404
+              </span>
+              <span className="font-semibold">Página não existe mais</span>
+            </div>
+            <p className="text-[11px] text-slate-600 leading-snug">
+              O servidor responde HTTP 404 quando alguém acessa essa URL. Se a página ainda aparece no Google e em UTMs antigas,
+              usuários estão caindo em &quot;Page Not Found&quot; <strong>(pior experiência possível)</strong>. Redirect 301 imediato.
+            </p>
+          </div>
+
+          <div className="bg-white rounded-lg p-3 border border-blue-200 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 border border-blue-200">
+                ↪ 301 / 302
+              </span>
+              <span className="font-semibold">Redirect já configurado</span>
+            </div>
+            <p className="text-[11px] text-slate-600 leading-snug">
+              A página redireciona automaticamente pra outra URL. <strong>Está tudo bem.</strong> Útil pra confirmar
+              que regras antigas de redirect ainda funcionam. Passa o mouse na badge pra ver o destino.
+            </p>
+          </div>
+
+          <div className="bg-white rounded-lg p-3 border border-amber-200 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-amber-100 text-amber-700 border border-amber-200">
+                ⚠ Offline
+              </span>
+              <span className="font-semibold">Servidor não respondeu</span>
+            </div>
+            <p className="text-[11px] text-slate-600 leading-snug">
+              Timeout, erro de DNS ou erro de rede ao tentar acessar a URL.{" "}
+              <strong>Pode ser problema temporário ou domínio descontinuado.</strong> Verificar manualmente.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 pt-3 border-t border-blue-200 text-[11px] text-blue-900 leading-snug">
+          <strong>Coluna &quot;Sintomas&quot;:</strong> mostra os motivos pelos quais a página foi marcada como Stale ou Zumbi —
+          ex: <em>&quot;sazonal: black-friday&quot;</em>, <em>&quot;ano antigo no path (2024)&quot;</em>,{" "}
+          <em>&quot;5.000 impressões no Google sem tráfego GA4&quot;</em>. Use isso pra entender por que cada uma foi sinalizada.
+        </div>
+      </details>
+
+      {/* Filtros + ações */}
       <div className="bg-white rounded-2xl border border-[color:var(--border)] p-4 flex items-center gap-3 flex-wrap">
         <input
           type="text"
@@ -2569,6 +2663,69 @@ function StaleLPsTab() {
         <span className="text-[11px] text-slate-500 font-mono">
           mostrando {sortedRows.length}
         </span>
+        <button
+          onClick={() => {
+            // Exporta lista filtrada como CSV — abre download direto no browser
+            const headers = [
+              "Status",
+              "Host",
+              "Path",
+              "URL",
+              "HTTP",
+              "Redirect destino",
+              "GA4 sessões",
+              "GA4 usuários",
+              "GSC impressões",
+              "GSC cliques",
+              "GSC posição",
+              "Sintomas",
+            ];
+            const escape = (v: string | number | null | undefined): string => {
+              if (v === null || v === undefined) return "";
+              const s = String(v);
+              // Escape CSV: aspas duplas e vírgulas viram "..."
+              if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+              return s;
+            };
+            const lines = [
+              headers.join(","),
+              ...sortedRows.map((r) =>
+                [
+                  r.isZumbi ? "Zumbi" : r.isStale ? "Stale" : "OK",
+                  r.host,
+                  r.path,
+                  r.url,
+                  r.health?.status ?? "",
+                  r.health?.redirectTo ?? "",
+                  r.sessions,
+                  r.users,
+                  r.gsc?.impressions ?? "",
+                  r.gsc?.clicks ?? "",
+                  r.gsc?.position ?? "",
+                  r.staleReasons.join(" | "),
+                ]
+                  .map(escape)
+                  .join(",")
+              ),
+            ];
+            const csv = lines.join("\n");
+            const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }); // BOM pra Excel
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            const today = new Date().toISOString().slice(0, 10);
+            a.download = `lps-redirect-pendentes-${today}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }}
+          disabled={sortedRows.length === 0}
+          className="px-3 py-2 rounded-lg bg-[#7c5cff] text-white text-xs font-semibold hover:bg-[#6b4bf0] disabled:opacity-50 inline-flex items-center gap-1.5"
+          title="Exporta a lista filtrada como CSV (abre no Excel/Sheets)"
+        >
+          📊 Exportar CSV ({sortedRows.length})
+        </button>
       </div>
 
       {/* Tabela */}
