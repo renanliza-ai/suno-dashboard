@@ -571,10 +571,135 @@ export default function TrackingPage() {
   const warnCount = pages.filter((p) => p.status === "warning").length;
   const errCount = pages.filter((p) => p.status === "error").length;
 
-  // UTM stats — varia levemente por propriedade.
-  const utmIssuesCount = utmRows.filter((r) => r.issues.length > 0).length;
-  const utmBaseHealth = Math.round(((utmRows.length - utmIssuesCount) / utmRows.length) * 100);
-  const utmHealthPct = Math.max(40, Math.min(99, utmBaseHealth - 8 + (seed % 16)));
+  // ============================================================
+  // ⚠ UTM AUDIT — agora REAL via /api/audit/utm (antes era mock fixo)
+  // Renan reportou que UTMs não mudavam ao trocar de property — era
+  // utmRows hardcoded em lib/data.ts. Substituído por fetch ao GA4.
+  // ============================================================
+  type UTMApiRow = {
+    source: string;
+    medium: string;
+    sessions: number;
+    users: number;
+    conversions: number;
+  };
+  type UTMApiCampaign = {
+    campaign: string;
+    source: string;
+    medium: string;
+    sessions: number;
+    conversions: number;
+  };
+  type UTMApiVariation = {
+    canonical: string;
+    variants: { name: string; sessions: number }[];
+    totalSessions: number;
+    variantCount: number;
+  };
+  type UTMApiData = {
+    totalSessions: number;
+    directNoneSessions: number;
+    directNonePct: number;
+    notSetSessions: number;
+    notSetPct: number;
+    sourceMedium: UTMApiRow[];
+    campaigns: UTMApiCampaign[];
+    sourceVariations: UTMApiVariation[];
+    mediumVariations: UTMApiVariation[];
+  };
+
+  const [utmApiData, setUtmApiData] = useState<UTMApiData | null>(null);
+  const [utmApiLoading, setUtmApiLoading] = useState(false);
+  const [utmApiError, setUtmApiError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Reset imediato ao trocar property
+    setUtmApiData(null);
+    setUtmApiError(null);
+    if (!useRealData || !selectedId) return;
+    const requestPropertyId = selectedId;
+    setUtmApiLoading(true);
+    const params = new URLSearchParams({
+      propertyId: selectedId,
+      days: "30",
+    });
+    fetch(`/api/audit/utm?${params.toString()}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d: { data?: UTMApiData; error?: string; propertyId?: string }) => {
+        // Anti race-condition
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
+        if (d.error) {
+          setUtmApiError(d.error);
+          return;
+        }
+        setUtmApiData(d.data || null);
+      })
+      .catch((e) => setUtmApiError((e as Error).message))
+      .finally(() => setUtmApiLoading(false));
+  }, [selectedId, useRealData]);
+
+  // Constrói UTMRow[] real a partir do response do endpoint + detecta issues localmente
+  type DetectedIssue = { field: string; type: "case-mismatch" | "separator" | "empty" | "missing"; message: string };
+  function detectIssues(source: string, medium: string, campaign: string): DetectedIssue[] {
+    const issues: DetectedIssue[] = [];
+    // Source vazio / not-set
+    if (!source || source === "(not set)") {
+      issues.push({ field: "source", type: "missing", message: "Source não definido — UTM perdida ou direct" });
+    } else {
+      // Case mismatch — tem maiúscula
+      if (source !== source.toLowerCase()) {
+        issues.push({ field: "source", type: "case-mismatch", message: `Use lowercase: '${source.toLowerCase()}'` });
+      }
+      // Underscore em vez de hífen
+      if (source.includes("_")) {
+        issues.push({ field: "source", type: "separator", message: `Padrão Suno usa hífen: '${source.replace(/_/g, "-")}'` });
+      }
+    }
+    // Medium
+    if (!medium || medium === "(none)" || medium === "(not set)") {
+      if (source !== "(direct)") {
+        issues.push({ field: "medium", type: "empty", message: "Medium ausente" });
+      }
+    } else {
+      if (medium !== medium.toLowerCase()) {
+        issues.push({ field: "medium", type: "case-mismatch", message: `Use lowercase: '${medium.toLowerCase()}'` });
+      }
+    }
+    // Campaign — só checa se tiver
+    if (campaign && campaign !== "(not set)" && campaign !== "(organic)" && campaign !== "(direct)") {
+      if (campaign.includes("_")) {
+        issues.push({ field: "campaign", type: "separator", message: `Padrão Suno usa hífen: '${campaign.replace(/_/g, "-")}'` });
+      }
+    }
+    return issues;
+  }
+
+  // Top 30 UTMs reais (combina source/medium com campanhas pra montar a tabela)
+  const realUtmRows: UTMRow[] = useMemo(() => {
+    if (!utmApiData) return [];
+    // Pega top campanhas (já tem source/medium/campaign + sessions/conversions)
+    return utmApiData.campaigns
+      .filter((c) => c.sessions > 0)
+      .slice(0, 30)
+      .map((c) => ({
+        source: c.source || "(not set)",
+        medium: c.medium || "(none)",
+        campaign: c.campaign || "(not set)",
+        sessions: c.sessions,
+        conversions: c.conversions,
+        issues: detectIssues(c.source, c.medium, c.campaign),
+      }));
+  }, [utmApiData]);
+
+  // Decide qual conjunto usar — real quando disponível, mock como fallback
+  const displayUtmRows: UTMRow[] = realUtmRows.length > 0 ? realUtmRows : utmRows;
+  const utmIssuesCount = displayUtmRows.filter((r) => r.issues.length > 0).length;
+  const utmBaseHealth = displayUtmRows.length > 0
+    ? Math.round(((displayUtmRows.length - utmIssuesCount) / displayUtmRows.length) * 100)
+    : 100;
+  const utmHealthPct = realUtmRows.length > 0
+    ? utmBaseHealth
+    : Math.max(40, Math.min(99, utmBaseHealth - 8 + (seed % 16))); // só usa seed pra mock fallback
 
   // ====================================================================
   // CAPI / Server-Side Tracking — saúde REAL via /api/capi/test que pinga
@@ -1169,14 +1294,36 @@ export default function TrackingPage() {
         {/* TAB: UTM Audit */}
         {tab === "utm" && (
           <div className="space-y-4">
+            {/* Badge de transparência: dado real vs mock */}
+            <div className="flex items-center gap-2 flex-wrap text-xs">
+              {realUtmRows.length > 0 ? (
+                <span className="font-semibold px-2 py-1 rounded-md bg-emerald-100 text-emerald-700 border border-emerald-200">
+                  ✓ Dado real GA4 · {realUtmRows.length} campanhas analisadas
+                </span>
+              ) : utmApiLoading ? (
+                <span className="font-semibold px-2 py-1 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
+                  Carregando UTMs do GA4...
+                </span>
+              ) : (
+                <span className="font-semibold px-2 py-1 rounded-md bg-amber-100 text-amber-700 border border-amber-200">
+                  ⚠ Mock (selecione property GA4 pra ver UTMs reais)
+                </span>
+              )}
+              {utmApiError && (
+                <span className="font-semibold px-2 py-1 rounded-md bg-red-100 text-red-700 border border-red-200">
+                  Erro: {utmApiError}
+                </span>
+              )}
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
                 <p className="text-xs text-[color:var(--muted-foreground)]">UTMs analisadas</p>
-                <p className="text-2xl font-bold mt-1">{utmRows.length}</p>
+                <p className="text-2xl font-bold mt-1">{displayUtmRows.length}</p>
               </div>
               <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
                 <p className="text-xs text-[color:var(--muted-foreground)]">Dentro do padrão</p>
-                <p className="text-2xl font-bold mt-1 text-emerald-600">{utmRows.length - utmIssuesCount}</p>
+                <p className="text-2xl font-bold mt-1 text-emerald-600">{displayUtmRows.length - utmIssuesCount}</p>
               </div>
               <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
                 <p className="text-xs text-[color:var(--muted-foreground)]">Com inconsistências</p>
@@ -1219,7 +1366,7 @@ export default function TrackingPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {utmRows.map((r, i) => {
+                  {displayUtmRows.map((r, i) => {
                     const hasIssues = r.issues.length > 0;
                     return (
                       <tr
