@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { motion } from "framer-motion";
 import {
   Eye,
@@ -44,6 +45,13 @@ type StageDef = {
   group: "antes" | "durante" | "depois";
 };
 
+// Aliases REVISADOS conforme taxonomia real da Suno (validado pelo Renan):
+// - view_cart é o evento próprio "adicionou ao carrinho" (não confundir com
+//   add_to_cart se ambos disparam — usamos o canônico view_cart)
+// - add_payment_info é APENAS isso (não inclui add_shipping_info que é
+//   evento separado e na Suno chega antes em alguns casos)
+// - Removemos aliases que cruzavam contagens entre stages diferentes
+//   (causava drops invertidos no funil — add_payment > begin_checkout, etc)
 const STAGES: StageDef[] = [
   {
     event: "page_view",
@@ -55,7 +63,7 @@ const STAGES: StageDef[] = [
   },
   {
     event: "view_item",
-    aliases: ["view_item", "view_product"],
+    aliases: ["view_item"],
     label: "Vê o produto",
     description: "Acessa página de produto",
     icon: ShoppingBag,
@@ -71,7 +79,7 @@ const STAGES: StageDef[] = [
   },
   {
     event: "begin_checkout",
-    aliases: ["begin_checkout", "checkout_start"],
+    aliases: ["begin_checkout"],
     label: "Inicia o checkout",
     description: "Preenche dados pessoais",
     icon: ClipboardList,
@@ -79,7 +87,7 @@ const STAGES: StageDef[] = [
   },
   {
     event: "add_payment_info",
-    aliases: ["add_payment_info", "add_shipping_info"],
+    aliases: ["add_payment_info"],
     label: "Preenche pagamento",
     description: "Informa cartão ou Pix",
     icon: CreditCard,
@@ -87,7 +95,7 @@ const STAGES: StageDef[] = [
   },
   {
     event: "purchase",
-    aliases: ["purchase", "purchase_success"],
+    aliases: ["purchase"],
     label: "Compra finalizada",
     description: "Conversão concluída",
     icon: CheckCircle2,
@@ -101,9 +109,15 @@ const GROUP_COLORS = {
   depois: { bg: "from-blue-600 to-blue-800", text: "text-white", bar: "#1e40af" },
 };
 
+type ScaleMode = "topOfFunnel" | "previousStage";
+
 export function PurchaseFunnelDiscovery() {
   const { data: overview } = useGA4Overview();
   const { data: conversions } = useGA4Conversions();
+  // Modo de visualização:
+  //   topOfFunnel: % do topo (default GA4 — barras pequenas porque page_view é gigante)
+  //   previousStage: % da etapa anterior (melhor pra ver gargalos)
+  const [scaleMode, setScaleMode] = useState<ScaleMode>("previousStage");
 
   // Constrói o map de eventos detectados (combina overview + funnel discoveredEvents)
   const eventCounts = new Map<string, number>();
@@ -177,6 +191,32 @@ export function PurchaseFunnelDiscovery() {
             Da primeira visita até a compra finalizada — eventos do enhanced ecommerce
           </p>
         </div>
+        {/* Toggle de escala — page_view é gigante, então 'previousStage' fica
+            muito mais legível pra ver os drops reais entre etapas */}
+        <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
+          <button
+            onClick={() => setScaleMode("previousStage")}
+            className={`text-[10px] font-semibold px-2.5 py-1 rounded-md transition ${
+              scaleMode === "previousStage"
+                ? "bg-white text-[#7c5cff] shadow-sm"
+                : "text-slate-500 hover:text-slate-700"
+            }`}
+            title="Cada barra mostra o % em relação à etapa anterior — melhor pra ver gargalos"
+          >
+            % vs etapa anterior
+          </button>
+          <button
+            onClick={() => setScaleMode("topOfFunnel")}
+            className={`text-[10px] font-semibold px-2.5 py-1 rounded-md transition ${
+              scaleMode === "topOfFunnel"
+                ? "bg-white text-[#7c5cff] shadow-sm"
+                : "text-slate-500 hover:text-slate-700"
+            }`}
+            title="Cada barra mostra o % em relação ao topo do funil (page_view) — escala global"
+          >
+            % do topo
+          </button>
+        </div>
       </div>
 
       {/* Header dos grupos: "antes / durante / depois" — estilo do print */}
@@ -239,15 +279,24 @@ export function PurchaseFunnelDiscovery() {
         {resolved.map((stage, i) => {
           const pctOfTop = top > 0 ? (stage.count / top) * 100 : 0;
           const prev = i > 0 ? resolved[i - 1] : stage;
+          const pctOfPrev = prev.count > 0 && i > 0 ? (stage.count / prev.count) * 100 : 100;
           const dropPct = prev.count > 0 && i > 0 ? (1 - stage.count / prev.count) * 100 : 0;
           const dropAbs = i > 0 ? Math.max(0, prev.count - stage.count) : 0;
           const color = GROUP_COLORS[stage.group];
           const isAusente = stage.count === 0;
           const isCritical = i > 0 && dropPct > 60;
 
+          // Width da barra depende do modo:
+          //   previousStage: % da etapa anterior (default — legível, mostra gargalos)
+          //   topOfFunnel: % do topo (escala global, mas pode ficar < 1%)
+          const barWidth =
+            scaleMode === "previousStage"
+              ? Math.max(2, pctOfPrev) // min 2% pra não sumir
+              : Math.max(2, pctOfTop);
+
           return (
             <motion.div
-              key={`bar-${stage.event}`}
+              key={`bar-${stage.event}-${scaleMode}`}
               initial={{ opacity: 0, x: -8 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.4 + i * 0.06 }}
@@ -266,8 +315,8 @@ export function PurchaseFunnelDiscovery() {
                 {!isAusente && (
                   <motion.div
                     initial={{ width: 0 }}
-                    animate={{ width: `${Math.max(2, pctOfTop)}%` }}
-                    transition={{ duration: 0.7, ease: "easeOut", delay: 0.5 + i * 0.08 }}
+                    animate={{ width: `${barWidth}%` }}
+                    transition={{ duration: 0.7, ease: "easeOut", delay: 0.2 + i * 0.06 }}
                     className="h-full rounded-md flex items-center justify-end px-3"
                     style={{ background: color.bar }}
                   >
@@ -275,6 +324,24 @@ export function PurchaseFunnelDiscovery() {
                       {formatNumber(stage.count)}
                     </span>
                   </motion.div>
+                )}
+                {/* Quando em modo previousStage, mostra o % em texto no fundo
+                    pra etapas pequenas que não têm espaço pra label na barra */}
+                {!isAusente && scaleMode === "previousStage" && barWidth < 25 && i > 0 && (
+                  <div className="absolute inset-0 flex items-center pl-2"
+                       style={{ paddingLeft: `calc(${barWidth}% + 6px)` }}>
+                    <span className="text-[10px] font-bold text-slate-600 tabular-nums">
+                      {formatNumber(stage.count)} · {pctOfPrev.toFixed(1)}% da etapa anterior
+                    </span>
+                  </div>
+                )}
+                {!isAusente && scaleMode === "topOfFunnel" && barWidth < 20 && i > 0 && (
+                  <div className="absolute inset-0 flex items-center"
+                       style={{ paddingLeft: `calc(${barWidth}% + 6px)` }}>
+                    <span className="text-[10px] font-bold text-slate-600 tabular-nums">
+                      {formatNumber(stage.count)}
+                    </span>
+                  </div>
                 )}
                 {isAusente && (
                   <div className="absolute inset-0 flex items-center px-3">
