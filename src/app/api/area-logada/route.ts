@@ -47,6 +47,12 @@ export async function GET(req: NextRequest) {
   // o time tenha registrado com nome diferente
   const subDimName =
     req.nextUrl.searchParams.get("subscriptionDim") || "subscription_status";
+  // Nome da custom dim de plano: Suno usa membership_name, Statusinvest usa plan_id
+  // Default tenta Suno; cliente pode passar planDim explicitamente
+  const planDimName = req.nextUrl.searchParams.get("planDim") || "membership_name";
+  // Nome da custom dim de data de fim — pra detectar quem está perto do vencimento
+  const endDateDimName =
+    req.nextUrl.searchParams.get("endDateDim") || "membership_end_date";
 
   const dateRange = { startDate, endDate };
 
@@ -159,6 +165,56 @@ export async function GET(req: NextRequest) {
     };
   })();
 
+  // ============================================================
+  // USER_LOGIN — queries dedicadas pro storytelling do topo da página.
+  // Estratégia: tentar 3 escopos pra cada custom dim (user/event/plain).
+  // Suno usa: subscription_status, membership_name, membership_end_date
+  // Statusinvest usa: membership_status, plan_id, (sem end_date populado)
+  // ============================================================
+  const tryLoginQuery = async (
+    dimName: string | null
+  ): Promise<{ data: { rows?: { dimensionValues?: { value: string }[]; metricValues?: { value: string }[] }[] } | null; error: string | null; usedDim: string | null }> => {
+    const variants = dimName
+      ? [`customUser:${dimName}`, `customEvent:${dimName}`, dimName]
+      : [null];
+    for (const v of variants) {
+      try {
+        const body: Parameters<typeof runReport>[1] = {
+          dateRanges: [dateRange],
+          metrics: [{ name: "eventCount" }, { name: "totalUsers" }],
+          dimensionFilter: {
+            filter: {
+              fieldName: "eventName",
+              stringFilter: { value: "user_login", matchType: "EXACT" as const },
+            },
+          },
+        };
+        if (v) {
+          body.dimensions = [{ name: v }];
+          body.orderBys = [{ metric: { metricName: "eventCount" }, desc: true }];
+          body.limit = 50;
+        }
+        const r = await runReport(propertyId, body);
+        if (r.error) continue;
+        const rows = r.data?.rows || [];
+        // Se tentou com dim e veio vazio, tenta próximo escopo
+        if (v && rows.length === 0) continue;
+        return { data: r.data, error: null, usedDim: v };
+      } catch {
+        continue;
+      }
+    }
+    return { data: null, error: `nenhum scope retornou dados pra ${dimName || "totals"}`, usedDim: null };
+  };
+
+  // 4 queries paralelas para o storytelling de user_login
+  const loginPromises = Promise.all([
+    tryLoginQuery(null), // total de logins (sem breakdown)
+    tryLoginQuery(planDimName), // logins por plano
+    tryLoginQuery(subDimName), // logins por status
+    tryLoginQuery(endDateDimName), // logins por data de vencimento
+  ]);
+
   const [
     onboardingTotalRes,
     onboardingMonthlyRes,
@@ -263,6 +319,10 @@ export async function GET(req: NextRequest) {
     }),
     subscriptionStatusPromise,
   ]);
+
+  // Aguarda as queries de user_login em paralelo
+  const [loginTotalRes, loginByPlanRes, loginByStatusRes, loginByEndDateRes] =
+    await loginPromises;
 
   const readTotal = (
     res: {
@@ -403,8 +463,125 @@ export async function GET(req: NextRequest) {
         rowsFiltered: subRes.rowsFiltered,
       };
 
+  // ============================================================
+  // USER_LOGIN — processa as 4 queries de storytelling do topo
+  // ============================================================
+
+  // Total geral de logins (data tem só rows; runReport sem dimensão volta em rows[0])
+  const totalLoginEvents = Number(
+    loginTotalRes.data?.rows?.[0]?.metricValues?.[0]?.value || 0
+  );
+  const totalLoginUsers = Number(
+    loginTotalRes.data?.rows?.[0]?.metricValues?.[1]?.value || 0
+  );
+
+  // Breakdown por plano
+  const loginByPlan = (loginByPlanRes.data?.rows || [])
+    .map((r) => ({
+      plan: r.dimensionValues?.[0]?.value || "(sem plano)",
+      events: Number(r.metricValues?.[0]?.value || 0),
+      users: Number(r.metricValues?.[1]?.value || 0),
+    }))
+    .filter((r) => r.plan && r.plan !== "(not set)" && r.plan !== "(other)");
+
+  // Breakdown por status (active, pending, canceled, free, none, etc)
+  const loginByStatus = (loginByStatusRes.data?.rows || [])
+    .map((r) => ({
+      status: r.dimensionValues?.[0]?.value || "(sem status)",
+      events: Number(r.metricValues?.[0]?.value || 0),
+      users: Number(r.metricValues?.[1]?.value || 0),
+    }))
+    .filter((r) => r.status && r.status !== "(not set)" && r.status !== "(other)");
+
+  // Quem está perto do vencimento (membership_end_date dentro dos próximos 30/60/90d)
+  // Filtra apenas datas válidas ISO YYYY-MM-DD ou similar
+  const today = new Date();
+  const in30d = new Date(today);
+  in30d.setDate(today.getDate() + 30);
+  const in60d = new Date(today);
+  in60d.setDate(today.getDate() + 60);
+  const in90d = new Date(today);
+  in90d.setDate(today.getDate() + 90);
+
+  const endDateRows = (loginByEndDateRes.data?.rows || [])
+    .map((r) => {
+      const dateStr = r.dimensionValues?.[0]?.value || "";
+      // Tenta parsear ISO. Suno passa "2025-11-06", Statusinvest passa
+      // "0001-01-01T00:00:00+00:00" (data inválida) que vamos filtrar.
+      let parsedDate: Date | null = null;
+      if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+        const d = new Date(dateStr);
+        if (!isNaN(d.getTime()) && d.getFullYear() > 1900) parsedDate = d;
+      }
+      return {
+        rawDate: dateStr,
+        parsedDate,
+        events: Number(r.metricValues?.[0]?.value || 0),
+        users: Number(r.metricValues?.[1]?.value || 0),
+      };
+    })
+    .filter((r) => r.parsedDate !== null);
+
+  const expiringIn30d = endDateRows
+    .filter((r) => r.parsedDate! >= today && r.parsedDate! <= in30d)
+    .reduce(
+      (acc, r) => ({ events: acc.events + r.events, users: acc.users + r.users }),
+      { events: 0, users: 0 }
+    );
+  const expiringIn60d = endDateRows
+    .filter((r) => r.parsedDate! >= today && r.parsedDate! <= in60d)
+    .reduce(
+      (acc, r) => ({ events: acc.events + r.events, users: acc.users + r.users }),
+      { events: 0, users: 0 }
+    );
+  const expiringIn90d = endDateRows
+    .filter((r) => r.parsedDate! >= today && r.parsedDate! <= in90d)
+    .reduce(
+      (acc, r) => ({ events: acc.events + r.events, users: acc.users + r.users }),
+      { events: 0, users: 0 }
+    );
+  const expired = endDateRows
+    .filter((r) => r.parsedDate! < today)
+    .reduce(
+      (acc, r) => ({ events: acc.events + r.events, users: acc.users + r.users }),
+      { events: 0, users: 0 }
+    );
+
+  const userLogin = {
+    totalEvents: totalLoginEvents,
+    totalUsers: totalLoginUsers,
+    byPlan: loginByPlan,
+    byStatus: loginByStatus,
+    expiring: {
+      in30d: expiringIn30d,
+      in60d: expiringIn60d,
+      in90d: expiringIn90d,
+      expired,
+    },
+    usedDims: {
+      total: loginTotalRes.usedDim || null,
+      plan: loginByPlanRes.usedDim || null,
+      status: loginByStatusRes.usedDim || null,
+      endDate: loginByEndDateRes.usedDim || null,
+    },
+    errors: {
+      total: loginTotalRes.error,
+      plan: loginByPlanRes.error,
+      status: loginByStatusRes.error,
+      endDate: loginByEndDateRes.error,
+    },
+    // Pra UI explicar o que aconteceu
+    notes: {
+      planDimRequested: planDimName,
+      statusDimRequested: subDimName,
+      endDateDimRequested: endDateDimName,
+      hint: "user_login event capturado via dataLayer. Breakdowns requerem custom dimensions registradas no GA4 Admin.",
+    },
+  };
+
   return NextResponse.json(
     {
+      propertyId, // anti race-condition
       query: { propertyId, startDate, endDate, pagePath, hostname },
       onboarding,
       monthly,
@@ -422,9 +599,10 @@ export async function GET(req: NextRequest) {
       affinity,
       audienceMix,
       subscriptionStatus,
+      userLogin, // novo bloco: storytelling de quem loga
       caveat:
         "Análise paralela: blocos Onboarding e Compras NÃO são cruzados 1:1 (limitação GA4 sem User-ID). Demographics/Affinity vêm de Google Signals e cobrem ~30-60% dos users.",
     },
-    { headers: { "Cache-Control": "private, max-age=900" } }
+    { headers: { "Cache-Control": "private, max-age=300" } }
   );
 }

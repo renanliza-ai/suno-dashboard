@@ -81,6 +81,36 @@ type AreaLogadaAnalysis = {
     rowsGlobal: { status: string; users: number }[];
     rowsFiltered: { status: string; users: number }[];
   };
+  userLogin?: {
+    totalEvents: number;
+    totalUsers: number;
+    byPlan: { plan: string; events: number; users: number }[];
+    byStatus: { status: string; events: number; users: number }[];
+    expiring: {
+      in30d: { events: number; users: number };
+      in60d: { events: number; users: number };
+      in90d: { events: number; users: number };
+      expired: { events: number; users: number };
+    };
+    usedDims: {
+      total: string | null;
+      plan: string | null;
+      status: string | null;
+      endDate: string | null;
+    };
+    errors: {
+      total: string | null;
+      plan: string | null;
+      status: string | null;
+      endDate: string | null;
+    };
+    notes: {
+      planDimRequested: string;
+      statusDimRequested: string;
+      endDateDimRequested: string;
+      hint: string;
+    };
+  };
   caveat: string;
 };
 
@@ -95,14 +125,56 @@ function formatBRL(v: number): string {
 const PLAN_COLORS = ["#7c5cff", "#10b981", "#f59e0b", "#3b82f6", "#ec4899", "#8b5cf6", "#14b8a6"];
 const AGE_ORDER = ["18-24", "25-34", "35-44", "45-54", "55-64", "65+"];
 
+/**
+ * Mapeia o nome da property pro hostname da NAI correspondente.
+ * Renan reportou: hostname ficava fixo em investidor.suno.com.br mesmo
+ * trocando para Statusinvest, que tem sua própria área logada.
+ */
+function getNAIHostForProperty(displayName: string | null | undefined): string {
+  const name = (displayName || "").toLowerCase();
+  if (name.includes("statusinvest")) return "investidor.statusinvest.com.br";
+  // Suno Research, Suno Advisory, Suno Asset etc compartilham
+  return "investidor.suno.com.br";
+}
+
+/**
+ * Mapeia o nome da property pro nome da custom dim de subscription.
+ * Renan confirmou no dataLayer:
+ *  - Statusinvest usa membership_status
+ *  - Suno Research/Advisory usa subscription_status
+ */
+function getSubscriptionDimForProperty(displayName: string | null | undefined): string {
+  const name = (displayName || "").toLowerCase();
+  if (name.includes("statusinvest")) return "membership_status";
+  return "subscription_status";
+}
+
 export default function AreaLogadaPage() {
-  const { selectedId } = useGA4();
+  const { selectedId, selected } = useGA4();
   const today = new Date().toISOString().slice(0, 10);
   const [startDate, setStartDate] = useState("2025-11-01");
   const [endDate, setEndDate] = useState(today);
   const [pagePath, setPagePath] = useState("/onboarding");
-  const [hostname, setHostname] = useState("investidor.suno.com.br");
-  const [subscriptionDim, setSubscriptionDim] = useState("subscription_status");
+  // Hostname e dim agora são auto-derivados do nome da property, mas
+  // o user pode editar manualmente se quiser sobrescrever
+  const [hostname, setHostname] = useState(() => getNAIHostForProperty(selected?.displayName));
+  const [subscriptionDim, setSubscriptionDim] = useState(() =>
+    getSubscriptionDimForProperty(selected?.displayName)
+  );
+  // Quando a property muda, atualiza hostname e subscriptionDim automaticamente
+  // (mas só se o user não tiver editado manualmente — usamos flag pra detectar)
+  const [hostnameTouched, setHostnameTouched] = useState(false);
+  const [subDimTouched, setSubDimTouched] = useState(false);
+
+  useEffect(() => {
+    if (!hostnameTouched) {
+      setHostname(getNAIHostForProperty(selected?.displayName));
+    }
+    if (!subDimTouched) {
+      setSubscriptionDim(getSubscriptionDimForProperty(selected?.displayName));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.displayName]);
   const [data, setData] = useState<AreaLogadaAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -186,7 +258,10 @@ export default function AreaLogadaPage() {
           <input
             type="text"
             value={hostname}
-            onChange={(e) => setHostname(e.target.value)}
+            onChange={(e) => {
+              setHostname(e.target.value);
+              setHostnameTouched(true);
+            }}
             className="mt-1 w-full px-3 py-2 text-sm font-mono rounded-lg border border-[color:var(--border)] focus:outline-none focus:border-emerald-500"
           />
         </div>
@@ -256,6 +331,18 @@ export default function AreaLogadaPage() {
 
       {data && !loading && (
         <div className="space-y-6">
+          {/* ============================================================
+              STORYTELLING DO TOPO — 4 KPIs baseados no evento user_login
+              dispatched via dataLayer. Pedido do Renan pra contar a
+              história "quem está logando" antes da análise de onboarding.
+              ============================================================ */}
+          {data.userLogin && (
+            <UserLoginStorytelling
+              data={data.userLogin}
+              propertyName={data.query.hostname.includes("statusinvest") ? "Statusinvest" : "Suno"}
+            />
+          )}
+
           {/* Onboarding KPIs */}
           <section>
             <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-700 mb-3 flex items-center gap-2">
@@ -458,7 +545,10 @@ export default function AreaLogadaPage() {
                 <input
                   type="text"
                   value={subscriptionDim}
-                  onChange={(e) => setSubscriptionDim(e.target.value)}
+                  onChange={(e) => {
+                    setSubscriptionDim(e.target.value);
+                    setSubDimTouched(true);
+                  }}
                   onBlur={fetchAnalysis}
                   className="px-2 py-1 text-xs font-mono rounded-md border border-[color:var(--border)] focus:outline-none focus:border-emerald-500 w-[180px]"
                   placeholder="subscription_status"
@@ -479,6 +569,293 @@ export default function AreaLogadaPage() {
         </div>
       )}
     </main>
+  );
+}
+
+/**
+ * Bloco de storytelling no TOPO da área logada — 4 cards baseados no
+ * evento user_login disparado via dataLayer:
+ *   1. Logins totais (eventos + users únicos)
+ *   2. Por plano (membership_name no Suno, plan_id no Statusinvest)
+ *   3. Por status (subscription_status no Suno, membership_status no Statusinvest)
+ *   4. Perto do vencimento (membership_end_date dentro de 30/60/90d)
+ */
+type UserLoginData = NonNullable<AreaLogadaAnalysis["userLogin"]>;
+
+function UserLoginStorytelling({
+  data,
+  propertyName,
+}: {
+  data: UserLoginData;
+  propertyName: string;
+}) {
+  // Determina health geral do bloco — se total funcionou, mostra; se não, alert
+  const hasTotalData = data.totalEvents > 0;
+  const hasPlanData = data.byPlan.length > 0;
+  const hasStatusData = data.byStatus.length > 0;
+  const hasExpiringData =
+    data.expiring.in30d.users +
+      data.expiring.in60d.users +
+      data.expiring.in90d.users +
+      data.expiring.expired.users >
+    0;
+
+  if (!hasTotalData) {
+    return (
+      <section>
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-700 mb-3 flex items-center gap-2">
+          <Lock size={14} className="text-emerald-600" />
+          Quem está logando — evento <code className="text-xs bg-slate-100 px-1 rounded">user_login</code>
+        </h2>
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 text-sm text-amber-900 flex items-start gap-2">
+          <AlertCircle size={16} className="mt-0.5 shrink-0" />
+          <div>
+            <strong>Evento user_login não encontrado no GA4 dessa property.</strong>
+            <p className="text-xs mt-1">
+              Esperado: dataLayer.push({"{"}event: &apos;user_login&apos;, ...{"}"}) dispatched no momento do login.
+              Verifique no GTM se a tag GA4 Event está mapeando esse evento corretamente.
+            </p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  // Cores semânticas por status conhecido
+  const statusColor: Record<string, string> = {
+    active: "#10b981",
+    ativo: "#10b981",
+    suno_one: "#10b981",
+    "suno one": "#10b981",
+    pending: "#f59e0b",
+    pendente: "#f59e0b",
+    trial: "#3b82f6",
+    canceled: "#dc2626",
+    cancelled: "#dc2626",
+    cancelado: "#dc2626",
+    expired: "#64748b",
+    expirado: "#64748b",
+    free: "#94a3b8",
+    none: "#94a3b8",
+  };
+
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+          <Lock size={14} className="text-emerald-600" />
+          Quem está logando — evento <code className="text-xs bg-slate-100 px-1 rounded normal-case">user_login</code>
+        </h2>
+        <span className="text-[10px] text-emerald-700 font-mono bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+          ✓ {propertyName} · dataLayer ativo
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* CARD 1 — Logins totais */}
+        <div className="bg-white rounded-2xl border-2 border-emerald-200 p-5 relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-100 rounded-full -translate-y-12 translate-x-12 opacity-50" />
+          <div className="relative">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[10px] uppercase tracking-wider text-emerald-700 font-bold">
+                Logins no período
+              </div>
+              <div className="w-7 h-7 rounded-lg bg-emerald-100 flex items-center justify-center">
+                <Lock size={14} className="text-emerald-700" />
+              </div>
+            </div>
+            <div className="text-3xl font-bold tabular-nums text-emerald-700">
+              {formatNumber(data.totalUsers)}
+            </div>
+            <div className="text-[11px] text-slate-500 mt-0.5">usuários únicos</div>
+            <div className="mt-2 pt-2 border-t border-emerald-100 text-[10px] text-slate-600">
+              <strong>{formatNumber(data.totalEvents)}</strong> eventos disparados
+              {data.totalEvents > data.totalUsers && (
+                <span className="text-slate-400 ml-1">
+                  (~{(data.totalEvents / data.totalUsers).toFixed(1)}x/user)
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* CARD 2 — Por plano */}
+        <div className="bg-white rounded-2xl border border-[color:var(--border)] p-5">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+              Perfil de assinatura
+            </div>
+            <div className="w-7 h-7 rounded-lg bg-violet-100 flex items-center justify-center">
+              <Sparkles size={14} className="text-violet-700" />
+            </div>
+          </div>
+          {hasPlanData ? (
+            <div className="space-y-1.5 mt-2">
+              {data.byPlan.slice(0, 4).map((p, i) => {
+                const totalUsers = data.byPlan.reduce((s, x) => s + x.users, 0);
+                const pct = totalUsers > 0 ? (p.users / totalUsers) * 100 : 0;
+                return (
+                  <div key={i}>
+                    <div className="flex justify-between text-[11px] mb-0.5">
+                      <span className="font-mono truncate" title={p.plan}>
+                        {p.plan.length > 18 ? p.plan.slice(0, 17) + "…" : p.plan}
+                      </span>
+                      <span className="font-bold tabular-nums">{formatNumber(p.users)}</span>
+                    </div>
+                    <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-violet-500 to-purple-500 rounded-full"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="text-[9px] text-slate-400 font-mono mt-1">
+                via dim {data.usedDims.plan || data.notes.planDimRequested}
+              </div>
+            </div>
+          ) : (
+            <div className="text-[11px] text-slate-500 mt-2">
+              Custom dim <code className="bg-slate-100 px-1 rounded">{data.notes.planDimRequested}</code> não
+              encontrada. Registre no GA4 Admin.
+            </div>
+          )}
+        </div>
+
+        {/* CARD 3 — Por status */}
+        <div className="bg-white rounded-2xl border border-[color:var(--border)] p-5">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+              Situação do plano
+            </div>
+            <div className="w-7 h-7 rounded-lg bg-amber-100 flex items-center justify-center">
+              <CheckCircle2 size={14} className="text-amber-700" />
+            </div>
+          </div>
+          {hasStatusData ? (
+            <div className="space-y-1.5 mt-2">
+              {data.byStatus.slice(0, 4).map((s, i) => {
+                const totalUsers = data.byStatus.reduce((sum, x) => sum + x.users, 0);
+                const pct = totalUsers > 0 ? (s.users / totalUsers) * 100 : 0;
+                const color = statusColor[s.status.toLowerCase()] || "#64748b";
+                return (
+                  <div key={i}>
+                    <div className="flex justify-between text-[11px] mb-0.5">
+                      <span className="font-mono truncate flex items-center gap-1.5" title={s.status}>
+                        <span
+                          className="w-1.5 h-1.5 rounded-full inline-block"
+                          style={{ background: color }}
+                        />
+                        {s.status.length > 16 ? s.status.slice(0, 15) + "…" : s.status}
+                      </span>
+                      <span className="font-bold tabular-nums">
+                        {pct.toFixed(0)}%
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full"
+                        style={{ width: `${pct}%`, background: color }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="text-[9px] text-slate-400 font-mono mt-1">
+                via dim {data.usedDims.status || data.notes.statusDimRequested}
+              </div>
+            </div>
+          ) : (
+            <div className="text-[11px] text-slate-500 mt-2">
+              Custom dim <code className="bg-slate-100 px-1 rounded">{data.notes.statusDimRequested}</code> não
+              encontrada. Registre no GA4 Admin.
+            </div>
+          )}
+        </div>
+
+        {/* CARD 4 — Perto do vencimento */}
+        <div
+          className={`bg-white rounded-2xl border-2 p-5 ${
+            data.expiring.in30d.users > 0 ? "border-red-200" : "border-[color:var(--border)]"
+          }`}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+              Risco de churn
+            </div>
+            <div
+              className={`w-7 h-7 rounded-lg flex items-center justify-center ${
+                data.expiring.in30d.users > 0 ? "bg-red-100" : "bg-slate-100"
+              }`}
+            >
+              <Clock
+                size={14}
+                className={data.expiring.in30d.users > 0 ? "text-red-700" : "text-slate-500"}
+              />
+            </div>
+          </div>
+          {hasExpiringData ? (
+            <div className="space-y-1 mt-2 text-[11px]">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-600">Vence em 30d:</span>
+                <span className="font-bold text-red-700 tabular-nums">
+                  {formatNumber(data.expiring.in30d.users)} users
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-600">31-60d:</span>
+                <span className="font-bold text-amber-700 tabular-nums">
+                  {formatNumber(Math.max(0, data.expiring.in60d.users - data.expiring.in30d.users))} users
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-600">61-90d:</span>
+                <span className="font-bold text-amber-600 tabular-nums">
+                  {formatNumber(Math.max(0, data.expiring.in90d.users - data.expiring.in60d.users))} users
+                </span>
+              </div>
+              {data.expiring.expired.users > 0 && (
+                <div className="flex justify-between items-center pt-1 mt-1 border-t border-slate-100">
+                  <span className="text-slate-500">Já expirado:</span>
+                  <span className="font-bold text-slate-500 tabular-nums">
+                    {formatNumber(data.expiring.expired.users)} users
+                  </span>
+                </div>
+              )}
+              <div className="text-[9px] text-slate-400 font-mono mt-1.5">
+                via dim {data.usedDims.endDate || data.notes.endDateDimRequested}
+              </div>
+            </div>
+          ) : (
+            <div className="text-[11px] text-slate-500 mt-2">
+              Sem datas válidas de vencimento (ou dim{" "}
+              <code className="bg-slate-100 px-1 rounded">{data.notes.endDateDimRequested}</code> não
+              encontrada/vazia). Statusinvest costuma passar 0001-01-01 — verifique se{" "}
+              <code className="bg-slate-100 px-1 rounded">membership_end_date</code> está sendo populada
+              com data real.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Diagnóstico rápido — quando alguma dim falhou */}
+      {(!hasPlanData || !hasStatusData || !hasExpiringData) && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-[11px] text-blue-900 flex items-start gap-2">
+          <AlertCircle size={12} className="mt-0.5 shrink-0" />
+          <div>
+            <strong>Dimensões esperadas no dataLayer:</strong>{" "}
+            <code className="bg-blue-100 px-1 rounded">{data.notes.planDimRequested}</code>{" "}
+            (plano),{" "}
+            <code className="bg-blue-100 px-1 rounded">{data.notes.statusDimRequested}</code>{" "}
+            (status),{" "}
+            <code className="bg-blue-100 px-1 rounded">{data.notes.endDateDimRequested}</code>{" "}
+            (vencimento). Pra cada uma faltante, registre no GA4 Admin → Custom definitions com escopo
+            User. Aguarda 24-48h pra começar a aparecer dado.
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
