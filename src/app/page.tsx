@@ -4,8 +4,10 @@ import { Header } from "@/components/header";
 import { KpiCard } from "@/components/kpi-card";
 import { TrendChart } from "@/components/trend-chart";
 import { PagesChart } from "@/components/pages-chart";
-import { FunnelChart } from "@/components/funnel-chart";
-import { EventsChart } from "@/components/events-chart";
+// FunnelChart e EventsChart removidos do dashboard a pedido do Renan
+// — informação ficou redundante com DualJourneys (que mostra funis
+// detalhados Site + LP) e Event Explorer em /eventos (que faz a
+// análise interativa com dimensões/métricas).
 import { JourneyChart } from "@/components/journey-chart";
 import { DualJourneys } from "@/components/dual-journeys";
 import { AttributionToggle } from "@/components/attribution-toggle";
@@ -122,25 +124,6 @@ export default function Home() {
           )}
         >
           <PagesChart />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-        <div
-          className={cn(
-            "rounded-2xl transition-all",
-            highlight === "events" && "ring-4 ring-[#7c5cff]/40"
-          )}
-        >
-          <EventsChart />
-        </div>
-        <div
-          className={cn(
-            "rounded-2xl transition-all",
-            highlight === "funnel" && "ring-4 ring-[#7c5cff]/40"
-          )}
-        >
-          <FunnelChart />
         </div>
       </div>
 
