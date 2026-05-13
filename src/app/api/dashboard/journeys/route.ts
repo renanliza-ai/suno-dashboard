@@ -33,33 +33,46 @@ type JourneyStep = {
   phase: "descoberta" | "captacao" | "ativacao" | "compra" | "retencao";
 };
 
+// SITE_JOURNEY mapeado a partir dos eventos REAIS observados no
+// dataLayer (Renan validou via datalayer|checker em maio/2026):
+//
+//   1. page_view: visita ao site (suno.com.br + login.suno.com.br)
+//   2. lead_create_account: cadastro CONCLUÍDO em login.suno.com.br
+//      (dispara APÓS clicar 'Criar senha' — não no início do fluxo)
+//   3. user_login: login na área logada (investidor.suno.com.br)
+//      — primeiro evento ao chegar na NAI
+//   4. onboarding_visualizacao_step: primeira tela de onboarding
+//      (investidor.suno.com.br/onboarding)
+//
+// O 'sign_up' antigo foi removido — não existe na taxonomia real
+// da Suno; lead_create_account cumpre essa função.
 const SITE_JOURNEY: JourneyStep[] = [
   {
     event: "page_view",
     aliases: ["page_view", "pageview", "session_start"],
     label: "Visita o site",
-    description: "Entrada via orgânico/direto",
+    description: "Acesso ao suno.com.br ou login.suno.com.br",
     phase: "descoberta",
   },
   {
     event: "lead_create_account",
-    aliases: ["lead_create_account", "sign_up_start"],
-    label: "Inicia cadastro",
-    description: "Começa a criar conta na Suno",
+    aliases: ["lead_create_account"],
+    label: "Cria conta",
+    description: "Conclui cadastro (define senha)",
     phase: "captacao",
-  },
-  {
-    event: "sign_up",
-    aliases: ["sign_up", "account_created", "user_signup"],
-    label: "Conta criada",
-    description: "Cadastro concluído com sucesso",
-    phase: "ativacao",
   },
   {
     event: "user_login",
     aliases: ["user_login", "login"],
-    label: "Loga na área",
-    description: "Acessa a área logada (NAI)",
+    label: "Acessa área logada",
+    description: "Primeiro login na NAI (investidor.suno.com.br)",
+    phase: "ativacao",
+  },
+  {
+    event: "onboarding_visualizacao_step",
+    aliases: ["onboarding_visualizacao_step", "onboarding_step"],
+    label: "Inicia onboarding",
+    description: "Vê primeira tela de configuração de perfil",
     phase: "retencao",
   },
 ];
@@ -253,8 +266,13 @@ async function fetchJourney(
  * Por isso retornamos array de patterns que viram OR no GA4 filter.
  */
 function getHostsForProperty(propertyName: string | null): {
-  siteHost: string;
-  siteHostMode: "EXACT" | "CONTAINS";
+  // SITE journey: atravessa múltiplos hostnames próprios
+  // 1) suno.com.br / www.suno.com.br (entrada)
+  // 2) login.suno.com.br (cadastro)
+  // 3) investidor.suno.com.br (área logada + onboarding)
+  // Excluímos lp.* e checkout.* (são da outra jornada)
+  siteHosts: { value: string; mode: "EXACT" | "CONTAINS" | "BEGINS_WITH" }[];
+  siteHostsLabel: string;
   // LP journey: lista de hosts onde acontece o funil (LP + checkout)
   lpHosts: { value: string; mode: "CONTAINS" | "BEGINS_WITH" }[];
   lpHostsLabel: string;
@@ -262,8 +280,13 @@ function getHostsForProperty(propertyName: string | null): {
   const name = (propertyName || "").toLowerCase();
   if (name.includes("statusinvest")) {
     return {
-      siteHost: "statusinvest.com.br",
-      siteHostMode: "CONTAINS",
+      siteHosts: [
+        { value: "statusinvest.com.br", mode: "EXACT" },
+        { value: "www.statusinvest.com.br", mode: "EXACT" },
+        { value: "login.statusinvest", mode: "CONTAINS" },
+        { value: "investidor.statusinvest", mode: "CONTAINS" },
+      ],
+      siteHostsLabel: "statusinvest.com.br + login.* + investidor.*",
       lpHosts: [
         { value: "lp", mode: "BEGINS_WITH" }, // lp.statusinvest, lp2.statusinvest
         { value: "checkout.statusinvest", mode: "CONTAINS" },
@@ -273,8 +296,13 @@ function getHostsForProperty(propertyName: string | null): {
   }
   // Default: Suno
   return {
-    siteHost: "suno.com.br",
-    siteHostMode: "CONTAINS", // pega www.suno.com.br também
+    siteHosts: [
+      { value: "suno.com.br", mode: "EXACT" },
+      { value: "www.suno.com.br", mode: "EXACT" },
+      { value: "login.suno", mode: "CONTAINS" }, // login.suno.com.br (cadastro)
+      { value: "investidor.suno", mode: "CONTAINS" }, // investidor.suno.com.br (NAI)
+    ],
+    siteHostsLabel: "suno.com.br + login.* + investidor.*",
     lpHosts: [
       { value: "lp", mode: "BEGINS_WITH" }, // pega lp.suno, lp2.suno, etc
       { value: "checkout.suno", mode: "CONTAINS" }, // checkout.suno.com.br
@@ -310,14 +338,12 @@ export async function GET(req: NextRequest) {
 
   const hosts = getHostsForProperty(propertyName);
 
-  // 2 jornadas em paralelo
-  // Para o SITE: queremos hostName == "suno.com.br" OU "www.suno.com.br" — NÃO os lp.*
-  // Como o GA4 filter não suporta NOT facilmente, fazemos CONTAINS no domínio raiz
-  // mas filtramos lp.* depois client-side. Pra simplificar, usamos BEGINS_WITH pra evitar lp.*
+  // 2 jornadas em paralelo, cada uma com lista de hosts permitidos (OR)
   const [siteResult, lpResult] = await Promise.all([
-    // Site: hosts que NÃO começam com "lp." — usamos suno.com.br ou statusinvest.com.br
-    // (com subtração de lp.* feita por sub-query)
-    fetchSiteJourney(propertyId, finalStart, finalEnd, hosts.siteHost),
+    // Site: atravessa suno.com.br → login.suno.com.br → investidor.suno.com.br
+    // (todos hostnames próprios da Suno, exceto lp.* e checkout.* que são da
+    // outra jornada). Listamos explicitamente — sem subtração.
+    fetchJourney(propertyId, finalStart, finalEnd, SITE_JOURNEY, hosts.siteHosts),
     // LP: cobre TANTO o tráfego que entra na LP QUANTO o que migra pro
     // checkout.suno.com.br no momento da compra (sistema próprio)
     fetchJourney(propertyId, finalStart, finalEnd, LP_JOURNEY, hosts.lpHosts),
@@ -331,7 +357,15 @@ export async function GET(req: NextRequest) {
       site: {
         title: "Jornada do Site",
         description: "Todos os canais → cadastro → área logada",
-        hostFilter: hosts.siteHost,
+        hostFilter: hosts.siteHostsLabel,
+        // Marca em qual host cada etapa acontece — mostra transições
+        // suno → login.suno → investidor.suno
+        hostMap: {
+          page_view: "site",
+          lead_create_account: "login",
+          user_login: "investidor",
+          onboarding_visualizacao_step: "investidor",
+        },
         steps: siteResult.steps,
         totalPageViews: siteResult.totalPageViews,
         error: siteResult.error,
@@ -359,135 +393,3 @@ export async function GET(req: NextRequest) {
   );
 }
 
-/**
- * Site journey é especial — precisa EXCLUIR hostnames que começam com "lp."
- * porque o tráfego deles é capturado na journey de landing pages.
- * Estratégia: 2 sub-queries (todos os hosts da property + lp.*) e subtraímos.
- */
-async function fetchSiteJourney(
-  propertyId: string,
-  startDate: string,
-  endDate: string,
-  siteHost: string
-): Promise<{ steps: ResolvedStep[]; totalPageViews: number; error: string | null }> {
-  const dateRange = { startDate, endDate };
-  const allAliases = Array.from(new Set(SITE_JOURNEY.flatMap((s) => s.aliases)));
-
-  try {
-    // Query 1: TODOS os hosts da property que contenham o siteHost (suno.com.br)
-    const [totalRes, lpRes] = await Promise.all([
-      runReport(propertyId, {
-        dateRanges: [dateRange],
-        dimensions: [{ name: "eventName" }],
-        metrics: [{ name: "eventCount" }],
-        dimensionFilter: {
-          andGroup: {
-            expressions: [
-              {
-                filter: {
-                  fieldName: "hostName",
-                  stringFilter: { value: siteHost, matchType: "CONTAINS" },
-                },
-              },
-              {
-                filter: {
-                  fieldName: "eventName",
-                  inListFilter: { values: allAliases },
-                },
-              },
-            ],
-          },
-        },
-        limit: 200,
-      }),
-      // Query 2: APENAS hosts que começam com "lp." (pra subtrair)
-      runReport(propertyId, {
-        dateRanges: [dateRange],
-        dimensions: [{ name: "eventName" }],
-        metrics: [{ name: "eventCount" }],
-        dimensionFilter: {
-          andGroup: {
-            expressions: [
-              {
-                filter: {
-                  fieldName: "hostName",
-                  stringFilter: { value: "lp", matchType: "BEGINS_WITH" },
-                },
-              },
-              {
-                filter: {
-                  fieldName: "eventName",
-                  inListFilter: { values: allAliases },
-                },
-              },
-            ],
-          },
-        },
-        limit: 200,
-      }),
-    ]);
-
-    if (totalRes.error) {
-      return { steps: [], totalPageViews: 0, error: totalRes.error };
-    }
-
-    const totalCounts = new Map<string, number>();
-    for (const r of totalRes.data?.rows || []) {
-      totalCounts.set(
-        r.dimensionValues?.[0]?.value || "",
-        Number(r.metricValues?.[0]?.value || 0)
-      );
-    }
-    const lpCounts = new Map<string, number>();
-    for (const r of lpRes.data?.rows || []) {
-      lpCounts.set(
-        r.dimensionValues?.[0]?.value || "",
-        Number(r.metricValues?.[0]?.value || 0)
-      );
-    }
-
-    // Site = total - lp
-    const siteCounts = new Map<string, number>();
-    for (const [name, count] of totalCounts) {
-      siteCounts.set(name, Math.max(0, count - (lpCounts.get(name) || 0)));
-    }
-
-    const resolved: ResolvedStep[] = SITE_JOURNEY.map((step) => {
-      let bestAlias: string | null = null;
-      let bestCount = 0;
-      for (const alias of step.aliases) {
-        const c = siteCounts.get(alias) || 0;
-        if (c > bestCount) {
-          bestAlias = alias;
-          bestCount = c;
-        }
-      }
-      return {
-        event: step.event,
-        matchedAlias: bestAlias,
-        label: step.label,
-        description: step.description,
-        phase: step.phase,
-        count: bestCount,
-        pctOfTop: 0,
-        dropFromPrev: 0,
-        dropAbsoluteFromPrev: 0,
-      };
-    });
-
-    const top = resolved[0]?.count || 0;
-    resolved.forEach((s, i) => {
-      s.pctOfTop = top > 0 ? Number(((s.count / top) * 100).toFixed(2)) : 0;
-      if (i > 0) {
-        const prev = resolved[i - 1];
-        s.dropAbsoluteFromPrev = Math.max(0, prev.count - s.count);
-        s.dropFromPrev =
-          prev.count > 0 ? Number(((1 - s.count / prev.count) * 100).toFixed(1)) : 0;
-      }
-    });
-
-    return { steps: resolved, totalPageViews: top, error: null };
-  } catch (e) {
-    return { steps: [], totalPageViews: 0, error: (e as Error).message };
-  }
-}

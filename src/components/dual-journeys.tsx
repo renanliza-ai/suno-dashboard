@@ -47,6 +47,9 @@ type Step = {
   dropAbsoluteFromPrev: number;
 };
 
+// Hosts possíveis em qualquer das 2 jornadas
+type HostStage = "site" | "login" | "investidor" | "lp" | "checkout";
+
 type JourneyData = {
   title: string;
   description: string;
@@ -54,9 +57,10 @@ type JourneyData = {
   steps: Step[];
   totalPageViews: number;
   error: string | null;
-  // Mapa opcional: marca em qual host cada evento acontece (LP vs checkout)
-  // Só presente na jornada de LP — sinaliza a transição entre subdomínios
-  hostMap?: Record<string, "lp" | "checkout">;
+  // Mapa: marca em qual host cada evento acontece — sinaliza transições
+  // Site: site → login → investidor
+  // LP:   lp → checkout
+  hostMap?: Record<string, HostStage>;
 };
 
 type ApiResponse = {
@@ -192,6 +196,7 @@ export function DualJourneys() {
           hostFilter={data.site.hostFilter}
           steps={data.site.steps}
           error={data.site.error}
+          hostMap={data.site.hostMap}
         />
         <JourneyCard
           variant="lp"
@@ -222,7 +227,7 @@ function JourneyCard({
   hostFilter: string;
   steps: Step[];
   error: string | null;
-  hostMap?: Record<string, "lp" | "checkout">;
+  hostMap?: Record<string, HostStage>;
 }) {
   // Cores diferentes por variante
   const colors = variant === "site"
@@ -336,18 +341,18 @@ function JourneyCard({
                 transition={{ delay: i * 0.05 }}
                 className="relative"
               >
-                {/* Divisor visual: 'agora migra pro checkout.suno.com.br' */}
+                {/* Divisor visual de migração de host — texto contextual
+                    pela transição específica (ex: site→login, login→investidor,
+                    lp→checkout) */}
                 {showHostTransition && (
                   <div className="my-2 -mx-1 px-3 py-2 rounded-md bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 flex items-center gap-2">
                     <span className="text-base">↪</span>
                     <div className="flex-1 min-w-0">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-amber-700">
-                        Migração de host
+                        {hostTransitionLabel(prevHost!, currentHost!)}
                       </div>
                       <div className="text-[11px] text-amber-900 leading-tight">
-                        Usuário sai de <code className="text-[10px] bg-amber-100 px-1 rounded font-mono">lp.*</code>{" "}
-                        e entra no <code className="text-[10px] bg-amber-100 px-1 rounded font-mono">checkout.*</code>{" "}
-                        — sistema próprio da Suno
+                        {hostTransitionDesc(prevHost!, currentHost!)}
                       </div>
                     </div>
                   </div>
@@ -427,16 +432,7 @@ function JourneyCard({
                       {step.matchedAlias && step.matchedAlias !== step.event && (
                         <span className="text-[8px] text-blue-600">(alias)</span>
                       )}
-                      {currentHost === "lp" && (
-                        <span className="text-[8px] font-mono px-1 rounded bg-emerald-100 text-emerald-700">
-                          lp.*
-                        </span>
-                      )}
-                      {currentHost === "checkout" && (
-                        <span className="text-[8px] font-mono px-1 rounded bg-amber-100 text-amber-700">
-                          checkout.*
-                        </span>
-                      )}
+                      {currentHost && <HostBadge host={currentHost} />}
                       {isAusente && (
                         <span className="text-[9px] text-amber-600 font-medium">
                           • evento não disparado
@@ -492,4 +488,58 @@ function JourneyCard({
       </div>
     </motion.div>
   );
+}
+
+/**
+ * Badge minúsculo que aparece ao lado do nome técnico do evento
+ * indicando em qual host o evento acontece. Cores semânticas:
+ *   site       → roxo claro (entrada)
+ *   login      → azul (cadastro)
+ *   investidor → emerald (NAI/área logada)
+ *   lp         → verde claro (landing pages)
+ *   checkout   → âmbar (sistema de checkout próprio)
+ */
+function HostBadge({ host }: { host: HostStage }) {
+  const config: Record<HostStage, { label: string; cls: string }> = {
+    site: { label: "site", cls: "bg-violet-100 text-violet-700" },
+    login: { label: "login.*", cls: "bg-blue-100 text-blue-700" },
+    investidor: { label: "investidor.*", cls: "bg-emerald-100 text-emerald-700" },
+    lp: { label: "lp.*", cls: "bg-emerald-100 text-emerald-700" },
+    checkout: { label: "checkout.*", cls: "bg-amber-100 text-amber-700" },
+  };
+  const c = config[host];
+  return (
+    <span className={`text-[8px] font-mono px-1 rounded ${c.cls}`}>{c.label}</span>
+  );
+}
+
+/**
+ * Label curto da transição (aparece em uppercase no header do divisor).
+ */
+function hostTransitionLabel(from: HostStage, to: HostStage): string {
+  if (from === "site" && to === "login") return "Sai do site → entra no cadastro";
+  if (from === "login" && to === "investidor") return "Cadastro concluído → entra na NAI";
+  if (from === "site" && to === "investidor") return "Sai do site → entra na NAI";
+  if (from === "lp" && to === "checkout") return "Sai da LP → entra no checkout";
+  return `Migração de host: ${from} → ${to}`;
+}
+
+/**
+ * Descrição leiga da transição — usada no corpo do divisor pra
+ * explicar o que aconteceu na linguagem do usuário.
+ */
+function hostTransitionDesc(from: HostStage, to: HostStage): string {
+  if (from === "site" && to === "login") {
+    return "Usuário clica em 'Criar conta' e é direcionado para login.suno.com.br — fluxo de cadastro.";
+  }
+  if (from === "login" && to === "investidor") {
+    return "Cadastro foi concluído. Sistema redireciona automaticamente pro investidor.suno.com.br (NAI / área logada).";
+  }
+  if (from === "site" && to === "investidor") {
+    return "Usuário pula direto pra área logada (já tinha conta).";
+  }
+  if (from === "lp" && to === "checkout") {
+    return "Usuário clica em comprar na LP e é direcionado pro sistema de checkout próprio (checkout.suno.com.br).";
+  }
+  return `Tráfego migra de ${from}.* para ${to}.*`;
 }
