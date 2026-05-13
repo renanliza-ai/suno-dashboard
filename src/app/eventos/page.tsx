@@ -38,6 +38,7 @@ import {
 import { PurchaseFunnelDiscovery } from "@/components/purchase-funnel-discovery";
 import { EventExplorer } from "@/components/event-explorer";
 import { WisepopsBaseline } from "@/components/wisepops-baseline";
+import { BannersBaseline } from "@/components/banners-baseline";
 
 const statusConfig = {
   ok: { icon: CheckCircle2, color: "text-emerald-600", bg: "bg-emerald-50", label: "OK" },
@@ -210,6 +211,13 @@ export default function EventosPage() {
           + tabela por página + p25/p50/p75 pra avaliar desempenho
          ============================================================ */}
       <WisepopsBaseline />
+
+      {/* ============================================================
+          BANNERS BASELINE — mesma análise mas pros banners do site.
+          Default: banner_view + banner_click. Permite trocar pra
+          view_promotion/select_promotion ou outros nomes custom.
+         ============================================================ */}
+      <BannersBaseline />
 
       {/* ============================================================
           EVENT EXPLORER estilo GA4 Exploration — dimensão × métricas
