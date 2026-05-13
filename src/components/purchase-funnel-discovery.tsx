@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Eye,
@@ -12,7 +12,7 @@ import {
   AlertCircle,
   ArrowDownRight,
 } from "lucide-react";
-import { useGA4Overview, useGA4Conversions } from "@/lib/ga4-context";
+import { useGA4 } from "@/lib/ga4-context";
 import { formatNumber } from "@/lib/utils";
 
 /**
@@ -112,19 +112,44 @@ const GROUP_COLORS = {
 type ScaleMode = "topOfFunnel" | "previousStage";
 
 export function PurchaseFunnelDiscovery() {
-  const { data: overview } = useGA4Overview();
-  const { data: conversions } = useGA4Conversions();
+  const { selectedId, days, customRange } = useGA4();
   // Modo de visualização:
   //   topOfFunnel: % do topo (default GA4 — barras pequenas porque page_view é gigante)
   //   previousStage: % da etapa anterior (melhor pra ver gargalos)
   const [scaleMode, setScaleMode] = useState<ScaleMode>("previousStage");
 
-  // Constrói o map de eventos detectados (combina overview + funnel discoveredEvents)
-  const eventCounts = new Map<string, number>();
-  (overview?.events || []).forEach((e) => eventCounts.set(e.name, e.value));
-  (conversions?.funnel?.discoveredEvents || []).forEach((e) => {
-    if (!eventCounts.has(e.event)) eventCounts.set(e.event, e.count);
-  });
+  // Eventos do funil — endpoint dedicado garante que TODOS os 6 eventos
+  // sejam retornados, mesmo os com volume baixo (inListFilter no eventName)
+  const [eventCounts, setEventCounts] = useState<Map<string, number>>(new Map());
+  const [loadingFunnel, setLoadingFunnel] = useState(false);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const requestPropertyId = selectedId;
+    setLoadingFunnel(true);
+    const params = new URLSearchParams({
+      propertyId: selectedId,
+      days: String(days),
+    });
+    if (customRange) {
+      params.set("startDate", customRange.startDate);
+      params.set("endDate", customRange.endDate);
+    }
+    fetch(`/api/eventos/purchase-funnel?${params.toString()}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d: { propertyId?: string; events?: Record<string, { count: number }> }) => {
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
+        const map = new Map<string, number>();
+        for (const [name, v] of Object.entries(d.events || {})) {
+          map.set(name, v.count);
+        }
+        setEventCounts(map);
+      })
+      .catch(() => {
+        // Silently fail — UI mostra "evento ausente"
+      })
+      .finally(() => setLoadingFunnel(false));
+  }, [selectedId, days, customRange?.startDate, customRange?.endDate]);
 
   // Resolve cada etapa pegando o primeiro alias que tenha contagem > 0
   const resolved = STAGES.map((stage) => {
@@ -310,45 +335,49 @@ export function PurchaseFunnelDiscovery() {
                 </div>
               </div>
 
-              {/* Barra */}
+              {/* Barra com label inteligente — UM texto só, dentro OU fora
+                  da barra conforme o tamanho. Threshold: 25% (cabe texto). */}
               <div className="flex-1 relative h-9 bg-slate-100 rounded-md overflow-hidden">
-                {!isAusente && (
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${barWidth}%` }}
-                    transition={{ duration: 0.7, ease: "easeOut", delay: 0.2 + i * 0.06 }}
-                    className="h-full rounded-md flex items-center justify-end px-3"
-                    style={{ background: color.bar }}
-                  >
-                    <span className="text-xs font-bold text-white tabular-nums whitespace-nowrap drop-shadow">
-                      {formatNumber(stage.count)}
-                    </span>
-                  </motion.div>
-                )}
-                {/* Quando em modo previousStage, mostra o % em texto no fundo
-                    pra etapas pequenas que não têm espaço pra label na barra */}
-                {!isAusente && scaleMode === "previousStage" && barWidth < 25 && i > 0 && (
-                  <div className="absolute inset-0 flex items-center pl-2"
-                       style={{ paddingLeft: `calc(${barWidth}% + 6px)` }}>
-                    <span className="text-[10px] font-bold text-slate-600 tabular-nums">
-                      {formatNumber(stage.count)} · {pctOfPrev.toFixed(1)}% da etapa anterior
-                    </span>
-                  </div>
-                )}
-                {!isAusente && scaleMode === "topOfFunnel" && barWidth < 20 && i > 0 && (
-                  <div className="absolute inset-0 flex items-center"
-                       style={{ paddingLeft: `calc(${barWidth}% + 6px)` }}>
-                    <span className="text-[10px] font-bold text-slate-600 tabular-nums">
-                      {formatNumber(stage.count)}
-                    </span>
-                  </div>
-                )}
-                {isAusente && (
+                {isAusente ? (
                   <div className="absolute inset-0 flex items-center px-3">
-                    <span className="text-xs font-semibold text-slate-500">
+                    <span className="text-xs font-semibold text-amber-700">
                       Evento ausente — verificar tracking
                     </span>
                   </div>
+                ) : (
+                  <>
+                    {/* Barra colorida */}
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${barWidth}%` }}
+                      transition={{ duration: 0.7, ease: "easeOut", delay: 0.2 + i * 0.06 }}
+                      className="h-full rounded-md flex items-center justify-end px-3"
+                      style={{ background: color.bar }}
+                    >
+                      {/* Label DENTRO da barra: só quando há espaço (>= 25%) */}
+                      {barWidth >= 25 && (
+                        <span className="text-xs font-bold text-white tabular-nums whitespace-nowrap drop-shadow">
+                          {formatNumber(stage.count)}
+                        </span>
+                      )}
+                    </motion.div>
+                    {/* Label FORA da barra: só quando barra é pequena (< 25%) */}
+                    {barWidth < 25 && (
+                      <div
+                        className="absolute inset-0 flex items-center pointer-events-none"
+                        style={{ paddingLeft: `calc(${barWidth}% + 8px)` }}
+                      >
+                        <span className="text-[11px] font-bold text-slate-700 tabular-nums whitespace-nowrap">
+                          {formatNumber(stage.count)}
+                          {scaleMode === "previousStage" && i > 0 && (
+                            <span className="text-slate-400 font-normal ml-1">
+                              · {pctOfPrev.toFixed(1)}% da etapa anterior
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 
