@@ -37,6 +37,7 @@ import {
 } from "@/components/data-status";
 import { PurchaseFunnelDiscovery } from "@/components/purchase-funnel-discovery";
 import { EventExplorer } from "@/components/event-explorer";
+import { WisepopsBaseline } from "@/components/wisepops-baseline";
 
 const statusConfig = {
   ok: { icon: CheckCircle2, color: "text-emerald-600", bg: "bg-emerald-50", label: "OK" },
@@ -203,6 +204,12 @@ export default function EventosPage() {
           → add_payment_info → purchase com gradiente antes/durante/depois
          ============================================================ */}
       <PurchaseFunnelDiscovery />
+
+      {/* ============================================================
+          WISEPOPS BASELINE — CTR (wisepops_click ÷ wisepops_view)
+          + tabela por página + p25/p50/p75 pra avaliar desempenho
+         ============================================================ */}
+      <WisepopsBaseline />
 
       {/* ============================================================
           EVENT EXPLORER estilo GA4 Exploration — dimensão × métricas
