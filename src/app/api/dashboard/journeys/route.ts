@@ -330,7 +330,7 @@ export async function GET(req: NextRequest) {
       hosts,
       site: {
         title: "Jornada do Site",
-        description: "Tráfego orgânico/direto que cria conta na Suno",
+        description: "Todos os canais → cadastro → área logada",
         hostFilter: hosts.siteHost,
         steps: siteResult.steps,
         totalPageViews: siteResult.totalPageViews,
@@ -338,7 +338,7 @@ export async function GET(req: NextRequest) {
       },
       landingPages: {
         title: "Jornada das Landing Pages",
-        description: "Tráfego pago → captura de lead → checkout próprio → compra",
+        description: "Todos os canais → captura de lead → checkout próprio → compra",
         hostFilter: hosts.lpHostsLabel, // ex: "lp.* + checkout.suno.com.br"
         // Marca quais etapas acontecem em qual host pra UI sinalizar a transição
         hostMap: {
