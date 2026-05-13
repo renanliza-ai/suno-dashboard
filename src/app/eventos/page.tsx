@@ -35,6 +35,8 @@ import {
   SkeletonBlock,
   DataErrorCard,
 } from "@/components/data-status";
+import { PurchaseFunnelDiscovery } from "@/components/purchase-funnel-discovery";
+import { EventExplorer } from "@/components/event-explorer";
 
 const statusConfig = {
   ok: { icon: CheckCircle2, color: "text-emerald-600", bg: "bg-emerald-50", label: "OK" },
@@ -193,6 +195,20 @@ export default function EventosPage() {
           <DataErrorCard meta={meta} error={ga4Error} onRetry={() => window.location.reload()} />
         </div>
       )}
+
+      {/* ============================================================
+          STORYTELLING DO FUNIL DE COMPRA — pedido do Renan pra
+          simplificar leitura pra quem não conhece GA4.
+          Mostra: pageview → view_item → view_cart → begin_checkout
+          → add_payment_info → purchase com gradiente antes/durante/depois
+         ============================================================ */}
+      <PurchaseFunnelDiscovery />
+
+      {/* ============================================================
+          EVENT EXPLORER estilo GA4 Exploration — dimensão × métricas
+          com tabela + gráfico de linhas + export CSV.
+         ============================================================ */}
+      <EventExplorer />
 
       {/* KPI cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
