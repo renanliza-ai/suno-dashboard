@@ -54,6 +54,9 @@ type JourneyData = {
   steps: Step[];
   totalPageViews: number;
   error: string | null;
+  // Mapa opcional: marca em qual host cada evento acontece (LP vs checkout)
+  // Só presente na jornada de LP — sinaliza a transição entre subdomínios
+  hostMap?: Record<string, "lp" | "checkout">;
 };
 
 type ApiResponse = {
@@ -197,6 +200,7 @@ export function DualJourneys() {
           hostFilter={data.landingPages.hostFilter}
           steps={data.landingPages.steps}
           error={data.landingPages.error}
+          hostMap={data.landingPages.hostMap}
         />
       </div>
     </div>
@@ -210,6 +214,7 @@ function JourneyCard({
   hostFilter,
   steps,
   error,
+  hostMap,
 }: {
   variant: "site" | "lp";
   title: string;
@@ -217,6 +222,7 @@ function JourneyCard({
   hostFilter: string;
   steps: Step[];
   error: string | null;
+  hostMap?: Record<string, "lp" | "checkout">;
 }) {
   // Cores diferentes por variante
   const colors = variant === "site"
@@ -315,6 +321,13 @@ function JourneyCard({
             const isCritical = i > 0 && step.dropFromPrev > 60;
             const isLast = i === steps.length - 1;
 
+            // Detecta transição de host (LP → checkout) — aparece um banner
+            // explicando que o tráfego migrou pra outro sistema
+            const currentHost = hostMap?.[step.event];
+            const prevHost = i > 0 ? hostMap?.[steps[i - 1].event] : null;
+            const showHostTransition =
+              hostMap && currentHost && prevHost && currentHost !== prevHost;
+
             return (
               <motion.div
                 key={step.event}
@@ -323,6 +336,22 @@ function JourneyCard({
                 transition={{ delay: i * 0.05 }}
                 className="relative"
               >
+                {/* Divisor visual: 'agora migra pro checkout.suno.com.br' */}
+                {showHostTransition && (
+                  <div className="my-2 -mx-1 px-3 py-2 rounded-md bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 flex items-center gap-2">
+                    <span className="text-base">↪</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-amber-700">
+                        Migração de host
+                      </div>
+                      <div className="text-[11px] text-amber-900 leading-tight">
+                        Usuário sai de <code className="text-[10px] bg-amber-100 px-1 rounded font-mono">lp.*</code>{" "}
+                        e entra no <code className="text-[10px] bg-amber-100 px-1 rounded font-mono">checkout.*</code>{" "}
+                        — sistema próprio da Suno
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
                   {/* Ícone + linha conectora */}
                   <div className="flex flex-col items-center shrink-0">
@@ -390,13 +419,23 @@ function JourneyCard({
                       </div>
                     )}
 
-                    {/* Nome do evento técnico */}
-                    <div className="flex items-center gap-1.5 mt-0.5">
+                    {/* Nome do evento técnico + host onde acontece */}
+                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                       <code className="text-[9px] font-mono text-slate-400">
                         {step.matchedAlias || step.event}
                       </code>
                       {step.matchedAlias && step.matchedAlias !== step.event && (
                         <span className="text-[8px] text-blue-600">(alias)</span>
+                      )}
+                      {currentHost === "lp" && (
+                        <span className="text-[8px] font-mono px-1 rounded bg-emerald-100 text-emerald-700">
+                          lp.*
+                        </span>
+                      )}
+                      {currentHost === "checkout" && (
+                        <span className="text-[8px] font-mono px-1 rounded bg-amber-100 text-amber-700">
+                          checkout.*
+                        </span>
                       )}
                       {isAusente && (
                         <span className="text-[9px] text-amber-600 font-medium">

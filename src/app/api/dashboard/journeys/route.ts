@@ -131,14 +131,17 @@ type ResolvedStep = {
 /**
  * Roda 1 query agregada por eventName filtrada por host, e resolve cada
  * etapa do funil pegando o melhor alias.
+ *
+ * Suporta MÚLTIPLOS host patterns com OR — usado pra LP journey que
+ * cobre lp.* (origem do tráfego) E checkout.* (onde o funil de compra
+ * acontece de fato, em sistema próprio Suno).
  */
 async function fetchJourney(
   propertyId: string,
   startDate: string,
   endDate: string,
   steps: JourneyStep[],
-  hostFilterValue: string,
-  hostFilterMode: "EXACT" | "CONTAINS" | "BEGINS_WITH" = "EXACT"
+  hostPatterns: { value: string; mode: "EXACT" | "CONTAINS" | "BEGINS_WITH" }[]
 ): Promise<{ steps: ResolvedStep[]; totalPageViews: number; error: string | null }> {
   const dateRange = { startDate, endDate };
 
@@ -146,6 +149,18 @@ async function fetchJourney(
   const allAliases = Array.from(
     new Set(steps.flatMap((s) => s.aliases))
   );
+
+  // Constrói expressão hostName — se 1 pattern, filter direto; se vários, orGroup
+  const hostExpressions = hostPatterns.map((p) => ({
+    filter: {
+      fieldName: "hostName",
+      stringFilter: { value: p.value, matchType: p.mode },
+    },
+  }));
+  const hostExpr =
+    hostExpressions.length === 1
+      ? hostExpressions[0]
+      : { orGroup: { expressions: hostExpressions } };
 
   try {
     const res = await runReport(propertyId, {
@@ -155,12 +170,7 @@ async function fetchJourney(
       dimensionFilter: {
         andGroup: {
           expressions: [
-            {
-              filter: {
-                fieldName: "hostName",
-                stringFilter: { value: hostFilterValue, matchType: hostFilterMode },
-              },
-            },
+            hostExpr,
             {
               filter: {
                 fieldName: "eventName",
@@ -232,26 +242,44 @@ async function fetchJourney(
 
 /**
  * Detecta hostnames de site e LPs baseado no nome da property.
- * Mapeamento alinhado com o resto do painel (área-logada, paginas, etc).
+ *
+ * IMPORTANTE: a jornada de LP atravessa MÚLTIPLOS hostnames:
+ *   1. lp.suno.com.br ou lp2.suno.com.br (landing pages)
+ *   2. checkout.suno.com.br (sistema de checkout próprio Suno)
+ *
+ * O fluxo é: visita LP → click "comprar" → redireciona pro checkout.suno.com.br
+ * onde rolam view_cart, begin_checkout, add_payment_info, purchase.
+ *
+ * Por isso retornamos array de patterns que viram OR no GA4 filter.
  */
 function getHostsForProperty(propertyName: string | null): {
   siteHost: string;
   siteHostMode: "EXACT" | "CONTAINS";
-  lpHostPattern: string; // substring pra CONTAINS
+  // LP journey: lista de hosts onde acontece o funil (LP + checkout)
+  lpHosts: { value: string; mode: "CONTAINS" | "BEGINS_WITH" }[];
+  lpHostsLabel: string;
 } {
   const name = (propertyName || "").toLowerCase();
   if (name.includes("statusinvest")) {
     return {
       siteHost: "statusinvest.com.br",
       siteHostMode: "CONTAINS",
-      lpHostPattern: "lp", // lp.statusinvest.com.br ou similar
+      lpHosts: [
+        { value: "lp", mode: "BEGINS_WITH" }, // lp.statusinvest, lp2.statusinvest
+        { value: "checkout.statusinvest", mode: "CONTAINS" },
+      ],
+      lpHostsLabel: "lp.* + checkout.statusinvest.com.br",
     };
   }
   // Default: Suno
   return {
     siteHost: "suno.com.br",
     siteHostMode: "CONTAINS", // pega www.suno.com.br também
-    lpHostPattern: "lp.",
+    lpHosts: [
+      { value: "lp", mode: "BEGINS_WITH" }, // pega lp.suno, lp2.suno, etc
+      { value: "checkout.suno", mode: "CONTAINS" }, // checkout.suno.com.br
+    ],
+    lpHostsLabel: "lp.* + checkout.suno.com.br",
   };
 }
 
@@ -287,10 +315,12 @@ export async function GET(req: NextRequest) {
   // Como o GA4 filter não suporta NOT facilmente, fazemos CONTAINS no domínio raiz
   // mas filtramos lp.* depois client-side. Pra simplificar, usamos BEGINS_WITH pra evitar lp.*
   const [siteResult, lpResult] = await Promise.all([
-    // Site: hosts que NÃO começam com "lp." — usamos suno.com.br ou statusinvest.com.br exato + www
-    // Como não dá pra exigir "NOT BEGINS_WITH lp.", fazemos 2 sub-queries unidas:
+    // Site: hosts que NÃO começam com "lp." — usamos suno.com.br ou statusinvest.com.br
+    // (com subtração de lp.* feita por sub-query)
     fetchSiteJourney(propertyId, finalStart, finalEnd, hosts.siteHost),
-    fetchJourney(propertyId, finalStart, finalEnd, LP_JOURNEY, hosts.lpHostPattern, "CONTAINS"),
+    // LP: cobre TANTO o tráfego que entra na LP QUANTO o que migra pro
+    // checkout.suno.com.br no momento da compra (sistema próprio)
+    fetchJourney(propertyId, finalStart, finalEnd, LP_JOURNEY, hosts.lpHosts),
   ]);
 
   return NextResponse.json(
@@ -308,8 +338,18 @@ export async function GET(req: NextRequest) {
       },
       landingPages: {
         title: "Jornada das Landing Pages",
-        description: "Tráfego pago → captura de lead → compra",
-        hostFilter: `*${hosts.lpHostPattern}*`,
+        description: "Tráfego pago → captura de lead → checkout próprio → compra",
+        hostFilter: hosts.lpHostsLabel, // ex: "lp.* + checkout.suno.com.br"
+        // Marca quais etapas acontecem em qual host pra UI sinalizar a transição
+        hostMap: {
+          page_view: "lp",
+          generate_lead: "lp",
+          view_item: "lp",
+          view_cart: "checkout",
+          begin_checkout: "checkout",
+          add_payment_info: "checkout",
+          purchase: "checkout",
+        },
         steps: lpResult.steps,
         totalPageViews: lpResult.totalPageViews,
         error: lpResult.error,
