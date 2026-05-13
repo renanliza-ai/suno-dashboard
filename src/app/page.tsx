@@ -7,6 +7,7 @@ import { PagesChart } from "@/components/pages-chart";
 import { FunnelChart } from "@/components/funnel-chart";
 import { EventsChart } from "@/components/events-chart";
 import { JourneyChart } from "@/components/journey-chart";
+import { DualJourneys } from "@/components/dual-journeys";
 import { AttributionToggle } from "@/components/attribution-toggle";
 import { LifeTimeCycle } from "@/components/life-time-cycle";
 import { getKpis } from "@/lib/data";
@@ -143,9 +144,20 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="mb-6">
+      {/* ============================================================
+          DUAS jornadas paralelas — pedido do Renan pra separar:
+          Site (orgânico → cadastro) vs Landing Pages (campanha → compra)
+         ============================================================ */}
+      <DualJourneys />
+
+      {/* Jornada legada — mantida abaixo pra backward compat. Pode ser
+          removida em breve, mas no curto prazo dá segurança de comparação. */}
+      <details className="mb-6">
+        <summary className="text-xs text-slate-500 cursor-pointer hover:text-slate-700 font-medium mb-2">
+          📊 Ver jornada agregada antiga (single funnel) — depreciada
+        </summary>
         <JourneyChart />
-      </div>
+      </details>
 
       {/* Life Time Cycle — tempo da visita até a compra, estágio a estágio */}
       <div className="mb-6">
