@@ -51,6 +51,52 @@ type CreateItemResp = {
 let __cachedGroupId: { boardId: string; groupName: string; groupId: string } | null = null;
 // Cache da lista de grupos pra mostrar no erro quando nenhum casa
 let __cachedGroups: { boardId: string; groups: { id: string; title: string }[] } | null = null;
+// Cache do slug do workspace (subdomínio Monday) por 24h — sem isso a URL
+// final fica como `monday.com/boards/X` e devolve 404 pois falta o tenant.
+let __cachedAccountSlug: { slug: string; expiresAt: number } | null = null;
+
+/**
+ * Busca o slug do workspace (subdomínio Monday) via API.
+ * Cacheia por 24h. Fallback pra env var MONDAY_WORKSPACE_SLUG se a API falhar.
+ *
+ * Por que isso importa: URLs corretas do Monday são
+ * `https://<slug>.monday.com/boards/...`. Sem o slug, redireciona pra
+ * landing page do Monday e 404a no board.
+ */
+async function getAccountSlug(apiToken: string): Promise<string | null> {
+  const now = Date.now();
+  if (__cachedAccountSlug && now < __cachedAccountSlug.expiresAt) {
+    return __cachedAccountSlug.slug;
+  }
+  // 1) Tenta via API
+  try {
+    const query = `query { me { account { slug } } }`;
+    const res = await fetch("https://api.monday.com/v2", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: apiToken,
+        "API-Version": "2024-01",
+      },
+      body: JSON.stringify({ query }),
+    });
+    const data = (await res.json()) as { data?: { me?: { account?: { slug?: string } } } };
+    const slug = data?.data?.me?.account?.slug;
+    if (slug) {
+      __cachedAccountSlug = { slug, expiresAt: now + 24 * 60 * 60 * 1000 };
+      return slug;
+    }
+  } catch {
+    // ignora — vai pro fallback
+  }
+  // 2) Fallback pra env var configurada manualmente
+  const envSlug = process.env.MONDAY_WORKSPACE_SLUG;
+  if (envSlug) {
+    __cachedAccountSlug = { slug: envSlug, expiresAt: now + 24 * 60 * 60 * 1000 };
+    return envSlug;
+  }
+  return null;
+}
 
 type ResolveResult = {
   groupId: string;
@@ -463,8 +509,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // URL final da task no Monday
-  const itemUrl = `https://monday.com/boards/${created.board.id}/pulses/${created.id}`;
+  // URL final da task no Monday — precisa do subdomínio do workspace ou 404a
+  const accountSlug = await getAccountSlug(apiToken);
+  const itemUrl = accountSlug
+    ? `https://${accountSlug}.monday.com/boards/${created.board.id}/pulses/${created.id}`
+    : `https://monday.com/boards/${created.board.id}/pulses/${created.id}`;
 
   return NextResponse.json({
     ok: true,
@@ -476,6 +525,10 @@ export async function POST(req: NextRequest) {
     },
     // Aviso quando o grupo escolhido foi fallback (nem o nome nem o ID original foram encontrados)
     groupWarning,
+    // Aviso quando não conseguimos resolver o subdomínio — URL pode 404
+    accountSlugMissing: !accountSlug
+      ? "Não foi possível resolver o subdomínio do workspace Monday. Adicione MONDAY_WORKSPACE_SLUG no .env.local com o nome do seu workspace (ex: 'suno' se a URL é https://suno.monday.com)."
+      : null,
   });
 }
 
