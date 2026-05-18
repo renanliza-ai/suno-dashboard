@@ -249,6 +249,10 @@ export async function POST(req: NextRequest) {
     iceEase?: number;
     iceTier?: "alto" | "medio" | "baixo";
     propertyName?: string;
+    // Campos do CRO Engine — página analisada + framework usado
+    pageRef?: string;
+    pageUrl?: string;
+    framework?: string;
   };
 
   let body: {
@@ -297,6 +301,14 @@ export async function POST(req: NextRequest) {
   // pra ficar clara no update do Monday (acesso histórico permanente).
   // ====================================================================
   const lines: string[] = [];
+
+  // Página analisada — link clicável no topo do markdown
+  if (ins.pageUrl && ins.pageRef) {
+    lines.push("## 🔗 Página analisada");
+    lines.push(`**[${ins.pageRef}](${ins.pageUrl})**`);
+    if (ins.framework) lines.push(`_Framework aplicado: **${ins.framework}**_`);
+    lines.push("");
+  }
 
   if (ins.description) {
     lines.push("## 📋 Resumo");

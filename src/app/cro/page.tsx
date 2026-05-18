@@ -91,6 +91,9 @@ type Insight = {
   pxlScore?: { aboveFold: boolean; addsValue: boolean; runsOnHighTraffic: boolean; isPainPoint: boolean; isQuickWin: boolean; score: number };
   detectedFrom?: string;
   diagnosis?: string;
+  // Página real referenciada pela hipótese — clicável no card e modal
+  pageRef?: string; // path (ex: "/carteiras")
+  pageUrl?: string; // URL completa (ex: "https://www.suno.com.br/carteiras")
 };
 
 type Decision = "pending" | "accepted" | "rejected";
@@ -769,6 +772,10 @@ export default function CROPage() {
             iceEase: ice.ease,
             iceTier: ice.tier,
             propertyName,
+            // Página real referenciada — vai pro markdown do Monday
+            pageRef: it.pageRef,
+            pageUrl: it.pageUrl,
+            framework: it.framework,
           },
           sourceLink: typeof window !== "undefined" ? `${window.location.origin}/cro` : undefined,
         }),
@@ -1048,6 +1055,8 @@ export default function CROPage() {
       pxlScore: ci.pxl,
       detectedFrom: ci.detectedFrom,
       diagnosis: ci.diagnosis,
+      pageRef: ci.page,
+      pageUrl: ci.pageUrl,
     };
   }
 
@@ -1725,6 +1734,20 @@ export default function CROPage() {
                           </span>
                         )}
                       </div>
+                      {/* Link clicável pra página real analisada — só quando insight é data-driven do CRO Engine */}
+                      {insight.pageUrl && insight.pageRef && (
+                        <a
+                          href={insight.pageUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-[11px] font-mono text-[#7c5cff] hover:text-[#5b3dd4] hover:underline mb-1.5 group/link"
+                          title={`Abrir ${insight.pageUrl} em nova aba`}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <ArrowUpRight size={11} className="group-hover/link:translate-x-0.5 group-hover/link:-translate-y-0.5 transition-transform" />
+                          {insight.pageRef}
+                        </a>
+                      )}
                       <p className="text-sm text-[color:var(--muted-foreground)] mb-2">{insight.desc}</p>
                       {/* Mini-grid de evidência rápida */}
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
@@ -2094,6 +2117,28 @@ export default function CROPage() {
                   <p className="text-sm font-bold mt-1 text-emerald-800">{selectedInsight.impact}</p>
                 </div>
               </div>
+
+              {/* Link da página analisada — destaque no modal */}
+              {selectedInsight.pageUrl && selectedInsight.pageRef && (
+                <a
+                  href={selectedInsight.pageUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-xl border border-[#7c5cff]/30 bg-[#7c5cff]/5 hover:bg-[#7c5cff]/10 p-3 flex items-center gap-3 transition group"
+                >
+                  <div className="w-10 h-10 rounded-lg bg-[#7c5cff] text-white flex items-center justify-center shrink-0 group-hover:scale-105 transition">
+                    <ArrowUpRight size={18} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] uppercase font-bold text-[#7c5cff] tracking-wider">Página analisada</p>
+                    <p className="text-sm font-mono text-[#5b3dd4] truncate font-semibold">{selectedInsight.pageRef}</p>
+                    <p className="text-[11px] text-[#7c5cff]/80 truncate">{selectedInsight.pageUrl}</p>
+                  </div>
+                  <span className="text-[11px] font-semibold text-[#7c5cff] group-hover:underline shrink-0">
+                    Abrir em nova aba →
+                  </span>
+                </a>
+              )}
 
               {/* Framework + Diagnóstico — só quando vem do CRO Engine data-driven */}
               {selectedInsight.framework && (
