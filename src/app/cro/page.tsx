@@ -13,6 +13,7 @@ import { useState, useMemo, useEffect } from "react";
 import { formatNumber } from "@/lib/utils";
 import { useGA4, useGA4PagesDetail } from "@/lib/ga4-context";
 import { DataStatus } from "@/components/data-status";
+import { generateCROInsights, summarizeInsights, type CROInsight } from "@/lib/cro-engine";
 
 // Hash determinístico do propertyId — garante que ao trocar a propriedade,
 // os números (mock e derivações) mudem de forma estável (mesma propriedade
@@ -81,6 +82,15 @@ type Insight = {
   testWindow: string; // ex.: "14 dias com 50/50"
   rollback: string; // critério para reverter
   affectedSegments: string[]; // públicos/páginas impactados
+  // Campos opcionais — vêm do CRO Engine (cro-engine.ts) quando o insight é
+  // data-driven via frameworks (ICE, PXL, LIFT, MECLABS). UI mostra esses
+  // selos quando existem, indicando que a recomendação não é hipótese genérica.
+  framework?: "ICE" | "PXL" | "LIFT" | "MECLABS";
+  frameworkNote?: string;
+  iceScore?: { impact: number; confidence: number; ease: number; total: number };
+  pxlScore?: { aboveFold: boolean; addsValue: boolean; runsOnHighTraffic: boolean; isPainPoint: boolean; isQuickWin: boolean; score: number };
+  detectedFrom?: string;
+  diagnosis?: string;
 };
 
 type Decision = "pending" | "accepted" | "rejected";
@@ -977,9 +987,78 @@ export default function CROPage() {
     TrendingUp,
   };
 
+  // ============================================================
+  // ⚠ CRO ENGINE — fonte primária de insights data-driven
+  // ============================================================
+  // Roda detecção de padrões nas páginas reais do GA4 e aplica frameworks
+  // ICE, PXL, LIFT e MECLABS. Substitui as recomendações genéricas estáticas.
+  // Quando há dado real, esse engine SEMPRE tem precedência sobre apiRecs e mocks.
+  const croEngineInsights: CROInsight[] = useMemo(
+    () => (realPagesAvailable ? generateCROInsights(pagesDetail?.pages) : []),
+    [realPagesAvailable, pagesDetail]
+  );
+  const insightsSummary = useMemo(() => summarizeInsights(croEngineInsights), [croEngineInsights]);
+
+  // Converte CROInsight → Insight (formato existente) preservando metadata extra
+  function convertCROInsight(ci: CROInsight): Insight {
+    const iconByCategory: Record<CROInsight["category"], typeof AlertTriangle> = {
+      Performance: Zap,
+      "UX/CTA": MousePointerClick,
+      Funil: Target,
+      Mensagem: Lightbulb,
+      Conteúdo: FileText,
+      Mobile: AlertCircle,
+      Retenção: TrendingUp,
+    };
+    const colorByPriority: Record<"Alta" | "Média" | "Baixa", string> = {
+      Alta: "text-red-500 bg-red-50",
+      Média: "text-amber-500 bg-amber-50",
+      Baixa: "text-blue-500 bg-blue-50",
+    };
+    const effortFromEase: "baixo" | "médio" | "alto" = ci.ice.ease >= 7 ? "baixo" : ci.ice.ease >= 4 ? "médio" : "alto";
+    const confidenceFromIce: "Alta" | "Média" | "Baixa" = ci.ice.confidence >= 7 ? "Alta" : ci.ice.confidence >= 5 ? "Média" : "Baixa";
+    const riskFromCategory: "baixo" | "médio" | "alto" =
+      ci.category === "Performance" ? "baixo" : ci.category === "Funil" ? "médio" : "baixo";
+    return {
+      icon: iconByCategory[ci.category] || AlertTriangle,
+      color: colorByPriority[ci.priority],
+      priority: ci.priority,
+      title: ci.title,
+      desc: ci.hypothesis,
+      action: ci.action,
+      impact: ci.estimatedImpact,
+      effort: effortFromEase,
+      owner: ci.category === "Performance" ? "Dev frontend" : ci.category === "Funil" ? "Produto + Dev" : "Design + Marketing",
+      steps: ci.steps,
+      confidence: confidenceFromIce,
+      evidence: `${ci.detectedFrom}. Framework: ${ci.framework} — ${ci.frameworkNote}`,
+      hypothesis: ci.hypothesis,
+      costEstimate: effortFromEase === "baixo" ? "≈ 8h" : effortFromEase === "médio" ? "≈ 24h" : "≈ 80h+",
+      risk: riskFromCategory,
+      riskNotes: ci.rollbackCriteria,
+      primaryKPI: ci.primaryKPI,
+      secondaryKPIs: ci.secondaryKPIs,
+      testWindow: ci.testDesign,
+      rollback: ci.rollbackCriteria,
+      affectedSegments: [`Visitantes de ${ci.page}`],
+      // Campos novos do framework
+      framework: ci.framework,
+      frameworkNote: ci.frameworkNote,
+      iceScore: ci.ice,
+      pxlScore: ci.pxl,
+      detectedFrom: ci.detectedFrom,
+      diagnosis: ci.diagnosis,
+    };
+  }
+
   // Insights dinâmicos: páginas reais com bounce alto viram insights reais.
   const dynamicInsights: Insight[] = useMemo(() => {
-    // ⚠ PRIORIDADE 1: recomendações do endpoint real (data-driven)
+    // ⚠ PRIORIDADE MÁXIMA: CRO Engine (data-driven via frameworks)
+    if (croEngineInsights.length > 0) {
+      return croEngineInsights.map(convertCROInsight);
+    }
+
+    // ⚠ PRIORIDADE 2: recomendações do endpoint real (data-driven)
     if (apiRecs && apiRecs.length > 0) {
       return apiRecs.map((r) => ({
         icon: ICON_MAP[r.iconName] || AlertTriangle,
@@ -1240,25 +1319,68 @@ export default function CROPage() {
           {useRealData && <DataStatus meta={pagesMeta} usingMock={!useRealData} />}
         </div>
 
-        {/* Banner: aviso de que insights e Core Web Vitals são hipóteses/estimativas */}
-        <div className="mb-6 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 p-4 flex items-start gap-3">
-          <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
-          <div className="text-xs text-amber-900 leading-relaxed">
-            <strong className="text-sm">Atenção — natureza dos dados desta página:</strong>
-            <ul className="mt-1.5 space-y-1 list-disc list-inside">
-              <li>
-                <strong>Páginas, sessões, bounce e engajamento</strong> vêm do GA4 real da propriedade selecionada
-                {realPagesAvailable ? " ✓" : " (modo demo)"}.
-              </li>
-              <li>
-                <strong>Core Web Vitals (LCP, CLS, INP)</strong> são <em>estimativas heurísticas</em> derivadas do
-                bounce — não dados reais do CrUX/RUM. Para números exatos, consulte PageSpeed Insights.
-              </li>
-              <li>
-                <strong>Insights, recomendações e impactos estimados</strong> são <em>hipóteses de teste</em>
-                baseadas em benchmarks Suno, não previsões validadas para esta propriedade específica.
-              </li>
-            </ul>
+        {/* Banner: explica a natureza dos dados + frameworks usados */}
+        <div className={`mb-6 rounded-xl border p-4 flex items-start gap-3 ${
+          croEngineInsights.length > 0
+            ? "border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50"
+            : "border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50"
+        }`}>
+          {croEngineInsights.length > 0 ? (
+            <ShieldCheck size={18} className="text-emerald-600 shrink-0 mt-0.5" />
+          ) : (
+            <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+          )}
+          <div className={`text-xs leading-relaxed ${croEngineInsights.length > 0 ? "text-emerald-900" : "text-amber-900"}`}>
+            {croEngineInsights.length > 0 ? (
+              <>
+                <strong className="text-sm">
+                  Inteligência CRO data-driven ativa ·{" "}
+                  {insightsSummary.total} insight{insightsSummary.total !== 1 ? "s" : ""} detectado{insightsSummary.total !== 1 ? "s" : ""}
+                </strong>
+                <p className="mt-1">
+                  Cada hipótese abaixo foi gerada por <strong>pattern detection</strong> sobre as páginas reais do GA4
+                  desta propriedade e priorizada via frameworks do mercado:{" "}
+                  <span className="inline-flex flex-wrap gap-1 ml-1">
+                    {insightsSummary.frameworksUsed.map((f) => (
+                      <span key={f} className="px-1.5 py-0.5 rounded bg-white/60 font-mono text-[10px]">{f}</span>
+                    ))}
+                  </span>
+                </p>
+                <ul className="mt-2 space-y-0.5 list-disc list-inside text-[11px]">
+                  <li>
+                    <strong>ICE Score</strong> (Sean Ellis) — prioriza por Impacto × Confiança × Facilidade
+                  </li>
+                  <li>
+                    <strong>PXL</strong> (ConversionXL) — pontua critérios objetivos (above-fold, alto tráfego, pain-point)
+                  </li>
+                  <li>
+                    <strong>LIFT Model</strong> (WiderFunnel) — diagnostica em 6 eixos (Value, Relevance, Clarity, Distraction, Urgency, Anxiety)
+                  </li>
+                  <li>
+                    <strong>MECLABS</strong> — heurística C = 4m + 3v + 2(i-f) - 2a (Motivação, Valor, Incentivo, Fricção, Ansiedade)
+                  </li>
+                </ul>
+                <p className="mt-2 text-[11px] opacity-90">
+                  ⚠ Core Web Vitals exibidos abaixo (LCP/CLS/INP) continuam sendo estimativas heurísticas — não CrUX/RUM real.
+                </p>
+              </>
+            ) : (
+              <>
+                <strong className="text-sm">Atenção — natureza dos dados desta página:</strong>
+                <ul className="mt-1.5 space-y-1 list-disc list-inside">
+                  <li>
+                    <strong>Páginas, sessões, bounce e engajamento</strong> vêm do GA4 real da propriedade selecionada
+                    {realPagesAvailable ? " ✓" : " (modo demo)"}.
+                  </li>
+                  <li>
+                    <strong>Core Web Vitals (LCP, CLS, INP)</strong> são <em>estimativas heurísticas</em> derivadas do bounce.
+                  </li>
+                  <li>
+                    Conecte uma propriedade com volume suficiente pra ativar o motor CRO data-driven (frameworks ICE/PXL/LIFT/MECLABS).
+                  </li>
+                </ul>
+              </>
+            )}
           </div>
         </div>
 
@@ -1560,12 +1682,29 @@ export default function CROPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <h4 className="font-semibold text-sm">{insight.title}</h4>
+                        {/* Framework badge — só quando vem do CRO Engine (data-driven) */}
+                        {insight.framework && (
+                          <span
+                            className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-[#7c5cff]/10 text-[#7c5cff] border border-[#7c5cff]/30"
+                            title={insight.frameworkNote || `Framework ${insight.framework}`}
+                          >
+                            {insight.framework}
+                          </span>
+                        )}
                         <span
                           className={`px-2 py-0.5 rounded-md text-[10px] font-bold border inline-flex items-center gap-1 ${iceBadgeStyle(ice.tier)}`}
                           title={`ICE = Impacto ${ice.impact} × Confiança ${ice.confidence} × Facilidade ${ice.ease}`}
                         >
-                          ICE {ice.score}
+                          ICE {insight.iceScore?.total ?? ice.score}
                         </span>
+                        {insight.pxlScore && (
+                          <span
+                            className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-violet-50 text-violet-700 border border-violet-200"
+                            title={`PXL: ${insight.pxlScore.aboveFold ? "above-fold ✓ " : ""}${insight.pxlScore.runsOnHighTraffic ? "tráfego alto ✓ " : ""}${insight.pxlScore.isPainPoint ? "pain-point ✓ " : ""}${insight.pxlScore.isQuickWin ? "quick-win ✓" : ""}`}
+                          >
+                            PXL {insight.pxlScore.score}/5
+                          </span>
+                        )}
                         <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${priorityBadge(insight.priority)}`}>
                           {insight.priority}
                         </span>
@@ -1955,6 +2094,51 @@ export default function CROPage() {
                   <p className="text-sm font-bold mt-1 text-emerald-800">{selectedInsight.impact}</p>
                 </div>
               </div>
+
+              {/* Framework + Diagnóstico — só quando vem do CRO Engine data-driven */}
+              {selectedInsight.framework && (
+                <div className="rounded-xl bg-gradient-to-br from-[#7c5cff]/5 to-[#7c5cff]/10 border border-[#7c5cff]/30 p-3">
+                  <h4 className="text-xs font-bold uppercase text-[#7c5cff] mb-2 flex items-center gap-1.5">
+                    <ShieldCheck size={12} />
+                    Framework {selectedInsight.framework} aplicado
+                  </h4>
+                  <p className="text-xs text-[#5b3dd4] leading-relaxed mb-2">
+                    <strong>Por que esse framework:</strong> {selectedInsight.frameworkNote}
+                  </p>
+                  {selectedInsight.diagnosis && (
+                    <p className="text-xs text-[#5b3dd4] leading-relaxed">
+                      <strong>Diagnóstico:</strong> {selectedInsight.diagnosis}
+                    </p>
+                  )}
+                  {selectedInsight.detectedFrom && (
+                    <p className="text-[11px] text-[#7c5cff]/80 leading-relaxed mt-2 italic font-mono bg-white/60 px-2 py-1.5 rounded">
+                      Detectado a partir de: {selectedInsight.detectedFrom}
+                    </p>
+                  )}
+                  {selectedInsight.pxlScore && (
+                    <div className="mt-2 pt-2 border-t border-[#7c5cff]/20">
+                      <p className="text-[10px] font-bold uppercase text-[#7c5cff] mb-1">Critérios PXL atendidos: {selectedInsight.pxlScore.score}/5</p>
+                      <div className="flex flex-wrap gap-1.5 text-[10px]">
+                        <span className={selectedInsight.pxlScore.aboveFold ? "text-emerald-700 font-semibold" : "text-slate-400 line-through"}>
+                          {selectedInsight.pxlScore.aboveFold ? "✓" : "✗"} above-fold
+                        </span>
+                        <span className={selectedInsight.pxlScore.addsValue ? "text-emerald-700 font-semibold" : "text-slate-400 line-through"}>
+                          {selectedInsight.pxlScore.addsValue ? "✓" : "✗"} adiciona valor
+                        </span>
+                        <span className={selectedInsight.pxlScore.runsOnHighTraffic ? "text-emerald-700 font-semibold" : "text-slate-400 line-through"}>
+                          {selectedInsight.pxlScore.runsOnHighTraffic ? "✓" : "✗"} tráfego alto
+                        </span>
+                        <span className={selectedInsight.pxlScore.isPainPoint ? "text-emerald-700 font-semibold" : "text-slate-400 line-through"}>
+                          {selectedInsight.pxlScore.isPainPoint ? "✓" : "✗"} pain-point
+                        </span>
+                        <span className={selectedInsight.pxlScore.isQuickWin ? "text-emerald-700 font-semibold" : "text-slate-400 line-through"}>
+                          {selectedInsight.pxlScore.isQuickWin ? "✓" : "✗"} quick-win
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Evidência (por que essa recomendação?) */}
               <div className="rounded-xl bg-blue-50/40 border border-blue-200 p-3">
