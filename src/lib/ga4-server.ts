@@ -222,13 +222,60 @@ function buildDateRangeIncludingToday(
   };
 }
 
+// Calcula o período IMEDIATAMENTE ANTERIOR ao range corrente, com a mesma
+// duração. Usado pra computar delta % (vs período anterior).
+// Ex.: range = 01/05 → 14/05 (14 dias) → previous = 17/04 → 30/04
+function buildPreviousRange(range: { startDate: string; endDate: string }) {
+  // Se vier no formato relativo do GA4 (ex.: "30daysAgo"), converte
+  // pra datas absolutas usando hoje como âncora
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const parse = (s: string): Date => {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(s + "T00:00:00Z");
+    if (s === "today") return new Date(today);
+    if (s === "yesterday") {
+      const d = new Date(today);
+      d.setUTCDate(d.getUTCDate() - 1);
+      return d;
+    }
+    const m = s.match(/^(\d+)daysAgo$/);
+    if (m) {
+      const d = new Date(today);
+      d.setUTCDate(d.getUTCDate() - Number(m[1]));
+      return d;
+    }
+    return new Date(today);
+  };
+  const start = parse(range.startDate);
+  const end = parse(range.endDate);
+  const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1);
+  const prevEnd = new Date(start);
+  prevEnd.setUTCDate(prevEnd.getUTCDate() - 1);
+  const prevStart = new Date(prevEnd);
+  prevStart.setUTCDate(prevStart.getUTCDate() - (days - 1));
+  return { startDate: iso(prevStart), endDate: iso(prevEnd) };
+}
+
+// Calcula delta % entre dois valores, com salvaguardas pra zero/divisão
+function computeDelta(current: number, previous: number): number {
+  if (previous === 0) {
+    // Sem base: se atual também é zero, 0%. Senão, 100% (entrada nova).
+    return current === 0 ? 0 : 100;
+  }
+  return Number((((current - previous) / previous) * 100).toFixed(1));
+}
+
 // High-level helpers (compose raw API into shape the UI consumes)
 export async function getKpis(propertyId: string, days = 30, startDate?: string | null, endDate?: string | null) {
   const range = buildDateRange(days, startDate, endDate);
+  const previousRange = buildPreviousRange(range.ga4Range);
 
-  // Tentativa 1: tudo (keyEvents + engagedSessions + bounceRate) — GA4 moderno
+  // Tentativa 1: tudo (keyEvents + engagedSessions + bounceRate) — GA4 moderno.
+  // Passamos 2 dateRanges (atual + anterior) — GA4 retorna totals[0] = atual,
+  // totals[1] = anterior. Usado pra computar delta % real (vs hardcoded antes).
   const res = await runReport(propertyId, {
-    dateRanges: [range.ga4Range],
+    dateRanges: [range.ga4Range, previousRange],
     metrics: [
       { name: "totalUsers" },
       { name: "sessions" },
@@ -240,6 +287,7 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
   });
   if (!res.error && res.data?.totals?.[0]?.metricValues) {
     const v = res.data.totals[0].metricValues.map((m) => Number(m.value || 0));
+    const vPrev = (res.data.totals[1]?.metricValues || []).map((m) => Number(m.value || 0));
     return {
       data: {
         activeUsers: v[0],
@@ -248,6 +296,19 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
         conversions: v[3],
         engagedSessions: v[4] || 0,
         bounceRate: Number(((v[5] || 0) * 100).toFixed(1)),
+        previous: {
+          activeUsers: vPrev[0] || 0,
+          sessions: vPrev[1] || 0,
+          pageviews: vPrev[2] || 0,
+          conversions: vPrev[3] || 0,
+        },
+        deltas: {
+          activeUsers: computeDelta(v[0], vPrev[0] || 0),
+          sessions: computeDelta(v[1], vPrev[1] || 0),
+          pageviews: computeDelta(v[2], vPrev[2] || 0),
+          conversions: computeDelta(v[3], vPrev[3] || 0),
+        },
+        previousRange,
         range,
         metricNames: { users: "totalUsers", conversions: "keyEvents" },
       },
@@ -257,7 +318,7 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
 
   // Tentativa 2: troca keyEvents por conversions (properties mais antigas)
   const fallback = await runReport(propertyId, {
-    dateRanges: [range.ga4Range],
+    dateRanges: [range.ga4Range, previousRange],
     metrics: [
       { name: "totalUsers" },
       { name: "sessions" },
@@ -269,6 +330,7 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
   });
   if (!fallback.error && fallback.data?.totals?.[0]?.metricValues) {
     const v = fallback.data.totals[0].metricValues.map((m) => Number(m.value || 0));
+    const vPrev = (fallback.data.totals[1]?.metricValues || []).map((m) => Number(m.value || 0));
     return {
       data: {
         activeUsers: v[0],
@@ -277,6 +339,19 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
         conversions: v[3],
         engagedSessions: v[4] || 0,
         bounceRate: Number(((v[5] || 0) * 100).toFixed(1)),
+        previous: {
+          activeUsers: vPrev[0] || 0,
+          sessions: vPrev[1] || 0,
+          pageviews: vPrev[2] || 0,
+          conversions: vPrev[3] || 0,
+        },
+        deltas: {
+          activeUsers: computeDelta(v[0], vPrev[0] || 0),
+          sessions: computeDelta(v[1], vPrev[1] || 0),
+          pageviews: computeDelta(v[2], vPrev[2] || 0),
+          conversions: computeDelta(v[3], vPrev[3] || 0),
+        },
+        previousRange,
         range,
         metricNames: { users: "totalUsers", conversions: "conversions" },
       },
@@ -289,7 +364,7 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
   // Aqui derivamos engagedSessions/bounceRate de uma segunda chamada — se falhar,
   // ainda retornamos os 4 KPIs core para o chat não quebrar.
   const minimal = await runReport(propertyId, {
-    dateRanges: [range.ga4Range],
+    dateRanges: [range.ga4Range, previousRange],
     metrics: [
       { name: "totalUsers" },
       { name: "sessions" },
@@ -298,13 +373,15 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
     ],
   });
   let v: number[] | null = null;
+  let vPrev: number[] = [];
   let convLabel: string = "keyEvents";
   if (!minimal.error && minimal.data?.totals?.[0]?.metricValues) {
     v = minimal.data.totals[0].metricValues.map((m) => Number(m.value || 0));
+    vPrev = (minimal.data.totals[1]?.metricValues || []).map((m) => Number(m.value || 0));
   } else {
     // Última tentativa: troca keyEvents por conversions
     const minimalAlt = await runReport(propertyId, {
-      dateRanges: [range.ga4Range],
+      dateRanges: [range.ga4Range, previousRange],
       metrics: [
         { name: "totalUsers" },
         { name: "sessions" },
@@ -314,6 +391,7 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
     });
     if (!minimalAlt.error && minimalAlt.data?.totals?.[0]?.metricValues) {
       v = minimalAlt.data.totals[0].metricValues.map((m) => Number(m.value || 0));
+      vPrev = (minimalAlt.data.totals[1]?.metricValues || []).map((m) => Number(m.value || 0));
       convLabel = "conversions";
     }
   }
@@ -354,6 +432,19 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
       conversions: v[3],
       engagedSessions,
       bounceRate,
+      previous: {
+        activeUsers: vPrev[0] || 0,
+        sessions: vPrev[1] || 0,
+        pageviews: vPrev[2] || 0,
+        conversions: vPrev[3] || 0,
+      },
+      deltas: {
+        activeUsers: computeDelta(v[0], vPrev[0] || 0),
+        sessions: computeDelta(v[1], vPrev[1] || 0),
+        pageviews: computeDelta(v[2], vPrev[2] || 0),
+        conversions: computeDelta(v[3], vPrev[3] || 0),
+      },
+      previousRange,
       range,
       metricNames: { users: "totalUsers", conversions: convLabel },
     },
@@ -1575,8 +1666,11 @@ export async function getCheckoutFunnel(
   const abandonedRevenueLost = abandonedCount * avgTicket;
 
   // Query 3: per-campaign breakdown — sessions + begin_checkout + purchase + revenue
-  // Strategy: 3 queries em paralelo cruzando cada métrica com sessionCampaignName
-  const [campSessionsRes, campCheckoutRes, campPurchaseRes] = await Promise.all([
+  // Strategy: 4 queries em paralelo cruzando cada métrica com sessionCampaignName.
+  // A query de receita usa 3 métricas paralelas (purchaseRevenue, totalRevenue, eventValue)
+  // para cobrir setups diferentes — especialmente CAPI (Meta Conversions API), que
+  // popula purchaseRevenue mas pode não preencher eventValue dependendo da config.
+  const [campSessionsRes, campCheckoutRes, campPurchaseRes, campRevenueRes] = await Promise.all([
     runReport(propertyId, {
       dateRanges: [range.ga4Range],
       dimensions: [{ name: "sessionCampaignName" }],
@@ -1608,6 +1702,13 @@ export async function getCheckoutFunnel(
       },
       limit: 200,
     }),
+    // Receita por campanha — métricas ecommerce-native (CAPI popula essas)
+    runReport(propertyId, {
+      dateRanges: [range.ga4Range],
+      dimensions: [{ name: "sessionCampaignName" }],
+      metrics: [{ name: "purchaseRevenue" }, { name: "totalRevenue" }],
+      limit: 200,
+    }),
   ]);
 
   // Mapeia campaign → sessions
@@ -1624,17 +1725,27 @@ export async function getCheckoutFunnel(
     campCheckout.set(camp, (campCheckout.get(camp) || 0) + Number(r.metricValues?.[0]?.value || 0));
   }
 
-  // Mapeia campaign → purchase + revenue
-  const campPurchase = new Map<string, { count: number; revenue: number }>();
+  // Mapeia campaign → purchase count + eventValue (fonte secundária de receita)
+  const campPurchase = new Map<string, { count: number; eventValueRevenue: number }>();
   for (const r of campPurchaseRes.data?.rows || []) {
     const camp = r.dimensionValues?.[0]?.value || "(not set)";
     const count = Number(r.metricValues?.[0]?.value || 0);
     const value = Number(r.metricValues?.[1]?.value || 0);
-    const existing = campPurchase.get(camp) || { count: 0, revenue: 0 };
+    const existing = campPurchase.get(camp) || { count: 0, eventValueRevenue: 0 };
     campPurchase.set(camp, {
       count: existing.count + count,
-      revenue: existing.revenue + value,
+      eventValueRevenue: existing.eventValueRevenue + value,
     });
+  }
+
+  // Mapeia campaign → purchaseRevenue / totalRevenue (fonte primária — CAPI popula)
+  // Hierarquia: purchaseRevenue (ecommerce-native) > totalRevenue (agregado) > eventValue (fallback)
+  const campRevenueMap = new Map<string, { purchaseRevenue: number; totalRevenue: number }>();
+  for (const r of campRevenueRes.data?.rows || []) {
+    const camp = r.dimensionValues?.[0]?.value || "(not set)";
+    const purchaseRev = Number(r.metricValues?.[0]?.value || 0);
+    const totalRev = Number(r.metricValues?.[1]?.value || 0);
+    campRevenueMap.set(camp, { purchaseRevenue: purchaseRev, totalRevenue: totalRev });
   }
 
   // Combina em CheckoutCampaignRow[]
@@ -1647,18 +1758,27 @@ export async function getCheckoutFunnel(
     .map((camp) => {
       const sessions = campSessions.get(camp) || 0;
       const beginCheckout = campCheckout.get(camp) || 0;
-      const purchaseData = campPurchase.get(camp) || { count: 0, revenue: 0 };
+      const purchaseData = campPurchase.get(camp) || { count: 0, eventValueRevenue: 0 };
+      const revData = campRevenueMap.get(camp) || { purchaseRevenue: 0, totalRevenue: 0 };
+      // Hierarquia receita: purchaseRevenue > totalRevenue > eventValue
+      // CAPI normalmente popula purchaseRevenue; se cair em eventValue é fallback
+      const revenue =
+        revData.purchaseRevenue > 0
+          ? revData.purchaseRevenue
+          : revData.totalRevenue > 0
+            ? revData.totalRevenue
+            : purchaseData.eventValueRevenue;
       const ctr = sessions > 0 ? (beginCheckout / sessions) * 100 : 0;
       const convRate = sessions > 0 ? (purchaseData.count / sessions) * 100 : 0;
       const abandonRate =
         beginCheckout > 0 ? ((beginCheckout - purchaseData.count) / beginCheckout) * 100 : 0;
-      const avgTicketCamp = purchaseData.count > 0 ? purchaseData.revenue / purchaseData.count : 0;
+      const avgTicketCamp = purchaseData.count > 0 ? revenue / purchaseData.count : 0;
       return {
         campaign: camp,
         sessions,
         beginCheckout,
         purchases: purchaseData.count,
-        revenue: purchaseData.revenue,
+        revenue,
         ctr_to_checkout: Number(ctr.toFixed(2)),
         conversion_rate: Number(convRate.toFixed(2)),
         abandonment_rate: Number(abandonRate.toFixed(1)),

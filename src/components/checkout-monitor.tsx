@@ -14,9 +14,13 @@ import {
   ArrowDownRight,
   Loader2,
   Info,
+  FileSpreadsheet,
+  FileText,
+  Download,
 } from "lucide-react";
 import { useGA4, useGA4CheckoutFunnel } from "@/lib/ga4-context";
 import { formatNumber } from "@/lib/utils";
+import { downloadReport, type ReportSheet } from "@/lib/export-utils";
 
 const STEP_ICONS: Record<string, typeof ShoppingCart> = {
   view_item: Eye,
@@ -142,6 +146,42 @@ export function CheckoutMonitor() {
     if (typeof av === "number" && typeof bv === "number") return bv - av;
     return String(bv).localeCompare(String(av));
   });
+
+  // Export pra XLSX / PDF / CSV — usa o builder centralizado em lib/export-utils
+  const handleExport = (format: "xlsx" | "pdf" | "csv") => {
+    const sheet: ReportSheet = {
+      name: "Campanhas",
+      columns: [
+        "Campanha",
+        "Sessões",
+        "Begin checkout",
+        "CTR → checkout (%)",
+        "Compras",
+        "Conv. rate (%)",
+        "Abandono (%)",
+        "Receita (R$)",
+        "Ticket médio (R$)",
+      ],
+      rows: sortedCamps.map((c) => [
+        c.campaign,
+        c.sessions,
+        c.beginCheckout,
+        c.ctr_to_checkout,
+        c.purchases,
+        c.conversion_rate,
+        c.abandonment_rate,
+        c.revenue,
+        c.avg_ticket,
+      ]),
+    };
+    downloadReport(format, {
+      title: "Checkout Monitor — Campanhas",
+      subtitle: "CTR de campanhas → checkout & taxa de abandono",
+      accountName: selected?.displayName,
+      period: `${data?.range?.startDate || ""} → ${data?.range?.endDate || ""}`,
+      generatedBy: "Suno Dashboard",
+    }, [sheet]);
+  };
 
   return (
     <div className="space-y-6 mb-6">
@@ -317,7 +357,7 @@ export function CheckoutMonitor() {
         transition={{ delay: 0.1 }}
         className="bg-white rounded-2xl border border-[color:var(--border)] overflow-hidden"
       >
-        <div className="px-6 py-4 border-b border-[color:var(--border)] flex items-center justify-between flex-wrap gap-2">
+        <div className="px-6 py-4 border-b border-[color:var(--border)] flex items-center justify-between flex-wrap gap-3">
           <div>
             <h3 className="text-sm font-semibold flex items-center gap-2">
               <TrendingUp size={16} className="text-[#7c5cff]" />
@@ -328,9 +368,42 @@ export function CheckoutMonitor() {
               <strong>{campSortKey}</strong>.
             </p>
           </div>
-          <div className="flex items-center gap-1.5 text-[10px]">
-            <Info size={11} className="text-slate-400" />
-            <span className="text-slate-500">CTR-to-checkout = begin_checkout ÷ sessions</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 text-[10px] mr-2">
+              <Info size={11} className="text-slate-400" />
+              <span className="text-slate-500">CTR-to-checkout = begin_checkout ÷ sessions</span>
+            </div>
+            {byCampaign.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-slate-400 mr-0.5 flex items-center gap-1">
+                  <Download size={11} />
+                  Exportar:
+                </span>
+                <button
+                  onClick={() => handleExport("xlsx")}
+                  className="text-[11px] font-semibold px-2.5 py-1.5 rounded-md border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition flex items-center gap-1.5"
+                  title="Baixar planilha Excel (XLSX)"
+                >
+                  <FileSpreadsheet size={12} />
+                  Excel
+                </button>
+                <button
+                  onClick={() => handleExport("pdf")}
+                  className="text-[11px] font-semibold px-2.5 py-1.5 rounded-md border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 transition flex items-center gap-1.5"
+                  title="Baixar relatório em PDF"
+                >
+                  <FileText size={12} />
+                  PDF
+                </button>
+                <button
+                  onClick={() => handleExport("csv")}
+                  className="text-[11px] font-semibold px-2.5 py-1.5 rounded-md border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 transition flex items-center gap-1.5"
+                  title="Baixar CSV (UTF-8)"
+                >
+                  CSV
+                </button>
+              </div>
+            )}
           </div>
         </div>
 

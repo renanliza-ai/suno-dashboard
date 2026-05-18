@@ -34,12 +34,35 @@ export default function Home() {
   }));
 
   const showRealKpis = useRealData && meta.status === "success" && overview?.kpis;
+  // Deltas REAIS comparando vs período anterior (mesma duração).
+  // Antes estavam hardcoded em 12.4/8.7/15.2/-2.1 — não reagiam ao filtro de data.
+  const realDeltas = overview?.kpis?.deltas;
   const kpis = showRealKpis
     ? [
-        { label: "Usuários Ativos", value: overview!.kpis!.activeUsers, delta: 12.4, color: "#7c5cff" },
-        { label: "Sessões", value: overview!.kpis!.sessions, delta: 8.7, color: "#10b981" },
-        { label: "Pageviews", value: overview!.kpis!.pageviews, delta: 15.2, color: "#3b82f6" },
-        { label: "Conversões", value: overview!.kpis!.conversions, delta: -2.1, color: "#f59e0b" },
+        {
+          label: "Usuários Ativos",
+          value: overview!.kpis!.activeUsers,
+          delta: realDeltas?.activeUsers ?? 0,
+          color: "#7c5cff",
+        },
+        {
+          label: "Sessões",
+          value: overview!.kpis!.sessions,
+          delta: realDeltas?.sessions ?? 0,
+          color: "#10b981",
+        },
+        {
+          label: "Pageviews",
+          value: overview!.kpis!.pageviews,
+          delta: realDeltas?.pageviews ?? 0,
+          color: "#3b82f6",
+        },
+        {
+          label: "Conversões",
+          value: overview!.kpis!.conversions,
+          delta: realDeltas?.conversions ?? 0,
+          color: "#f59e0b",
+        },
       ]
     : mockKpis;
 

@@ -10,9 +10,13 @@ type Props = {
   delta: number;
   color: string;
   index: number;
+  // Label do período de comparação — default "vs mês anterior" (compat antigo),
+  // pode ser sobrescrito pra "vs período anterior" quando o usuário filtra
+  // qualquer range custom (ex.: 7d compara com 7d anteriores).
+  compareLabel?: string;
 };
 
-export function KpiCard({ label, value, delta, color, index }: Props) {
+export function KpiCard({ label, value, delta, color, index, compareLabel }: Props) {
   const positive = delta >= 0;
   return (
     <motion.div
@@ -64,7 +68,7 @@ export function KpiCard({ label, value, delta, color, index }: Props) {
             {positive ? "+" : ""}
             {delta.toFixed(1)}%
           </div>
-          <span className="text-xs text-[color:var(--muted-foreground)]">vs mês anterior</span>
+          <span className="text-xs text-[color:var(--muted-foreground)]">{compareLabel || "vs período anterior"}</span>
         </div>
       </div>
     </motion.div>

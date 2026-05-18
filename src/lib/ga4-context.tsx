@@ -244,6 +244,20 @@ type Overview = {
         bounceRate?: number; // %
         range?: { startDate: string; endDate: string };
         metricNames?: { users: string; conversions: string };
+        // Deltas calculados vs período imediatamente anterior (mesma duração)
+        previous?: {
+          activeUsers: number;
+          sessions: number;
+          pageviews: number;
+          conversions: number;
+        };
+        deltas?: {
+          activeUsers: number;
+          sessions: number;
+          pageviews: number;
+          conversions: number;
+        };
+        previousRange?: { startDate: string; endDate: string };
       }
     | null;
   trend: { date: string; sessoes: number; usuarios: number }[] | null;
@@ -1101,4 +1115,85 @@ export function useGA4Realtime(pollMs = 30000) {
   }, [selectedId, selected, useRealData, pollMs]);
 
   return { data, meta, loading: meta.status === "loading", error };
+}
+
+// =============================================================
+// Hook: useGA4Audience — demografia / geografia / tecnologia REAL do GA4.
+// Substitui os dados estáticos da página /audiencia, que antes não reagiam
+// ao filtro de data. Agora muda quando o usuário troca o período.
+// =============================================================
+export type GA4Audience = {
+  byAge: { name: string; users: number; pct: number }[];
+  byGender: { name: string; users: number; pct: number }[];
+  byState: { name: string; users: number; pct: number }[];
+  byBrowser: { name: string; users: number; pct: number }[];
+  byOS: { name: string; users: number; pct: number }[];
+  byDevice: { name: string; users: number; pct: number }[];
+  meta?: {
+    hasDemographics: boolean;
+    hasAge: boolean;
+    hasGender: boolean;
+    statesCount: number;
+    hasError: boolean;
+  };
+};
+
+export function useGA4Audience(daysOverride?: number) {
+  const { selectedId, selected, useRealData, days: ctxDays, customRange } = useGA4();
+  const days = daysOverride ?? ctxDays;
+  const [data, setData] = useState<GA4Audience | null>(null);
+  const [meta, setMeta] = useState<GA4Meta>({
+    status: "idle",
+    propertyId: null,
+    propertyName: null,
+    fetchedAt: null,
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Reseta ao trocar propriedade
+    setData(null);
+    setError(null);
+    if (!useRealData || !selectedId) {
+      setMeta({ status: "idle", propertyId: null, propertyName: null, fetchedAt: null });
+      return;
+    }
+    const requestPropertyId = selectedId;
+    setMeta({
+      status: "loading",
+      propertyId: selectedId,
+      propertyName: selected?.displayName || null,
+      fetchedAt: null,
+    });
+    const controller = new AbortController();
+    const qs = buildDateQS(days, customRange, { propertyId: selectedId });
+    cachedFetch(`/api/ga4/audience?${qs.toString()}`, { signal: controller.signal })
+      .then((r) => r.json())
+      .then((d) => {
+        // Anti race-condition: descarta se property mudou no meio do fetch
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
+        setData(d as GA4Audience);
+        const hasErr = d?.meta?.hasError;
+        setMeta({
+          status: hasErr ? "partial" : "success",
+          propertyId: selectedId,
+          propertyName: selected?.displayName || null,
+          fetchedAt: Date.now(),
+        });
+      })
+      .catch((e) => {
+        if (e.name !== "AbortError") {
+          setError(e.message || "erro");
+          setMeta({
+            status: "error",
+            propertyId: selectedId,
+            propertyName: selected?.displayName || null,
+            fetchedAt: Date.now(),
+          });
+        }
+      });
+    return () => controller.abort();
+  }, [selectedId, selected, useRealData, days, customRange?.startDate, customRange?.endDate]);
+
+  return { data, meta, error, loading: meta.status === "loading" };
 }

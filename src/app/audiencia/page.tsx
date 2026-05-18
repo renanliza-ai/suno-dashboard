@@ -27,9 +27,10 @@ import {
   activeUsersStats,
 } from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
-import { useGA4, useGA4Overview } from "@/lib/ga4-context";
+import { useGA4, useGA4Overview, useGA4Audience } from "@/lib/ga4-context";
 import { DataStatus } from "@/components/data-status";
 import { MasterOnly } from "@/components/master-only";
+import { Loader2 } from "lucide-react";
 
 // Seed determinístico — ao trocar a propriedade, valores escalam de forma estável.
 function hashSeed(s: string | null | undefined): number {
@@ -45,9 +46,49 @@ export default function AudienciaPage() {
   // GA4 — propriedade do header
   const { selected, selectedId, useRealData } = useGA4();
   const { data: overview, meta } = useGA4Overview();
+  const { data: audienceReal, loading: audienceLoading } = useGA4Audience();
   const seed = hashSeed(selectedId);
   const propertyName = selected?.displayName || "Modo demo (sem GA4)";
   const factor = 0.7 + ((seed % 60) / 100); // 0.70x a 1.30x
+
+  // Quando há dados reais GA4, usa eles. Caso contrário, fallback pros mocks.
+  // Cores fixas pra gênero (mantém visual estável)
+  const genderColors: Record<string, string> = {
+    Masculino: "#7c5cff",
+    Feminino: "#ec4899",
+    "Não informado": "#94a3b8",
+    Male: "#7c5cff",
+    Female: "#ec4899",
+  };
+  const realAge =
+    audienceReal?.byAge && audienceReal.byAge.length > 0
+      ? audienceReal.byAge.map((a) => ({ range: a.name, users: a.users, pct: a.pct }))
+      : null;
+  const realGender =
+    audienceReal?.byGender && audienceReal.byGender.length > 0
+      ? audienceReal.byGender.map((g) => ({
+          name: g.name,
+          value: g.pct,
+          color: genderColors[g.name] || "#7c5cff",
+        }))
+      : null;
+  const realState = audienceReal?.byState && audienceReal.byState.length > 0
+    ? audienceReal.byState.map((s) => ({ state: s.name, users: s.users, pct: s.pct }))
+    : null;
+  const realBrowser = audienceReal?.byBrowser && audienceReal.byBrowser.length > 0
+    ? audienceReal.byBrowser.map((b) => ({ name: b.name, pct: b.pct }))
+    : null;
+  const realOS = audienceReal?.byOS && audienceReal.byOS.length > 0
+    ? audienceReal.byOS.map((o) => ({ name: o.name, pct: o.pct }))
+    : null;
+
+  // Decide qual fonte usar — real GA4 se disponível, senão fallback estático
+  const ageData = realAge || audienceByAge;
+  const genderData = realGender || audienceByGender;
+  const stateData = realState || audienceByState;
+  const browserData = realBrowser || audienceByTech.browser;
+  const osData = realOS || audienceByTech.os;
+  const isRealAudience = useRealData && !!audienceReal;
 
   // Quando há dados reais GA4, usamos activeUsers para escalar tudo proporcionalmente.
   const realTotal = useRealData && meta.status === "success" ? overview?.kpis?.activeUsers || 0 : 0;
@@ -119,6 +160,17 @@ export default function AudienciaPage() {
               · DAU/WAU/MAU calculados de dados reais GA4
             </span>
           )}
+          {isRealAudience && (
+            <span className="ml-2 text-[11px] text-emerald-600 font-semibold">
+              · Demografia / geografia / tech reagem ao filtro de período
+            </span>
+          )}
+          {audienceLoading && (
+            <span className="ml-2 inline-flex items-center gap-1 text-[11px] text-slate-500">
+              <Loader2 size={11} className="animate-spin" />
+              Atualizando audiência...
+            </span>
+          )}
         </div>
         {useRealData && <DataStatus meta={meta} />}
       </div>
@@ -156,7 +208,7 @@ export default function AudienciaPage() {
             Faixa Etária
           </h3>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={audienceByAge} layout="vertical" margin={{ left: 0, right: 20 }}>
+            <BarChart data={ageData} layout="vertical" margin={{ left: 0, right: 20 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#eceaf4" horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 10, fill: "#6b6b80" }} axisLine={false} tickLine={false} tickFormatter={(v) => formatNumber(v)} />
               <YAxis type="category" dataKey="range" tick={{ fontSize: 11, fill: "#6b6b80" }} axisLine={false} tickLine={false} width={50} />
@@ -165,7 +217,18 @@ export default function AudienciaPage() {
             </BarChart>
           </ResponsiveContainer>
           <div className="text-[11px] text-[color:var(--muted-foreground)] mt-2">
-            <strong className="text-[color:var(--foreground)]">Dominante:</strong> 25-44 anos (63.5%)
+            {isRealAudience && realAge ? (
+              <>
+                <strong className="text-[color:var(--foreground)]">Dominante:</strong>{" "}
+                {realAge[0]?.range || "—"}
+                {realAge[0]?.pct ? ` (${realAge[0].pct}%)` : ""}
+              </>
+            ) : (
+              <>
+                <strong className="text-[color:var(--foreground)]">Dominante:</strong> 25-44 anos
+                (63.5%)
+              </>
+            )}
           </div>
         </div>
 
@@ -177,8 +240,8 @@ export default function AudienciaPage() {
           <div className="relative">
             <ResponsiveContainer width="100%" height={180}>
               <PieChart>
-                <Pie data={audienceByGender} dataKey="value" innerRadius={50} outerRadius={75} paddingAngle={3}>
-                  {audienceByGender.map((g, i) => (
+                <Pie data={genderData} dataKey="value" innerRadius={50} outerRadius={75} paddingAngle={3}>
+                  {genderData.map((g, i) => (
                     <Cell key={i} fill={g.color} stroke="none" />
                   ))}
                 </Pie>
@@ -190,13 +253,18 @@ export default function AudienciaPage() {
             </div>
           </div>
           <div className="space-y-1.5 mt-3">
-            {audienceByGender.map((g) => (
+            {genderData.map((g) => (
               <div key={g.name} className="flex items-center gap-2 text-xs">
                 <span className="w-2 h-2 rounded-full" style={{ background: g.color }} />
                 <span className="flex-1">{g.name}</span>
                 <span className="font-bold">{g.value}%</span>
               </div>
             ))}
+            {isRealAudience && audienceReal?.meta && !audienceReal.meta.hasGender && (
+              <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 mt-1">
+                ⚠ Gênero não disponível — ative Google Signals na propriedade GA4
+              </div>
+            )}
           </div>
         </div>
 
@@ -204,6 +272,9 @@ export default function AudienciaPage() {
           <h3 className="text-base font-semibold flex items-center gap-2 mb-4">
             <Heart size={14} className="text-[#7c5cff]" />
             Afinidade de Interesses
+            <span className="ml-auto text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+              Estudo ICP
+            </span>
           </h3>
           <div className="space-y-2">
             {audienceInterests.slice(0, 6).map((t, i) => (
@@ -238,7 +309,7 @@ export default function AudienciaPage() {
             Distribuição por Estado
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
-            {audienceByState.map((s, i) => (
+            {stateData.map((s, i) => (
               <motion.div
                 key={s.state}
                 initial={{ opacity: 0, y: 4 }}
@@ -254,10 +325,13 @@ export default function AudienciaPage() {
                 <div className="h-1.5 bg-[color:var(--muted)] rounded-full overflow-hidden">
                   <motion.div
                     initial={{ width: 0 }}
-                    animate={{ width: `${s.pct * 2.5}%` }}
+                    animate={{
+                      // Normaliza largura pelo maior estado da lista (não pelo total)
+                      // pra que SP=40% não jogue todas outras pra microscopia
+                      width: `${Math.min(100, (s.pct / (stateData[0]?.pct || 1)) * 100)}%`,
+                    }}
                     transition={{ duration: 0.6, delay: i * 0.03 }}
                     className="h-full bg-gradient-to-r from-[#7c5cff] to-[#b297ff] rounded-full"
-                    style={{ maxWidth: "100%" }}
                   />
                 </div>
               </motion.div>
@@ -273,7 +347,7 @@ export default function AudienciaPage() {
           <div>
             <div className="text-[10px] uppercase tracking-wider text-[color:var(--muted-foreground)] font-semibold mb-2">Browser</div>
             <div className="space-y-1.5">
-              {audienceByTech.browser.map((b) => (
+              {browserData.map((b) => (
                 <div key={b.name} className="flex items-center gap-2 text-[11px]">
                   <span className="w-16 font-medium">{b.name}</span>
                   <div className="flex-1 h-1.5 bg-[color:var(--muted)] rounded-full overflow-hidden">
@@ -292,7 +366,7 @@ export default function AudienciaPage() {
           <div className="mt-4 pt-4 border-t border-[color:var(--border)]">
             <div className="text-[10px] uppercase tracking-wider text-[color:var(--muted-foreground)] font-semibold mb-2">Sistema</div>
             <div className="space-y-1.5">
-              {audienceByTech.os.map((o) => (
+              {osData.map((o) => (
                 <div key={o.name} className="flex items-center gap-2 text-[11px]">
                   <span className="w-16 font-medium">{o.name}</span>
                   <div className="flex-1 h-1.5 bg-[color:var(--muted)] rounded-full overflow-hidden">
@@ -315,6 +389,9 @@ export default function AudienciaPage() {
         <h3 className="text-base font-semibold flex items-center gap-2 mb-4">
           <Clock size={14} className="text-[#7c5cff]" />
           Retenção por Coorte
+          <span className="ml-auto text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+            Estudo Suno
+          </span>
         </h3>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
