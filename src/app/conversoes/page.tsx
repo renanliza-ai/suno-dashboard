@@ -312,7 +312,16 @@ export default function ConversoesPage() {
             </span>
           </div>
           <p className="text-sm text-amber-800 mt-1">
-            {formatNumber(abandonRow.count)} abandonos detectados · taxa de abandono {realAbandonRate !== null ? `${realAbandonRate}%` : "68.2%"} · {formatNumber(abandonedCheckoutRule.recovery.recoveredPurchases)} recuperados por email ({abandonedCheckoutRule.recovery.recoveryRate}%)
+            {formatNumber(abandonRow.count)} abandonos detectados
+            {realAbandonRate !== null
+              ? ` · taxa de abandono ${realAbandonRate}%`
+              : isReal
+                ? " · aguardando volume suficiente para calcular taxa"
+                : " · taxa indisponível (modo demo — conecte GA4)"}
+            {" · "}
+            <span className="opacity-70 text-[11px]">
+              {formatNumber(abandonedCheckoutRule.recovery.recoveredPurchases)} recuperados por email ({abandonedCheckoutRule.recovery.recoveryRate}%) <em>· dados do CRM</em>
+            </span>
           </p>
         </div>
         <div className="text-right shrink-0">

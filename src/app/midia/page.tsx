@@ -214,6 +214,15 @@ export default function RelatoriosPage() {
               <Crown size={10} /> dim custom ativa
             </span>
           )}
+          {/* Aviso explícito quando dim selecionada NÃO tem dado real ainda */}
+          {useRealData && !isRealForDimension && (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-50 text-red-700 border border-red-200"
+              title="Esta dimensão ainda usa dados de exemplo. Apenas sunoChannel e channel têm GA4 real conectado."
+            >
+              ⚠ dados de exemplo
+            </span>
+          )}
         </div>
         <p className="text-[color:var(--muted-foreground)] mt-1">
           Explore métricas GA4 com a dimensão personalizada{" "}

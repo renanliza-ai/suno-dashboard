@@ -173,6 +173,24 @@ export default function PaginasPage() {
             ✓ métricas completas GA4 · host + path
           </span>
         )}
+        {/* Quando GA4 está conectado mas pages-detail não retornou e caímos no overview básico */}
+        {useRealData && !showReal && overview?.pages && overview.pages.length > 0 && (
+          <span
+            className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-amber-700"
+            title="GA4 retornou apenas views/users. Tempo médio, rejeição e saída ficam como '—' até o detalhamento completo carregar."
+          >
+            ⚠ dados parciais GA4 · só views + usuários
+          </span>
+        )}
+        {/* Quando NÃO há dado real e estamos usando 100% mock estático */}
+        {usingMock && (
+          <span
+            className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-red-200 bg-red-50 text-red-700"
+            title="Conecte uma propriedade GA4 no header para ver dados reais. Os números abaixo são exemplos."
+          >
+            ⚠ dados de exemplo · conecte GA4 para dados reais
+          </span>
+        )}
       </div>
 
       {hasError && (

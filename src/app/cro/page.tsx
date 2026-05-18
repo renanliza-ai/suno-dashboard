@@ -1240,6 +1240,28 @@ export default function CROPage() {
           {useRealData && <DataStatus meta={pagesMeta} usingMock={!useRealData} />}
         </div>
 
+        {/* Banner: aviso de que insights e Core Web Vitals são hipóteses/estimativas */}
+        <div className="mb-6 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 p-4 flex items-start gap-3">
+          <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+          <div className="text-xs text-amber-900 leading-relaxed">
+            <strong className="text-sm">Atenção — natureza dos dados desta página:</strong>
+            <ul className="mt-1.5 space-y-1 list-disc list-inside">
+              <li>
+                <strong>Páginas, sessões, bounce e engajamento</strong> vêm do GA4 real da propriedade selecionada
+                {realPagesAvailable ? " ✓" : " (modo demo)"}.
+              </li>
+              <li>
+                <strong>Core Web Vitals (LCP, CLS, INP)</strong> são <em>estimativas heurísticas</em> derivadas do
+                bounce — não dados reais do CrUX/RUM. Para números exatos, consulte PageSpeed Insights.
+              </li>
+              <li>
+                <strong>Insights, recomendações e impactos estimados</strong> são <em>hipóteses de teste</em>
+                baseadas em benchmarks Suno, não previsões validadas para esta propriedade específica.
+              </li>
+            </ul>
+          </div>
+        </div>
+
         {/* KPIs clicáveis */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           {metrics.map((m, i) => (
