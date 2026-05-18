@@ -20,7 +20,7 @@ import {
 import { formatNumber } from "@/lib/utils";
 import { Header } from "@/components/header";
 import { Dialog } from "@/components/dialog";
-import { useGA4, useGA4Conversions } from "@/lib/ga4-context";
+import { useGA4, useGA4Conversions, useGA4CheckoutFunnel } from "@/lib/ga4-context";
 import { DataStatus, SkeletonBlock, DataErrorCard } from "@/components/data-status";
 import {
   AttributionIllustration,
@@ -48,6 +48,7 @@ export default function ConversoesPage() {
   // GA4 real data — sem daysOverride para respeitar o calendário do header
   const { useRealData, days, customRange } = useGA4();
   const { data: ga4Conv, meta, error: ga4Error } = useGA4Conversions();
+  const { data: checkoutFunnel } = useGA4CheckoutFunnel();
   const periodLabel = customRange
     ? `${customRange.startDate} → ${customRange.endDate}`
     : `últimos ${days} dias`;
@@ -76,6 +77,43 @@ export default function ConversoesPage() {
   const totalConv = purchaseRow.count;
   const leadRow = goals.find((g) => g.event === "generate_lead")!;
   const abandonRow = goals.find((g) => g.event === "abandoned_checkout")!;
+
+  // Derivação REAL da validação da regra abandoned_checkout — antes era 100% mock.
+  // Quando temos checkoutFunnel do GA4, recalcula os 4 KPIs do modal e a taxa
+  // de abandono em cima dos dados do período selecionado.
+  const realBeginCheckout = checkoutFunnel?.steps?.find((s) => s.stage === "begin_checkout")?.count;
+  const realPurchase = checkoutFunnel?.steps?.find((s) => s.stage === "purchase")?.count;
+  const hasRealValidation = isReal && typeof realBeginCheckout === "number" && typeof realPurchase === "number" && realBeginCheckout > 0;
+  const realAbandonedExpected = hasRealValidation ? Math.max(0, realBeginCheckout! - realPurchase!) : null;
+  const realAbandonedActual = isReal ? abandonRow.count : null;
+  const realMatchRate = hasRealValidation && realAbandonedExpected! > 0 && realAbandonedActual !== null
+    ? Math.min(100, Math.round((realAbandonedActual / realAbandonedExpected!) * 100))
+    : null;
+  const realAbandonRate = hasRealValidation && realBeginCheckout! > 0
+    ? Number(((realAbandonedExpected! / realBeginCheckout!) * 100).toFixed(1))
+    : null;
+  // Validação ao vivo — usa horário atual do servidor (ou agora se client)
+  const liveValidationTs = new Date().toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+  const validationView = hasRealValidation
+    ? {
+        timestamp: liveValidationTs,
+        beginCheckoutCount: realBeginCheckout!,
+        purchaseInWindow: realPurchase!,
+        abandonedExpected: realAbandonedExpected!,
+        abandonedActual: realAbandonedActual ?? realAbandonedExpected!,
+        matchRate: realMatchRate ?? 0,
+        abandonRate: realAbandonRate ?? 0,
+        notes:
+          realAbandonRate !== null && realAbandonRate >= 65 && realAbandonRate <= 75
+            ? `Regra valida — taxa de abandono ${realAbandonRate}%, dentro do benchmark do setor (65-75%).`
+            : realAbandonRate !== null && realAbandonRate > 75
+              ? `Taxa de abandono elevada (${realAbandonRate}%, benchmark do setor 65-75%) — vale investigar etapas de checkout.`
+              : realAbandonRate !== null
+                ? `Taxa de abandono saudável (${realAbandonRate}%, abaixo do benchmark do setor 65-75%).`
+                : "Validação automática ao vivo.",
+        isReal: true,
+      }
+    : { ...abandonedCheckoutRule.lastValidation, abandonRate: 68.2, isReal: false };
 
   return (
     <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
@@ -274,7 +312,7 @@ export default function ConversoesPage() {
             </span>
           </div>
           <p className="text-sm text-amber-800 mt-1">
-            {formatNumber(abandonRow.count)} abandonos detectados · taxa de abandono {abandonedCheckoutRule.lastValidation.matchRate > 0 ? "68.2%" : "—"} · {formatNumber(abandonedCheckoutRule.recovery.recoveredPurchases)} recuperados por email ({abandonedCheckoutRule.recovery.recoveryRate}%)
+            {formatNumber(abandonRow.count)} abandonos detectados · taxa de abandono {realAbandonRate !== null ? `${realAbandonRate}%` : "68.2%"} · {formatNumber(abandonedCheckoutRule.recovery.recoveredPurchases)} recuperados por email ({abandonedCheckoutRule.recovery.recoveryRate}%)
           </p>
         </div>
         <div className="text-right shrink-0">
@@ -475,49 +513,53 @@ export default function ConversoesPage() {
           </div>
 
           <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4">
-            <div className="flex items-center gap-2 mb-2">
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
               <ShieldCheck size={16} className="text-emerald-700" />
               <p className="text-sm font-bold text-emerald-900">
-                Última validação: {abandonedCheckoutRule.lastValidation.timestamp}
+                {validationView.isReal ? "Validação ao vivo" : "Última validação"}: {validationView.timestamp}
               </p>
+              <span className="text-[10px] font-mono text-emerald-700 bg-white/60 px-1.5 py-0.5 rounded">
+                {periodLabel}
+              </span>
               <span className="ml-auto px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white">
-                {abandonedCheckoutRule.lastValidation.matchRate}% match
+                {validationView.matchRate}% match
               </span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
               <div>
                 <p className="text-[10px] uppercase text-emerald-700 font-semibold">begin_checkout</p>
                 <p className="font-bold tabular-nums">
-                  {formatNumber(abandonedCheckoutRule.lastValidation.beginCheckoutCount)}
+                  {formatNumber(validationView.beginCheckoutCount)}
                 </p>
               </div>
               <div>
                 <p className="text-[10px] uppercase text-emerald-700 font-semibold">purchases (24h)</p>
                 <p className="font-bold tabular-nums">
-                  {formatNumber(abandonedCheckoutRule.lastValidation.purchaseInWindow)}
+                  {formatNumber(validationView.purchaseInWindow)}
                 </p>
               </div>
               <div>
                 <p className="text-[10px] uppercase text-emerald-700 font-semibold">Abandonos esperados</p>
                 <p className="font-bold tabular-nums">
-                  {formatNumber(abandonedCheckoutRule.lastValidation.abandonedExpected)}
+                  {formatNumber(validationView.abandonedExpected)}
                 </p>
               </div>
               <div>
                 <p className="text-[10px] uppercase text-emerald-700 font-semibold">Capturados</p>
                 <p className="font-bold tabular-nums">
-                  {formatNumber(abandonedCheckoutRule.lastValidation.abandonedActual)}
+                  {formatNumber(validationView.abandonedActual)}
                 </p>
               </div>
             </div>
-            <p className="text-xs text-emerald-800 mt-3">
-              {abandonedCheckoutRule.lastValidation.notes}
-            </p>
+            <p className="text-xs text-emerald-800 mt-3">{validationView.notes}</p>
           </div>
 
           <div className="rounded-xl border border-[color:var(--border)] p-4">
             <p className="text-sm font-semibold mb-3 flex items-center gap-2">
               <RefreshCw size={14} className="text-[#7c5cff]" /> Recuperação por e-mail
+              <span className="ml-auto text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                Dados do CRM
+              </span>
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
               <div>
