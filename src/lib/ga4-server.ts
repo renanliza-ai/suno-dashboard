@@ -1528,8 +1528,8 @@ export async function getJourneyFunnel(propertyId: string, days = 30, startDate?
  * de campanhas que levam ao checkout.
  *
  * Retorna 4 blocos:
- *   1) steps: funil de eventos view_item → add_to_cart → begin_checkout
- *      → add_payment_info → purchase
+ *   1) steps: funil Suno — view_item → begin_checkout → add_payment_info → purchase
+ *      (NÃO usamos add_to_cart — não faz parte do tracking do checkout próprio Suno)
  *   2) abandonment: drop absoluto entre cada etapa + valor perdido estimado
  *   3) byCampaign: top campanhas com sessões, begin_checkout, purchase,
  *      conversion rate, ticket médio
@@ -1537,7 +1537,6 @@ export async function getJourneyFunnel(propertyId: string, days = 30, startDate?
  */
 const CHECKOUT_STEPS: { stage: string; aliases: string[]; label: string }[] = [
   { stage: "view_item", aliases: ["view_item", "view_product"], label: "Viu produto" },
-  { stage: "add_to_cart", aliases: ["add_to_cart"], label: "Adicionou ao carrinho" },
   { stage: "begin_checkout", aliases: ["begin_checkout", "checkout_start"], label: "Iniciou checkout" },
   { stage: "add_payment_info", aliases: ["add_payment_info", "add_shipping_info"], label: "Preencheu pagamento" },
   { stage: "purchase", aliases: ["purchase", "purchase_success"], label: "Comprou" },

@@ -10,7 +10,6 @@ import {
   AlertTriangle,
   TrendingUp,
   TrendingDown,
-  PackageOpen,
   ArrowDownRight,
   Loader2,
   Info,
@@ -24,13 +23,13 @@ import { downloadReport, type ReportSheet } from "@/lib/export-utils";
 
 const STEP_ICONS: Record<string, typeof ShoppingCart> = {
   view_item: Eye,
-  add_to_cart: PackageOpen,
   begin_checkout: ShoppingCart,
   add_payment_info: CreditCard,
   purchase: CheckCircle2,
 };
 
-const STEP_COLORS = ["#7c5cff", "#8b6dff", "#9a7eff", "#a98fff", "#10b981"];
+// 4 cores pro funil Suno (view_item → begin_checkout → add_payment → purchase)
+const STEP_COLORS = ["#7c5cff", "#8b6dff", "#a98fff", "#10b981"];
 
 function formatBRL(v: number): string {
   return v.toLocaleString("pt-BR", {
@@ -124,11 +123,8 @@ export function CheckoutMonitor() {
     const stage = biggestDropStep.stage;
     const dropPct = biggestDropStep.dropFromPrev;
     const dropAbs = biggestDropStep.dropAbsoluteFromPrev;
-    if (stage === "add_to_cart") {
-      return `Maior drop no add_to_cart (${dropPct}%, ${formatNumber(dropAbs)} pessoas). Pode ser problema de página de produto, preço pouco visível ou CTA fraco.`;
-    }
     if (stage === "begin_checkout") {
-      return `Maior drop em begin_checkout (${dropPct}%, ${formatNumber(dropAbs)} pessoas). Frete, cupom mal aplicado ou complexidade do carrinho.`;
+      return `Maior drop em begin_checkout (${dropPct}%, ${formatNumber(dropAbs)} pessoas). Problema de página de produto, preço pouco visível, CTA fraco ou complexidade do carrinho.`;
     }
     if (stage === "add_payment_info") {
       return `Maior drop em add_payment_info (${dropPct}%, ${formatNumber(dropAbs)} pessoas). Validação de cartão, integração com gateway, ou erro de UX no formulário.`;
@@ -197,10 +193,10 @@ export function CheckoutMonitor() {
           <div>
             <h3 className="text-sm font-semibold flex items-center gap-2">
               <ShoppingCart size={16} className="text-[#7c5cff]" />
-              Monitor de Checkout — funil de 5 etapas
+              Monitor de Checkout — funil de 4 etapas
             </h3>
             <p className="text-xs text-[color:var(--muted-foreground)] mt-0.5">
-              {selected?.displayName} · view_item → add_to_cart → begin_checkout → add_payment_info → purchase
+              {selected?.displayName} · view_item → begin_checkout → add_payment_info → purchase
             </p>
           </div>
           <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700">
