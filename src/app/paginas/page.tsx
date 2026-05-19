@@ -15,6 +15,7 @@ import {
 import { allPages } from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
 import { useGA4, useGA4Overview, useGA4PagesDetail } from "@/lib/ga4-context";
+import { RecurringCampaigns } from "@/components/recurring-campaigns";
 import { MasterOnly } from "@/components/master-only";
 import { LPChannelComparator } from "@/components/lp-channel-comparator";
 import { DailySessionsChart } from "@/components/daily-sessions-chart";
@@ -198,6 +199,15 @@ export default function PaginasPage() {
           <DataErrorCard meta={meta} error={ga4Error} onRetry={() => window.location.reload()} />
         </div>
       )}
+
+      {/* ============================================================
+          CAMPANHAS RECORRENTES — detecção automática (Aniversário Suno,
+          Black Friday, Semana do Assinante etc.) via UTM patterns no
+          histórico GA4. Mostra calendário + comparativo cross-year +
+          baseline preditivo pra próxima edição. Colapsado por default
+          pra não atrapalhar o uso normal da página.
+         ============================================================ */}
+      <RecurringCampaigns />
 
       {/* ============================================================
           NOVA ORDEM (pedida pelo Renan):
