@@ -31,6 +31,7 @@ import {
   Shield,
   Search,
   Info,
+  Loader2,
 } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import {
@@ -742,6 +743,9 @@ export default function TrackingPage() {
   const [capiLive, setCapiLive] = useState<CAPILiveResp | null>(null);
   const [capiLoading, setCapiLoading] = useState(true);
   const [capiOpen, setCapiOpen] = useState(false);
+  const [capiLastValidated, setCapiLastValidated] = useState<Date | null>(null);
+  // Trigger manual — incrementa pra forçar refetch sob demanda (botão "Revalidar agora")
+  const [capiRevalidateTrigger, setCapiRevalidateTrigger] = useState(0);
 
   // Faz o fetch passando a propriedade selecionada — pra cada propriedade
   // tem um par (pixelId, token) próprio em .env.local. Se não tiver bloco
@@ -752,15 +756,19 @@ export default function TrackingPage() {
       setCapiLoading(true);
       try {
         const propParam = propertyName ? `?propertyName=${encodeURIComponent(propertyName)}` : "";
-        const r = await fetch(`/api/capi/test${propParam}`, { cache: "no-store" });
+        // cache-buster pra ignorar qualquer cache de CDN/SWR quando user pediu revalidar
+        const buster = `${propParam ? "&" : "?"}_t=${Date.now()}`;
+        const r = await fetch(`/api/capi/test${propParam}${buster}`, { cache: "no-store" });
         const data = (await r.json()) as CAPILiveResp;
         if (alive) {
           setCapiLive(data);
+          setCapiLastValidated(new Date());
           setCapiLoading(false);
         }
       } catch (e) {
         if (alive) {
           setCapiLive({ ok: false, error: (e as Error).message });
+          setCapiLastValidated(new Date());
           setCapiLoading(false);
         }
       }
@@ -768,7 +776,13 @@ export default function TrackingPage() {
     fetchCapiStatus();
     const id = setInterval(fetchCapiStatus, 5 * 60 * 1000);
     return () => { alive = false; clearInterval(id); };
-  }, [propertyName]);
+  }, [propertyName, capiRevalidateTrigger]);
+
+  // Função pública pra forçar revalidação imediata (botão no card/modal)
+  const revalidateCAPI = () => {
+    setCapiLive(null); // limpa estado pra UI mostrar loading enquanto refaz
+    setCapiRevalidateTrigger((t) => t + 1);
+  };
 
   // Deriva o status pra UI a partir da resposta real
   const capiData = useMemo(() => {
@@ -950,13 +964,43 @@ export default function TrackingPage() {
                 )}
               </p>
             </div>
-            <button
-              onClick={() => setCapiOpen(true)}
-              className="px-4 py-2 rounded-xl bg-[#7c5cff] hover:bg-[#6b4bf0] text-white text-sm font-semibold inline-flex items-center gap-1.5 transition shrink-0"
-            >
-              {capiData.status === "active" ? "Ver diagnóstico completo" : "Validar implementação"}
-              <ChevronRight size={14} />
-            </button>
+            <div className="flex flex-col gap-2 shrink-0">
+              <button
+                onClick={() => setCapiOpen(true)}
+                className="px-4 py-2 rounded-xl bg-[#7c5cff] hover:bg-[#6b4bf0] text-white text-sm font-semibold inline-flex items-center gap-1.5 transition"
+              >
+                {capiData.status === "active" ? "Ver diagnóstico completo" : "Validar implementação"}
+                <ChevronRight size={14} />
+              </button>
+              <button
+                onClick={revalidateCAPI}
+                disabled={capiLoading}
+                className="px-4 py-1.5 rounded-xl border border-[#7c5cff]/30 text-[#7c5cff] hover:bg-[#7c5cff]/5 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Faz uma nova chamada ao /api/capi/test imediatamente — útil se você acabou de configurar"
+              >
+                {capiLoading ? (
+                  <>
+                    <Loader2 size={12} className="animate-spin" />
+                    Validando…
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw size={12} />
+                    Revalidar agora
+                  </>
+                )}
+              </button>
+              {capiLastValidated && !capiLoading && (
+                <p className="text-[10px] text-[color:var(--muted-foreground)] text-center">
+                  Última validação:{" "}
+                  {capiLastValidated.toLocaleTimeString("pt-BR", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Mini-grid: eventos client / lost / server / match */}
@@ -1624,6 +1668,44 @@ export default function TrackingPage() {
         }
       >
         <div className="space-y-5 text-sm">
+          {/* Botão de revalidação no topo do modal */}
+          <div className="flex items-center justify-between gap-3 -mt-2 pb-3 border-b border-[color:var(--border)]">
+            <div className="text-xs text-[color:var(--muted-foreground)]">
+              {capiLastValidated ? (
+                <>
+                  Última validação:{" "}
+                  <strong className="text-[color:var(--foreground)]">
+                    {capiLastValidated.toLocaleTimeString("pt-BR", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
+                  </strong>
+                  <span className="ml-2 text-[10px]">(auto-revalida a cada 5min)</span>
+                </>
+              ) : (
+                "Validando…"
+              )}
+            </div>
+            <button
+              onClick={revalidateCAPI}
+              disabled={capiLoading}
+              className="px-3 py-1.5 rounded-lg bg-[#7c5cff] hover:bg-[#6b4bf0] text-white text-xs font-semibold inline-flex items-center gap-1.5 transition disabled:opacity-50"
+            >
+              {capiLoading ? (
+                <>
+                  <Loader2 size={12} className="animate-spin" />
+                  Revalidando…
+                </>
+              ) : (
+                <>
+                  <RefreshCw size={12} />
+                  Revalidar agora
+                </>
+              )}
+            </button>
+          </div>
+
           {/* Status ao vivo via Meta Graph API */}
           {capiLive && (
             <div className={`rounded-xl border p-4 ${
