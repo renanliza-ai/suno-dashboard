@@ -52,18 +52,20 @@ type Edition = {
   durationDays: number;
   sessions: number;
   users: number;
+  views?: number;
   leads: number;
   purchases: number;
   revenue: number;
   peakDate: string;
   peakSessions: number;
-  matchedUtms: string[];
+  matchedPaths: string[]; // pagePaths reais detectados (ex: /aniversario-suno/)
 };
 
 type DetectedCampaign = {
   id: string;
   displayName: string;
   icon: string;
+  expectedPaths?: string; // ex: "/aniversario-suno/, /aniversario/*"
   typicalMonth?: number;
   typicalDurationDays?: number;
   editions: Edition[];
@@ -88,7 +90,8 @@ type RecurringResponse = {
   meta: {
     totalDetected: number;
     patternsScanned: number;
-    utmsTotal: number;
+    pagesScanned?: number;
+    detectionMode?: string;
   };
 };
 
@@ -202,7 +205,7 @@ export function RecurringCampaigns() {
       year: e.year,
       startDate: e.startDate,
       endDate: e.endDate,
-      utmPatterns: e.matchedUtms.slice(0, 3), // os 3 UTMs mais relevantes
+      paths: e.matchedPaths, // pagePaths detectados pra essa edição
     }));
     const params = new URLSearchParams({
       propertyId: selectedId,
@@ -257,7 +260,9 @@ export function RecurringCampaigns() {
               )}
             </h3>
             <p className="text-xs text-[color:var(--muted-foreground)] mt-0.5">
-              Black Friday, Aniversário, Semana do Assinante e outras campanhas anuais — comparativo histórico e baseline preditivo pra próxima edição.
+              Análise ano-a-ano de campanhas com LP própria — filtramos pelo{" "}
+              <strong>path da página</strong> (ex: <code className="bg-slate-100 px-1 rounded font-mono">/aniversario-suno/</code>,{" "}
+              <code className="bg-slate-100 px-1 rounded font-mono">/black-friday/</code>) e comparamos métricas das edições passadas + projeção pra próxima.
             </p>
           </div>
           <ChevronDown
@@ -289,20 +294,38 @@ export function RecurringCampaigns() {
               <div className="mt-4 rounded-xl bg-amber-50 border border-amber-200 p-4 text-xs text-amber-900">
                 <strong className="text-sm">Nenhuma campanha recorrente detectada</strong>
                 <p className="mt-1">
-                  Escaneamos {data.meta.utmsTotal.toLocaleString("pt-BR")} UTMs dos últimos 3 anos em{" "}
-                  {data.meta.patternsScanned} padrões conhecidos (Aniversário, Black Friday, Semana do Assinante,
+                  Escaneamos {(data.meta.pagesScanned || 0).toLocaleString("pt-BR")} registros de página dos últimos 3 anos
+                  em {data.meta.patternsScanned} padrões conhecidos (Aniversário, Black Friday, Semana do Assinante,
                   Cyber Monday, Natal, Carnaval, Dia do Cliente, Dia do Consumidor, Mês da Mulher).
                 </p>
                 <p className="mt-2">
-                  Se vocês usam outros nomes de UTM pras campanhas, me avise pra adicionar ao engine de detecção.
+                  Buscamos por URLs como <code className="bg-white px-1 rounded">/aniversario-suno/</code>,{" "}
+                  <code className="bg-white px-1 rounded">/black-friday/</code>,{" "}
+                  <code className="bg-white px-1 rounded">/semana-do-assinante/</code>. Se vocês usam outros slugs, me
+                  avise pra adicionar ao engine.
                 </p>
               </div>
             )}
 
             {data && !loading && data.campaigns.length > 0 && (
               <>
-                {/* Calendário compacto */}
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {/* Mini-explicação do que esta seção faz */}
+                <div className="mt-4 mb-4 rounded-xl bg-blue-50/40 border border-blue-200 p-3 text-xs text-blue-900">
+                  <p className="leading-relaxed">
+                    <strong>Como funciona:</strong> escaneamos as URLs do seu site nos últimos{" "}
+                    <strong>3 anos</strong> e detectamos páginas de campanhas anuais (ex:{" "}
+                    <code className="bg-white px-1 rounded font-mono text-[10px]">
+                      /aniversario-suno/
+                    </code>
+                    ,{" "}
+                    <code className="bg-white px-1 rounded font-mono text-[10px]">/black-friday/</code>).
+                    Para cada uma, comparamos métricas ano-a-ano e estimamos o que esperar da próxima edição.
+                    <strong className="ml-1">Clique em uma campanha</strong> pra ver o comparativo detalhado.
+                  </p>
+                </div>
+
+                {/* Calendário com cards expandidos mostrando as URLs detectadas */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {data.campaigns.map((camp) => {
                     const status = camp.nextExpected?.status || "past";
                     const statusColor =
@@ -322,58 +345,127 @@ export function RecurringCampaigns() {
                         ? "🔴 Rodando agora"
                         : status === "upcoming"
                           ? `📅 ${relativeTime(camp.nextExpected?.daysUntilStart || 0)}`
-                          : "Encerrada";
+                          : "📁 Encerrada";
+
+                    // Junta todos os paths únicos detectados em todas as edições
+                    const allPaths = Array.from(
+                      new Set(camp.editions.flatMap((e) => e.matchedPaths))
+                    );
+
                     return (
                       <button
                         key={camp.id}
                         onClick={() => setSelectedCampaign(camp)}
                         className={`bg-gradient-to-br ${statusColor} border rounded-xl p-4 text-left transition group`}
                       >
-                        <div className="flex items-start justify-between gap-2 mb-2">
-                          <div className="text-2xl">{camp.icon}</div>
-                          <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md ${statusBadge}`}>
+                        {/* Header: ícone + nome + status */}
+                        <div className="flex items-start justify-between gap-2 mb-3">
+                          <div className="flex items-center gap-2 flex-1 min-w-0">
+                            <div className="text-3xl shrink-0">{camp.icon}</div>
+                            <div className="flex-1 min-w-0">
+                              <h4 className="font-bold text-base">{camp.displayName}</h4>
+                              <p className="text-[11px] text-slate-600">
+                                {camp.editions.length} edição
+                                {camp.editions.length !== 1 ? "es" : ""} histórica
+                                {camp.editions.length !== 1 ? "s" : ""}{" "}
+                                ({camp.editions.map((e) => e.year).join(", ")})
+                              </p>
+                            </div>
+                          </div>
+                          <span
+                            className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md shrink-0 ${statusBadge}`}
+                          >
                             {statusLabel}
                           </span>
                         </div>
-                        <h4 className="font-bold text-sm mb-1">{camp.displayName}</h4>
-                        <p className="text-[11px] text-slate-600">
-                          {camp.editions.length} edição{camp.editions.length !== 1 ? "es" : ""} histórica
-                          {camp.editions.length !== 1 ? "s" : ""}
-                          {camp.baseline?.yoyGrowth !== null && camp.baseline?.yoyGrowth !== undefined && (
-                            <>
-                              {" · "}
-                              <span
-                                className={`font-semibold ${camp.baseline.yoyGrowth >= 0 ? "text-emerald-700" : "text-red-700"}`}
-                              >
-                                {camp.baseline.yoyGrowth >= 0 ? "+" : ""}
-                                {camp.baseline.yoyGrowth}% YoY
-                              </span>
-                            </>
-                          )}
-                        </p>
-                        {camp.nextExpected && (
-                          <p className="text-[10px] text-slate-500 mt-1 font-mono">
-                            {formatDateBR(camp.nextExpected.startDate)} → {formatDateBR(camp.nextExpected.endDate)}
+
+                        {/* URLs detectadas — DESTAQUE pra deixar claro o filtro */}
+                        <div className="mb-3 bg-white/70 rounded-lg p-2.5 border border-slate-200/60">
+                          <p className="text-[9px] uppercase font-bold tracking-wider text-slate-500 mb-1">
+                            URLs filtradas ({allPaths.length})
                           </p>
+                          <div className="flex flex-wrap gap-1">
+                            {allPaths.slice(0, 4).map((p) => (
+                              <code
+                                key={p}
+                                className="text-[10px] bg-white border border-slate-200 px-1.5 py-0.5 rounded font-mono text-slate-700 truncate max-w-[200px]"
+                                title={p}
+                              >
+                                {p}
+                              </code>
+                            ))}
+                            {allPaths.length > 4 && (
+                              <span className="text-[10px] text-slate-500 px-1 py-0.5 italic">
+                                +{allPaths.length - 4} URLs
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Próxima edição prevista */}
+                        {camp.nextExpected && (
+                          <div className="mb-3 flex items-center gap-2 text-[11px]">
+                            <Calendar size={11} className="text-slate-400 shrink-0" />
+                            <span className="text-slate-600">
+                              Próxima:{" "}
+                              <strong className="text-slate-800 font-mono">
+                                {formatDateBR(camp.nextExpected.startDate)} →{" "}
+                                {formatDateBR(camp.nextExpected.endDate)}
+                              </strong>
+                            </span>
+                          </div>
                         )}
+
+                        {/* KPIs médios + YoY */}
                         {camp.baseline && (
-                          <div className="mt-2 pt-2 border-t border-slate-200/50 grid grid-cols-3 gap-1 text-[10px]">
-                            <div>
-                              <p className="text-slate-500">Sessões</p>
-                              <p className="font-bold">{formatNumber(camp.baseline.avgSessions)}</p>
+                          <div className="pt-3 border-t border-slate-200/50">
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="text-[10px] uppercase font-bold tracking-wider text-slate-500">
+                                Média histórica
+                              </p>
+                              {camp.baseline.yoyGrowth !== null && (
+                                <span
+                                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                    camp.baseline.yoyGrowth >= 0
+                                      ? "bg-emerald-100 text-emerald-700"
+                                      : "bg-red-100 text-red-700"
+                                  }`}
+                                >
+                                  {camp.baseline.yoyGrowth >= 0 ? (
+                                    <TrendingUp size={9} className="inline" />
+                                  ) : (
+                                    <TrendingDown size={9} className="inline" />
+                                  )}{" "}
+                                  {camp.baseline.yoyGrowth >= 0 ? "+" : ""}
+                                  {camp.baseline.yoyGrowth}% YoY
+                                </span>
+                              )}
                             </div>
-                            <div>
-                              <p className="text-slate-500">Leads</p>
-                              <p className="font-bold">{formatNumber(camp.baseline.avgLeads)}</p>
-                            </div>
-                            <div>
-                              <p className="text-slate-500">Vendas</p>
-                              <p className="font-bold">{formatNumber(camp.baseline.avgPurchases)}</p>
+                            <div className="grid grid-cols-3 gap-1.5 text-[11px]">
+                              <div className="bg-white/60 rounded p-1.5">
+                                <p className="text-[9px] text-slate-500 uppercase">Sessões</p>
+                                <p className="font-bold text-slate-800">
+                                  {formatNumber(camp.baseline.avgSessions)}
+                                </p>
+                              </div>
+                              <div className="bg-white/60 rounded p-1.5">
+                                <p className="text-[9px] text-slate-500 uppercase">Leads</p>
+                                <p className="font-bold text-emerald-700">
+                                  {formatNumber(camp.baseline.avgLeads)}
+                                </p>
+                              </div>
+                              <div className="bg-white/60 rounded p-1.5">
+                                <p className="text-[9px] text-slate-500 uppercase">Vendas</p>
+                                <p className="font-bold text-violet-700">
+                                  {formatNumber(camp.baseline.avgPurchases)}
+                                </p>
+                              </div>
                             </div>
                           </div>
                         )}
-                        <div className="mt-2 flex items-center gap-1 text-[10px] font-semibold text-[#7c5cff] group-hover:underline">
-                          Ver detalhes <ChevronRight size={10} />
+
+                        <div className="mt-3 flex items-center justify-center gap-1 text-[11px] font-semibold text-[#7c5cff] group-hover:underline">
+                          Ver comparativo completo <ChevronRight size={12} />
                         </div>
                       </button>
                     );
@@ -474,8 +566,34 @@ function CampaignComparisonView({
     );
   };
 
+  // Coleta todos os paths únicos detectados em todas as edições da campanha
+  const allDetectedPaths = useMemo(
+    () => Array.from(new Set(campaign.editions.flatMap((e) => e.matchedPaths))),
+    [campaign]
+  );
+
   return (
     <div className="space-y-5 text-sm">
+      {/* Transparência: quais URLs estão sendo analisadas */}
+      <div className="rounded-xl bg-blue-50/40 border border-blue-200 p-3">
+        <p className="text-[10px] uppercase font-bold tracking-wider text-blue-700 mb-2">
+          📂 URLs filtradas nesta análise ({allDetectedPaths.length})
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {allDetectedPaths.map((p) => (
+            <code
+              key={p}
+              className="text-[11px] bg-white border border-blue-200 px-1.5 py-0.5 rounded font-mono text-blue-900"
+            >
+              {p}
+            </code>
+          ))}
+        </div>
+        <p className="text-[10px] text-blue-700/80 mt-2 italic">
+          Todas as métricas abaixo (sessões, leads, vendas, receita) são <strong>somatório</strong> dessas páginas dentro da janela de cada edição.
+        </p>
+      </div>
+
       {/* CARDS COMPARATIVOS — uma coluna por edição */}
       <div className={`grid grid-cols-1 md:grid-cols-${Math.min(editions.length, 4)} gap-3`}>
         {editions.map((ed, i) => {

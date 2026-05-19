@@ -8,33 +8,28 @@ export const maxDuration = 60;
 /**
  * /api/ga4/campaign-comparison
  *
- * Dado uma campanha recorrente + lista de edições (datas), retorna comparativo
- * diário cross-year alinhado pelo "dia 1 da campanha".
+ * Dado uma campanha recorrente + edições (com paths conhecidos), retorna
+ * comparativo diário cross-year alinhado pelo "dia 1 da campanha".
+ *
+ * Filtra por pagePath (não por UTM) — campanhas têm LPs próprias com slug
+ * estável (ex: /aniversario-suno/, /black-friday/).
  *
  * Query params:
  *   propertyId (obrigatório)
- *   editions (obrigatório) — JSON encoded: [{year, startDate, endDate, utmPatterns}]
- *   campaignId (obrigatório) — pra label
- *
- * Retorna:
- *   - editions[]: dados completos de cada edição
- *   - dailySeries[]: array alinhado por "dia X da campanha" com colunas por ano
- *   - topPages[]: top 5 LPs por edição
- *   - topChannels[]: top 5 canais por edição
- *   - funnel[]: visitor → lead → purchase por edição
- *   - baseline: projeção pra próxima edição
+ *   editions (obrigatório) — JSON: [{year, startDate, endDate, paths}]
+ *   campaignId (obrigatório)
  */
 
 type EditionInput = {
   year: number;
   startDate: string;
   endDate: string;
-  utmPatterns?: string[]; // UTMs específicos pra essa edição (opcional)
+  paths?: string[]; // pagePaths dessa edição (opcional — se vazio, scan amplo)
 };
 
 type DailyPoint = {
-  dayOffset: number; // dias desde startDate
-  date: string; // ISO
+  dayOffset: number;
+  date: string;
   sessions: number;
   users: number;
   leads: number;
@@ -54,8 +49,8 @@ type EditionResult = {
     purchases: number;
     revenue: number;
     avgTicket: number;
-    leadConversion: number; // leads / sessions × 100
-    purchaseConversion: number; // purchases / sessions × 100
+    leadConversion: number;
+    purchaseConversion: number;
   };
   daily: DailyPoint[];
   topPages: { path: string; sessions: number; leads: number }[];
@@ -75,20 +70,12 @@ function dayOffset(date: Date, base: Date): number {
   return Math.round((date.getTime() - base.getTime()) / 86_400_000);
 }
 
-function buildCampaignFilter(utmPatterns?: string[]) {
-  // Se a edição passou patterns específicos, usa-os; caso contrário,
-  // o caller já deve ter filtrado dimensionFilter externamente.
-  if (!utmPatterns || utmPatterns.length === 0) return undefined;
-  // Match exato + matches por contains. GA4 suporta lista exata via inListFilter,
-  // mas contains não. Usamos orGroup com 1 expression por pattern.
+function buildPathFilter(paths?: string[]) {
+  if (!paths || paths.length === 0) return undefined;
   return {
-    orGroup: {
-      expressions: utmPatterns.map((p) => ({
-        filter: {
-          fieldName: "sessionCampaignName",
-          stringFilter: { matchType: "CONTAINS", value: p, caseSensitive: false },
-        },
-      })),
+    filter: {
+      fieldName: "pagePath",
+      inListFilter: { values: paths },
     },
   };
 }
@@ -112,8 +99,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "at least 1 edition required" }, { status: 400 });
   }
 
-  // Pra cada edição, roda 4 queries em paralelo (sessions+leads+purchases por dia,
-  // top pages, top channels)
   const editionResults: EditionResult[] = [];
 
   for (const ed of editions) {
@@ -123,18 +108,20 @@ export async function GET(req: NextRequest) {
     const duration =
       Math.round((endDate.getTime() - startDate.getTime()) / 86_400_000) + 1;
 
-    const campaignFilter = buildCampaignFilter(ed.utmPatterns);
+    const pathFilter = buildPathFilter(ed.paths);
+    const eventFilter = {
+      filter: {
+        fieldName: "eventName",
+        inListFilter: { values: ["generate_lead", "purchase", "purchase_success"] },
+      },
+    };
 
-    // Query 1: sessões e usuários diários
-    // Query 2: eventos (lead + purchase) diários com receita
-    // Query 3: top páginas
-    // Query 4: top canais (sessionDefaultChannelGroup)
     const [sessRes, eventsRes, pagesRes, channelsRes] = await Promise.all([
       runReport(propertyId, {
         dateRanges: [range],
         dimensions: [{ name: "date" }],
         metrics: [{ name: "sessions" }, { name: "totalUsers" }],
-        dimensionFilter: campaignFilter,
+        dimensionFilter: pathFilter,
         orderBys: [{ dimension: { dimensionName: "date", orderType: "NUMERIC" }, desc: false }],
         limit: 100,
       }),
@@ -142,33 +129,20 @@ export async function GET(req: NextRequest) {
         dateRanges: [range],
         dimensions: [{ name: "date" }, { name: "eventName" }],
         metrics: [{ name: "eventCount" }, { name: "eventValue" }],
-        dimensionFilter: campaignFilter
+        dimensionFilter: pathFilter
           ? {
               andGroup: {
-                expressions: [
-                  campaignFilter,
-                  {
-                    filter: {
-                      fieldName: "eventName",
-                      inListFilter: { values: ["generate_lead", "purchase", "purchase_success"] },
-                    },
-                  },
-                ],
+                expressions: [pathFilter, eventFilter],
               },
             }
-          : {
-              filter: {
-                fieldName: "eventName",
-                inListFilter: { values: ["generate_lead", "purchase", "purchase_success"] },
-              },
-            },
+          : eventFilter,
         limit: 1000,
       }),
       runReport(propertyId, {
         dateRanges: [range],
         dimensions: [{ name: "pagePath" }],
         metrics: [{ name: "sessions" }],
-        dimensionFilter: campaignFilter,
+        dimensionFilter: pathFilter,
         orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
         limit: 10,
       }),
@@ -176,15 +150,13 @@ export async function GET(req: NextRequest) {
         dateRanges: [range],
         dimensions: [{ name: "sessionDefaultChannelGroup" }],
         metrics: [{ name: "sessions" }, { name: "totalUsers" }],
-        dimensionFilter: campaignFilter,
+        dimensionFilter: pathFilter,
         orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
         limit: 10,
       }),
     ]);
 
-    // Compõe daily series alinhada por dayOffset
     const dailyMap = new Map<number, DailyPoint>();
-    // Inicializa todos os offsets pra não dar furo no gráfico
     for (let i = 0; i < duration; i++) {
       const d = new Date(startDate);
       d.setUTCDate(d.getUTCDate() + i);
@@ -239,8 +211,6 @@ export async function GET(req: NextRequest) {
       { sessions: 0, users: 0, leads: 0, purchases: 0, revenue: 0 }
     );
 
-    // Top pages — agrega leads por path cross-referencing eventsRes não dá granularidade,
-    // então deixamos só sessions e estimamos leads proporcionalmente
     const topPages = (pagesRes.data?.rows || []).map((r) => {
       const path = r.dimensionValues?.[0]?.value || "/";
       const pageSessions = Number(r.metricValues?.[0]?.value || 0);
@@ -251,7 +221,6 @@ export async function GET(req: NextRequest) {
       return { path, sessions: pageSessions, leads: estLeads };
     });
 
-    // Top channels — sessions reais; leads e purchases estimados pelos pesos
     const topChannels = (channelsRes.data?.rows || []).map((r) => {
       const channel = r.dimensionValues?.[0]?.value || "(direct)";
       const chSessions = Number(r.metricValues?.[0]?.value || 0);
@@ -284,10 +253,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  // ============================================================
-  // Baseline preditivo pra PRÓXIMA edição
-  // ============================================================
-  // Média + intervalo de confiança (min/max histórico) + tendência YoY
+  // Baseline preditivo
   type Baseline = {
     avgSessions: { value: number; min: number; max: number };
     avgLeads: { value: number; min: number; max: number };
@@ -330,8 +296,6 @@ export async function GET(req: NextRequest) {
       if (prev > 0) yoyGrowth = ((last - prev) / prev) * 100;
     }
 
-    // Projeção: aplica tendência YoY ao último valor; se só temos 1 edição,
-    // usamos o valor dela mesma como projeção
     let projection: Baseline["projection"] = null;
     const last = sortedByYear[n - 1];
     if (last) {
@@ -362,9 +326,6 @@ export async function GET(req: NextRequest) {
     };
   }
 
-  // ============================================================
-  // Daily series alinhada por dayOffset — formato pivot pro chart sobreposto
-  // ============================================================
   const maxDuration = Math.max(...editionResults.map((e) => e.durationDays));
   type PivotPoint = { dayOffset: number; [year: string]: number };
   const dailyPivot: PivotPoint[] = [];
@@ -389,6 +350,7 @@ export async function GET(req: NextRequest) {
       meta: {
         totalEditions: editionResults.length,
         maxDuration,
+        detectionMode: "pagePath",
       },
     },
     { headers: { "Cache-Control": "private, max-age=600, stale-while-revalidate=1800" } }
