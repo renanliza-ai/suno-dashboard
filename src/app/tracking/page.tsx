@@ -1788,6 +1788,125 @@ export default function TrackingPage() {
             </div>
           )}
 
+          {/* Debug técnico — quando não está ativo, mostra exatamente o que faltou */}
+          {capiLive && !capiLive.ok && (
+            <div className="rounded-xl bg-slate-50 border border-slate-300 p-4">
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-xs font-bold uppercase text-slate-700 flex items-center gap-1.5">
+                  <Search size={12} /> Diagnóstico técnico
+                </h4>
+                <button
+                  onClick={() => {
+                    const text = JSON.stringify(capiLive, null, 2);
+                    if (typeof navigator !== "undefined" && navigator.clipboard) {
+                      navigator.clipboard.writeText(text);
+                      alert("Diagnóstico copiado! Cole numa mensagem pro suporte ou aqui no chat.");
+                    }
+                  }}
+                  className="text-[10px] font-semibold px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 inline-flex items-center gap-1"
+                >
+                  <Copy size={10} />
+                  Copiar JSON completo
+                </button>
+              </div>
+
+              {/* Resumo das possíveis causas */}
+              <div className="space-y-2 text-xs">
+                {capiLive.capiConfigured === false && (
+                  <div className="rounded-md bg-red-50 border border-red-200 p-2 text-red-800">
+                    <strong>❌ CAPI não configurado no servidor</strong>
+                    <p className="mt-0.5">
+                      As variáveis <code className="bg-white px-1 rounded">META_CAPI_PROPERTY_N_*</code>{" "}
+                      não estão definidas no <code className="bg-white px-1 rounded">.env.local</code> da
+                      Vercel para a propriedade <strong>{propertyName}</strong>.
+                    </p>
+                    <p className="mt-1 text-[11px]">
+                      <strong>Solução:</strong> Adicione esse bloco em{" "}
+                      <a
+                        href="https://vercel.com/dashboard"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline"
+                      >
+                        Vercel → Settings → Environment Variables
+                      </a>{" "}
+                      e faça redeploy.
+                    </p>
+                  </div>
+                )}
+
+                {capiLive.capiConfigured && capiLive.fromFallback && (
+                  <div className="rounded-md bg-amber-50 border border-amber-200 p-2 text-amber-800">
+                    <strong>⚠ Usando pixel padrão (fallback global)</strong>
+                    <p className="mt-0.5">
+                      Não achei bloco específico pra <strong>{propertyName}</strong>. Estamos usando{" "}
+                      <code className="bg-white px-1 rounded">META_PIXEL_ID</code> (default). Se o pixel
+                      da Statusinvest é diferente, adicione um bloco dedicado.
+                    </p>
+                  </div>
+                )}
+
+                {capiLive.capiConfigured && !capiLive.fromFallback && capiLive.matchedProperty && (
+                  <div className="rounded-md bg-emerald-50 border border-emerald-200 p-2 text-emerald-800">
+                    <strong>✅ Bloco de credenciais encontrado:</strong>{" "}
+                    <code className="bg-white px-1 rounded text-[10px]">{capiLive.matchedProperty}</code>
+                  </div>
+                )}
+
+                {capiLive.metaResponse?.error && (
+                  <div className="rounded-md bg-red-50 border border-red-200 p-2 text-red-800">
+                    <strong>❌ Meta devolveu erro:</strong>
+                    <p className="font-mono text-[11px] mt-1 bg-white p-1.5 rounded">
+                      [{capiLive.metaResponse.error.code}] {capiLive.metaResponse.error.message}
+                    </p>
+                    {capiLive.metaResponse.error.message.includes("permission") && (
+                      <p className="mt-1 text-[11px]">
+                        Esse erro geralmente significa: <strong>token expirado</strong>, <strong>token sem permissão pro pixel</strong>, ou <strong>pixel ID errado</strong>.
+                        Gere um novo access token em Events Manager → Settings → Generate Access Token.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {capiLive.httpStatus === 0 && capiLive.networkError && (
+                  <div className="rounded-md bg-red-50 border border-red-200 p-2 text-red-800">
+                    <strong>❌ Erro de rede</strong>
+                    <p className="font-mono text-[11px] mt-1">{capiLive.networkError}</p>
+                  </div>
+                )}
+
+                {/* Variáveis enviadas — pra conferir se bate com .env */}
+                <details className="text-[11px] mt-2">
+                  <summary className="cursor-pointer font-semibold text-slate-700 hover:text-slate-900">
+                    Ver detalhes técnicos (clique pra expandir)
+                  </summary>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5 bg-white p-2 rounded font-mono text-[10px]">
+                    <div className="text-slate-500">propertyRequested:</div>
+                    <div className="text-slate-900 truncate">{capiLive.propertyRequested || "—"}</div>
+                    <div className="text-slate-500">matchedProperty:</div>
+                    <div className="text-slate-900 truncate">{capiLive.matchedProperty || "—"}</div>
+                    <div className="text-slate-500">fromFallback:</div>
+                    <div className="text-slate-900">{String(capiLive.fromFallback ?? false)}</div>
+                    <div className="text-slate-500">pixelIdMasked:</div>
+                    <div className="text-slate-900">{capiLive.pixelIdMasked || "—"}</div>
+                    <div className="text-slate-500">tokenLastFour:</div>
+                    <div className="text-slate-900">****{capiLive.tokenLastFour || "—"}</div>
+                    <div className="text-slate-500">httpStatus:</div>
+                    <div className={capiLive.httpStatus === 200 ? "text-emerald-700" : "text-red-700"}>
+                      {capiLive.httpStatus || "—"}
+                    </div>
+                    <div className="text-slate-500">events_received:</div>
+                    <div className="text-slate-900">{capiLive.metaResponse?.events_received ?? "—"}</div>
+                    <div className="text-slate-500">fbtrace_id:</div>
+                    <div className="text-slate-900 truncate" title={capiLive.metaResponse?.fbtrace_id}>
+                      {capiLive.metaResponse?.fbtrace_id || "—"}
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </div>
+          )}
+
           {/* Header explicativo */}
           <div className="rounded-xl bg-blue-50/40 border border-blue-200 p-4">
             <h4 className="text-xs font-bold uppercase text-blue-700 mb-2 flex items-center gap-1.5">
