@@ -7,17 +7,20 @@ import { formatNumber } from "@/lib/utils";
 type Props = {
   label: string;
   value: number;
-  delta: number;
+  // delta opcional — quando null/undefined, NÃO renderiza o bloco de variação.
+  // Política da casa: nunca mostrar % se não tiver vindo do GA4 real (vs período
+  // anterior calculado). Mock e estados parciais passam null e omitimos o badge.
+  delta: number | null | undefined;
   color: string;
   index: number;
-  // Label do período de comparação — default "vs mês anterior" (compat antigo),
-  // pode ser sobrescrito pra "vs período anterior" quando o usuário filtra
-  // qualquer range custom (ex.: 7d compara com 7d anteriores).
+  // Label do período de comparação — default "vs período anterior". Só aparece
+  // quando delta tem valor real.
   compareLabel?: string;
 };
 
 export function KpiCard({ label, value, delta, color, index, compareLabel }: Props) {
-  const positive = delta >= 0;
+  const hasDelta = typeof delta === "number" && Number.isFinite(delta);
+  const positive = hasDelta && (delta as number) >= 0;
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
@@ -58,18 +61,23 @@ export function KpiCard({ label, value, delta, color, index, compareLabel }: Pro
             </motion.p>
           </AnimatePresence>
         </div>
-        <div className="mt-3 flex items-center gap-1.5">
-          <div
-            className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold ${
-              positive ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600"
-            }`}
-          >
-            {positive ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-            {positive ? "+" : ""}
-            {delta.toFixed(1)}%
+        {/* Variação % só aparece quando vem do GA4 real. Sem dado: omite o bloco. */}
+        {hasDelta ? (
+          <div className="mt-3 flex items-center gap-1.5">
+            <div
+              className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold ${
+                positive ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600"
+              }`}
+            >
+              {positive ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+              {positive ? "+" : ""}
+              {(delta as number).toFixed(1)}%
+            </div>
+            <span className="text-xs text-[color:var(--muted-foreground)]">{compareLabel || "vs período anterior"}</span>
           </div>
-          <span className="text-xs text-[color:var(--muted-foreground)]">{compareLabel || "vs período anterior"}</span>
-        </div>
+        ) : (
+          <div className="mt-3 h-[22px]" aria-hidden="true" />
+        )}
       </div>
     </motion.div>
   );

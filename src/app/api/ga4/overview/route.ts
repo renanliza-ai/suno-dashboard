@@ -40,8 +40,10 @@ export async function GET(req: NextRequest) {
     },
     {
       headers: {
-        // Cache reduzido — antes era 5min e bloqueava refresh ao trocar property
-        "Cache-Control": "private, max-age=60, stale-while-revalidate=600",
+        // Cache zerado — antes 60s servia respostas SEM o campo `deltas` (calculado
+        // recentemente). Cache antigo no CDN/SWR ficava emperrado e tela mostrava %
+        // hardcoded. Voltamos pra no-store até confirmar que toda resposta tem deltas.
+        "Cache-Control": "no-store, must-revalidate",
       },
     }
   );

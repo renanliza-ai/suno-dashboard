@@ -28,39 +28,44 @@ export default function Home() {
   // filtro de período, escalamos proporcionalmente para que o filtro de data
   // pareça coerente mesmo sem GA4 conectado. Quando o GA4 está conectado os
   // hooks já filtram pelo período real (ver ga4-context.tsx buildDateQS).
+  // Mock kpis: SEM delta. Política da casa — % só aparece com dado real do GA4
+  // (comparação vs período anterior calculada pelo servidor). Mock historicamente
+  // tinha 12.4/8.7/15.2/-2.1 hardcoded, que não reagiam ao filtro e confundiam gestores.
   const mockKpis = baseMockKpis.map((k) => ({
-    ...k,
+    label: k.label,
     value: Math.round(k.value * (days / 30)),
+    delta: null as number | null,
+    color: k.color,
   }));
 
-  const showRealKpis = useRealData && meta.status === "success" && overview?.kpis;
-  // Deltas REAIS comparando vs período anterior (mesma duração).
-  // Antes estavam hardcoded em 12.4/8.7/15.2/-2.1 — não reagiam ao filtro de data.
+  const showRealKpis = useRealData && (meta.status === "success" || meta.status === "partial") && overview?.kpis;
+  // Deltas vs período anterior calculados no servidor. Quando indisponíveis (cache
+  // antigo, erro parcial, range muito longo etc), passamos null → KpiCard omite o badge.
   const realDeltas = overview?.kpis?.deltas;
   const kpis = showRealKpis
     ? [
         {
           label: "Usuários Ativos",
           value: overview!.kpis!.activeUsers,
-          delta: realDeltas?.activeUsers ?? 0,
+          delta: typeof realDeltas?.activeUsers === "number" ? realDeltas.activeUsers : null,
           color: "#7c5cff",
         },
         {
           label: "Sessões",
           value: overview!.kpis!.sessions,
-          delta: realDeltas?.sessions ?? 0,
+          delta: typeof realDeltas?.sessions === "number" ? realDeltas.sessions : null,
           color: "#10b981",
         },
         {
           label: "Pageviews",
           value: overview!.kpis!.pageviews,
-          delta: realDeltas?.pageviews ?? 0,
+          delta: typeof realDeltas?.pageviews === "number" ? realDeltas.pageviews : null,
           color: "#3b82f6",
         },
         {
           label: "Conversões",
           value: overview!.kpis!.conversions,
-          delta: realDeltas?.conversions ?? 0,
+          delta: typeof realDeltas?.conversions === "number" ? realDeltas.conversions : null,
           color: "#f59e0b",
         },
       ]
