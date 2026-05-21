@@ -59,6 +59,10 @@ export async function POST(req: NextRequest) {
   let body: {
     propertyId?: string;
     urls?: string[];
+    // Filtros UTM opcionais por URL (parallel arrays indexados igual a `urls`)
+    // Quando preenchidos, restringem o resultado da URL correspondente
+    // SOMENTE a sessões com aquela combinação de utm_source/medium/campaign.
+    utmsPerUrl?: ({ source?: string; medium?: string; campaign?: string } | null)[];
     days?: number;
     startDate?: string;
     endDate?: string;
@@ -72,6 +76,7 @@ export async function POST(req: NextRequest) {
 
   const propertyId = body.propertyId;
   const urls = Array.isArray(body.urls) ? body.urls.filter(Boolean) : [];
+  const utmsPerUrl = Array.isArray(body.utmsPerUrl) ? body.utmsPerUrl : [];
   const days = body.days || 30;
   const startDate = body.startDate || null;
   const endDate = body.endDate || null;
@@ -87,7 +92,8 @@ export async function POST(req: NextRequest) {
     days,
     startDate,
     endDate,
-    breakdownDimension
+    breakdownDimension,
+    utmsPerUrl
   );
 
   if (error) {

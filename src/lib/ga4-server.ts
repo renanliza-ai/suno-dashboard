@@ -530,18 +530,33 @@ function parseUrl(input: string): { host: string | null; path: string } {
   }
 }
 
+export type LPUtmFilter = {
+  source?: string;
+  medium?: string;
+  campaign?: string;
+} | null;
+
 export async function getLPChannels(
   propertyId: string,
   urls: string[],
   days = 30,
   startDate?: string | null,
   endDate?: string | null,
-  breakdownDimension: LPBreakdownDimension = "channel"
+  breakdownDimension: LPBreakdownDimension = "channel",
+  utmsPerUrl: LPUtmFilter[] = []
 ): Promise<{ data: LPChannelResult[] | null; error: string | null }> {
   if (urls.length === 0) return { data: [], error: null };
 
   const range = buildDateRange(days, startDate, endDate);
-  const parsed = urls.map((u) => ({ original: u, ...parseUrl(u) }));
+  const parsed = urls.map((u, i) => ({
+    original: u,
+    utms: utmsPerUrl[i] || null,
+    ...parseUrl(u),
+  }));
+
+  // Verifica se há ao menos um UTM filter — nesse caso precisamos adicionar
+  // dimensões de origem/mídia/campanha na query pra poder filtrar depois
+  const hasAnyUtmFilter = utmsPerUrl.some((u) => u && (u.source || u.medium || u.campaign));
 
   // Resolve dimensões da API a partir do enum
   const dimMap = DIMENSION_API_NAME[breakdownDimension];
@@ -550,13 +565,23 @@ export async function getLPChannels(
     : [{ name: dimMap }];
 
   // GA4 cobra cada dimensão extra. Padrão: hostName + pagePath + breakdown.
-  // Métricas: totalUsers, sessions, engagedSessions, bounceRate, keyEvents (conversões).
+  // Quando temos filtros UTM, adicionamos sessionSource/Medium/CampaignName
+  // como dimensões extras pra poder filtrar no pós-processamento.
+  const utmDims = hasAnyUtmFilter
+    ? [
+        { name: "sessionSource" },
+        { name: "sessionMedium" },
+        { name: "sessionCampaignName" },
+      ]
+    : [];
+
   const res = await runReport(propertyId, {
     dateRanges: [range.ga4Range],
     dimensions: [
       { name: "hostName" },
       { name: "pagePath" },
       ...breakdownDims,
+      ...utmDims,
     ],
     metrics: [
       { name: "totalUsers" },
@@ -577,6 +602,7 @@ export async function getLPChannels(
         { name: "hostName" },
         { name: "pagePath" },
         ...breakdownDims,
+        ...utmDims,
       ],
       metrics: [
         { name: "totalUsers" },
@@ -599,6 +625,10 @@ export async function getLPChannels(
     host: string;
     path: string;
     label: string;
+    // UTMs reais da sessão — vazios quando não pedimos filtro UTM
+    utmSource: string;
+    utmMedium: string;
+    utmCampaign: string;
     users: number;
     sessions: number;
     engagedSessions: number;
@@ -615,31 +645,45 @@ export async function getLPChannels(
     if (breakdownDimCount === 1) {
       label = r.dimensionValues?.[2]?.value || "(not set)";
     } else {
-      // Junta source / medium (ou similar)
       const parts: string[] = [];
       for (let i = 0; i < breakdownDimCount; i++) {
         parts.push(r.dimensionValues?.[2 + i]?.value || "(not set)");
       }
       label = parts.join(" / ");
     }
+    // UTMs vêm DEPOIS de host+path+breakdown (apenas quando hasAnyUtmFilter)
+    const utmOffset = 2 + breakdownDimCount;
+    const utmSource = hasAnyUtmFilter ? r.dimensionValues?.[utmOffset]?.value || "" : "";
+    const utmMedium = hasAnyUtmFilter ? r.dimensionValues?.[utmOffset + 1]?.value || "" : "";
+    const utmCampaign = hasAnyUtmFilter ? r.dimensionValues?.[utmOffset + 2]?.value || "" : "";
     return {
       host,
       path,
       label,
+      utmSource,
+      utmMedium,
+      utmCampaign,
       users: Number(r.metricValues?.[0]?.value || 0),
       sessions: Number(r.metricValues?.[1]?.value || 0),
       engagedSessions: Number(r.metricValues?.[2]?.value || 0),
-      bounceRate: Number(r.metricValues?.[3]?.value || 0), // 0..1
+      bounceRate: Number(r.metricValues?.[3]?.value || 0),
       conversions: Number(r.metricValues?.[4]?.value || 0),
     };
   });
 
-  // Pra cada URL pedida, filtra rows que casam (host opcional, path obrigatório)
+  // Pra cada URL pedida, filtra rows que casam (host + path + UTM opcional)
   const results: LPChannelResult[] = parsed.map((p) => {
     const matching = rows.filter((r) => {
       const pathMatches = r.path === p.path;
       const hostMatches = p.host ? r.host === p.host : true;
-      return pathMatches && hostMatches;
+      if (!pathMatches || !hostMatches) return false;
+      // Se a URL pediu filtro UTM, aplica
+      if (p.utms) {
+        if (p.utms.source && r.utmSource !== p.utms.source) return false;
+        if (p.utms.medium && r.utmMedium !== p.utms.medium) return false;
+        if (p.utms.campaign && r.utmCampaign !== p.utms.campaign) return false;
+      }
+      return true;
     });
 
     const byChannelMap = new Map<string, LPBreakdownRow>();

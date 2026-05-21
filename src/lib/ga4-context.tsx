@@ -888,10 +888,17 @@ export type LPChannelsResult = {
   }[];
 };
 
+export type LPUtmFilterClient = {
+  source?: string;
+  medium?: string;
+  campaign?: string;
+} | null;
+
 export function useGA4LPChannels(
   urls: string[],
   daysOverride?: number,
-  breakdownDimension: LPBreakdownDimension = "channel"
+  breakdownDimension: LPBreakdownDimension = "channel",
+  utmsPerUrl: LPUtmFilterClient[] = []
 ): {
   results: LPChannelsResult[];
   loading: boolean;
@@ -906,8 +913,11 @@ export function useGA4LPChannels(
   const [tick, setTick] = useState(0);
   const refetch = useCallback(() => setTick((t) => t + 1), []);
 
-  // Estabiliza key da lista de URLs pra deps do useEffect
+  // Estabiliza key da lista de URLs + UTMs pra deps do useEffect
   const urlsKey = urls.join("|");
+  const utmsKey = utmsPerUrl
+    .map((u) => (u ? `${u.source || ""}|${u.medium || ""}|${u.campaign || ""}` : ""))
+    .join("§");
 
   useEffect(() => {
     // Reset imediato ao trocar property — evita ver dados de outra prop
@@ -926,6 +936,7 @@ export function useGA4LPChannels(
       body: JSON.stringify({
         propertyId: selectedId,
         urls,
+        utmsPerUrl,
         days,
         startDate: customRange?.startDate,
         endDate: customRange?.endDate,
@@ -950,6 +961,7 @@ export function useGA4LPChannels(
     useRealData,
     days,
     urlsKey,
+    utmsKey,
     customRange?.startDate,
     customRange?.endDate,
     breakdownDimension,

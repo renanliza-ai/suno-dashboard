@@ -25,6 +25,7 @@ import {
   useGA4LPChannels,
   useGA4,
   type LPBreakdownDimension,
+  type LPUtmFilterClient,
 } from "@/lib/ga4-context";
 import { formatNumber } from "@/lib/utils";
 
@@ -103,6 +104,13 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
   const { selected, useRealData } = useGA4();
   const [pendingUrls, setPendingUrls] = useState<string[]>(initialUrls);
   const [submittedUrls, setSubmittedUrls] = useState<string[]>(initialUrls);
+  // Filtros UTM por URL (parallel array — mesma posição que pendingUrls)
+  const [pendingUtms, setPendingUtms] = useState<LPUtmFilterClient[]>(
+    initialUrls.map(() => null)
+  );
+  const [submittedUtms, setSubmittedUtms] = useState<LPUtmFilterClient[]>(
+    initialUrls.map(() => null)
+  );
   const [inputValue, setInputValue] = useState("");
   const [breakdownDimension, setBreakdownDimension] =
     useState<LPBreakdownDimension>("channel");
@@ -135,7 +143,8 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
   const { results, loading, error } = useGA4LPChannels(
     submittedUrls,
     undefined,
-    breakdownDimension
+    breakdownDimension,
+    submittedUtms
   );
 
   const dimMeta =
@@ -158,18 +167,49 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
     return null;
   }
 
-  // Extrai apenas o path se o usuário colou URL completa com query string
-  function extractPath(input: string): string {
+  // Extrai path + UTMs da URL completa.
+  // Quando o usuário cola uma URL com utm_*, queremos filtrar SOMENTE por
+  // aquela combinação (não mostrar todas as campanhas que bateram na página).
+  function extractPathAndUtms(input: string): { path: string; utms: LPUtmFilterClient } {
     const v = input.trim();
-    if (!v) return v;
+    if (!v) return { path: v, utms: null };
     try {
       const url = new URL(v);
-      // Retorna só pathname (remove query string e hash)
-      return url.pathname;
+      const params = url.searchParams;
+      const utmSource = params.get("utm_source");
+      const utmMedium = params.get("utm_medium");
+      const utmCampaign = params.get("utm_campaign");
+      const hasAnyUtm = !!(utmSource || utmMedium || utmCampaign);
+      return {
+        path: url.pathname,
+        utms: hasAnyUtm
+          ? {
+              source: utmSource || undefined,
+              medium: utmMedium || undefined,
+              campaign: utmCampaign || undefined,
+            }
+          : null,
+      };
     } catch {
-      // Não é URL absoluta — assume que já é path. Se tem ?, corta no ?
       const qIndex = v.indexOf("?");
-      return qIndex >= 0 ? v.substring(0, qIndex) : v;
+      if (qIndex < 0) return { path: v, utms: null };
+      // Parse manual da query string quando não é URL absoluta
+      const path = v.substring(0, qIndex);
+      const qs = new URLSearchParams(v.substring(qIndex + 1));
+      const utmSource = qs.get("utm_source");
+      const utmMedium = qs.get("utm_medium");
+      const utmCampaign = qs.get("utm_campaign");
+      const hasAnyUtm = !!(utmSource || utmMedium || utmCampaign);
+      return {
+        path,
+        utms: hasAnyUtm
+          ? {
+              source: utmSource || undefined,
+              medium: utmMedium || undefined,
+              campaign: utmCampaign || undefined,
+            }
+          : null,
+      };
     }
   }
 
@@ -184,10 +224,17 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
       return;
     }
 
-    // Auto-extrai path da URL completa (ex.: cola URL com ?utm_campaign=...,
-    // ele pega só /pv/eu-invisto-2026/)
-    const cleaned = extractPath(trimmed);
-    if (pendingUrls.includes(cleaned)) {
+    // Extrai path + UTMs separadamente
+    const { path, utms } = extractPathAndUtms(trimmed);
+    // Chave única considera path + UTMs (mesmo path com UTMs diferentes vira chip separado)
+    const utmKey = utms ? `${utms.source || ""}|${utms.medium || ""}|${utms.campaign || ""}` : "";
+    const fullKey = `${path}§${utmKey}`;
+    const existingKey = pendingUrls.map((u, i) => {
+      const ut = pendingUtms[i];
+      const uk = ut ? `${ut.source || ""}|${ut.medium || ""}|${ut.campaign || ""}` : "";
+      return `${u}§${uk}`;
+    });
+    if (existingKey.includes(fullKey)) {
       setInputValue("");
       return;
     }
@@ -195,16 +242,19 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
       alert("Limite de 20 URLs por comparação.");
       return;
     }
-    setPendingUrls([...pendingUrls, cleaned]);
+    setPendingUrls([...pendingUrls, path]);
+    setPendingUtms([...pendingUtms, utms]);
     setInputValue("");
   }
 
-  function removeUrl(url: string) {
-    setPendingUrls(pendingUrls.filter((u) => u !== url));
+  function removeUrl(index: number) {
+    setPendingUrls(pendingUrls.filter((_, i) => i !== index));
+    setPendingUtms(pendingUtms.filter((_, i) => i !== index));
   }
 
   function compare() {
     setSubmittedUrls([...pendingUrls]);
+    setSubmittedUtms([...pendingUtms]);
   }
 
   // Universo de labels (canais ou outra dim) que aparecem em qualquer LP
@@ -706,24 +756,69 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
         </button>
       </div>
 
-      {/* Chips das URLs pendentes */}
+      {/* Chips das URLs pendentes — com UTMs visíveis quando aplicados */}
       {pendingUrls.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mb-4">
-          {pendingUrls.map((url) => (
-            <span
-              key={url}
-              className="text-[11px] px-2 py-1 rounded-md bg-slate-50 border border-slate-200 text-slate-700 font-mono inline-flex items-center gap-1.5"
-            >
-              <span className="truncate max-w-[280px]">{url}</span>
-              <button
-                onClick={() => removeUrl(url)}
-                className="text-slate-400 hover:text-red-500 transition"
-                aria-label="Remover URL"
+        <div className="flex flex-col gap-1.5 mb-4">
+          {pendingUrls.map((url, idx) => {
+            const utms = pendingUtms[idx];
+            const hasUtms = !!(utms && (utms.source || utms.medium || utms.campaign));
+            return (
+              <div
+                key={`${url}-${idx}`}
+                className={`inline-flex items-start gap-2 px-2.5 py-1.5 rounded-md border ${
+                  hasUtms
+                    ? "bg-violet-50 border-violet-200"
+                    : "bg-slate-50 border-slate-200"
+                }`}
               >
-                <X size={11} />
-              </button>
-            </span>
-          ))}
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] font-mono text-slate-800 truncate" title={url}>
+                    {url}
+                  </div>
+                  {hasUtms && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {utms?.campaign && (
+                        <span
+                          className="text-[10px] font-mono bg-violet-100 text-violet-800 px-1.5 py-0.5 rounded border border-violet-200"
+                          title={`Filtrando só sessões com utm_campaign = ${utms.campaign}`}
+                        >
+                          📣 campaign: {utms.campaign}
+                        </span>
+                      )}
+                      {utms?.source && (
+                        <span
+                          className="text-[10px] font-mono bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded border border-blue-200"
+                          title={`Filtrando só sessões com utm_source = ${utms.source}`}
+                        >
+                          🔗 source: {utms.source}
+                        </span>
+                      )}
+                      {utms?.medium && (
+                        <span
+                          className="text-[10px] font-mono bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded border border-emerald-200"
+                          title={`Filtrando só sessões com utm_medium = ${utms.medium}`}
+                        >
+                          📡 medium: {utms.medium}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => removeUrl(idx)}
+                  className="text-slate-400 hover:text-red-500 transition shrink-0 mt-0.5"
+                  aria-label="Remover URL"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            );
+          })}
+          {pendingUtms.some((u) => u !== null) && (
+            <p className="text-[10px] text-violet-700 italic mt-1">
+              💡 URLs com filtros UTM ativos: resultados restritos só àquela combinação de campanha/origem/mídia.
+            </p>
+          )}
         </div>
       )}
 
