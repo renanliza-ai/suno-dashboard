@@ -23,6 +23,8 @@ import {
 import { useGA4 } from "@/lib/ga4-context";
 import { formatNumber } from "@/lib/utils";
 import { downloadReport, type ReportSheet } from "@/lib/export-utils";
+import { Dialog } from "@/components/dialog";
+import { ArrowUpRight, ExternalLink } from "lucide-react";
 
 /**
  * CampaignAttribution — análise de origem/canal/campanha pra orientar
@@ -57,6 +59,14 @@ type AggregateRow = {
 type ChannelRow = AggregateRow & { channel: string };
 type SourceMediumRow = AggregateRow & { source: string; medium: string };
 type CampaignRow = AggregateRow & { campaign: string; source: string; medium: string };
+type CampaignPageRow = {
+  campaign: string;
+  sourceMedium: string;
+  conversionPage: string;
+  leads: number;
+  purchases: number;
+  revenue: number;
+};
 
 type Recommendation = {
   type: "scale" | "optimize" | "pause" | "explore";
@@ -73,6 +83,7 @@ type AttributionResponse = {
   byChannel: ChannelRow[];
   bySourceMedium: SourceMediumRow[];
   byCampaign: CampaignRow[];
+  byCampaignXPage: CampaignPageRow[];
   recommendations: Recommendation[];
   totals: {
     sessions: number;
@@ -85,7 +96,7 @@ type AttributionResponse = {
   };
 };
 
-type ViewMode = "channel" | "sourceMedium" | "campaign";
+type ViewMode = "campaignXPage" | "channel" | "sourceMedium" | "campaign";
 type SortableKey = "sessions" | "leads" | "purchases" | "revenue" | "leadConvRate" | "purchaseConvRate" | "avgTicket";
 
 function formatBRL(v: number): string {
@@ -102,10 +113,13 @@ export function CampaignAttribution() {
   const [data, setData] = useState<AttributionResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<ViewMode>("channel");
+  // Default na view "campaignXPage" — é a mais útil pra responder "onde investir"
+  const [view, setView] = useState<ViewMode>("campaignXPage");
   const [sortKey, setSortKey] = useState<SortableKey>("sessions");
   const [sortDesc, setSortDesc] = useState(true);
   const [search, setSearch] = useState("");
+  // Modal de detalhes ao clicar numa linha
+  const [selectedRow, setSelectedRow] = useState<ChannelRow | SourceMediumRow | CampaignRow | CampaignPageRow | null>(null);
 
   // ========================================================
   // Fetch — RE-EXECUTA em qualquer mudança de:
@@ -166,12 +180,33 @@ export function CampaignAttribution() {
     return () => controller.abort();
   }, [selectedId, useRealData, days, customRange?.startDate, customRange?.endDate]);
 
-  // Sorting + filtering
+  // Sorting + filtering — diferenciado pela view escolhida
   const rows = useMemo(() => {
     if (!data) return [];
+    const q = search.toLowerCase().trim();
+
+    if (view === "campaignXPage") {
+      let source = data.byCampaignXPage;
+      if (q) {
+        source = source.filter(
+          (r) =>
+            r.campaign.toLowerCase().includes(q) ||
+            r.sourceMedium.toLowerCase().includes(q) ||
+            r.conversionPage.toLowerCase().includes(q)
+        );
+      }
+      // Sort específico pra essa view (leads + purchases × 5)
+      const sortBy: (r: CampaignPageRow) => number = (r) => {
+        if (sortKey === "purchases" || sortKey === "revenue" || sortKey === "avgTicket") return r[sortKey === "avgTicket" ? "purchases" : sortKey] || 0;
+        if (sortKey === "leads") return r.leads;
+        return r.leads + r.purchases * 5;
+      };
+      const sorted = [...source].sort((a, b) => (sortDesc ? sortBy(b) - sortBy(a) : sortBy(a) - sortBy(b)));
+      return sorted as (ChannelRow | SourceMediumRow | CampaignRow | CampaignPageRow)[];
+    }
+
     let source: (ChannelRow | SourceMediumRow | CampaignRow)[] =
       view === "channel" ? data.byChannel : view === "sourceMedium" ? data.bySourceMedium : data.byCampaign;
-    const q = search.toLowerCase().trim();
     if (q) {
       source = source.filter((r) => {
         if ("channel" in r) return r.channel.toLowerCase().includes(q);
@@ -217,37 +252,56 @@ export function CampaignAttribution() {
   function handleExport(format: "xlsx" | "pdf" | "csv") {
     if (!data) return;
     const labels: Record<ViewMode, string> = {
+      campaignXPage: "Campanha × LP",
       channel: "Canal",
       sourceMedium: "Origem / Mídia",
       campaign: "Campanha",
     };
-    const sheet: ReportSheet = {
-      name: `Atribuição por ${labels[view]}`,
-      columns: [
-        labels[view],
-        "Sessões",
-        "Usuários",
-        "Leads",
-        "Vendas",
-        "Receita (R$)",
-        "Conv. Lead %",
-        "Conv. Venda %",
-        "Ticket Médio (R$)",
-        "Receita / Sessão (R$)",
-      ],
-      rows: rows.map((r) => [
-        rowLabel(r) + (rowSub(r) ? ` (${rowSub(r)})` : ""),
-        r.sessions,
-        r.users,
-        r.leads,
-        r.purchases,
-        r.revenue,
-        r.leadConvRate,
-        r.purchaseConvRate,
-        r.avgTicket,
-        r.revenuePerSession,
-      ]),
-    };
+
+    let sheet: ReportSheet;
+    if (view === "campaignXPage") {
+      sheet = {
+        name: "Campanha x LP",
+        columns: ["Campanha (origem)", "Origem / Mídia", "LP de conversão", "Leads", "Vendas", "Receita (R$)"],
+        rows: (rows as CampaignPageRow[]).map((r) => [
+          r.campaign,
+          r.sourceMedium,
+          r.conversionPage,
+          r.leads,
+          r.purchases,
+          r.revenue,
+        ]),
+      };
+    } else {
+      const stdRows = rows as (ChannelRow | SourceMediumRow | CampaignRow)[];
+      sheet = {
+        name: `Atribuição por ${labels[view]}`,
+        columns: [
+          labels[view],
+          "Sessões",
+          "Usuários",
+          "Leads",
+          "Vendas",
+          "Receita (R$)",
+          "Conv. Lead %",
+          "Conv. Venda %",
+          "Ticket Médio (R$)",
+          "Receita / Sessão (R$)",
+        ],
+        rows: stdRows.map((r) => [
+          rowLabel(r) + (rowSub(r) ? ` (${rowSub(r)})` : ""),
+          r.sessions,
+          r.users,
+          r.leads,
+          r.purchases,
+          r.revenue,
+          r.leadConvRate,
+          r.purchaseConvRate,
+          r.avgTicket,
+          r.revenuePerSession,
+        ]),
+      };
+    }
     downloadReport(
       format,
       {
@@ -433,17 +487,32 @@ export function CampaignAttribution() {
                 </p>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
-                {/* Toggle de view */}
+                {/* Toggle de view — Campanha × LP é o default (mais útil) */}
                 <div className="inline-flex rounded-lg border border-[color:var(--border)] overflow-hidden text-xs">
-                  {(["channel", "sourceMedium", "campaign"] as const).map((v) => (
+                  {(["campaignXPage", "channel", "sourceMedium", "campaign"] as const).map((v) => (
                     <button
                       key={v}
                       onClick={() => setView(v)}
                       className={`px-3 py-1.5 font-semibold transition ${
                         view === v ? "bg-[#7c5cff] text-white" : "bg-white text-slate-600 hover:bg-slate-50"
                       }`}
+                      title={
+                        v === "campaignXPage"
+                          ? "Formato GA4 export: campanha que trouxe o lead + página onde converteu"
+                          : v === "channel"
+                            ? "Visão agregada por canal (Organic, Paid Search, etc)"
+                            : v === "sourceMedium"
+                              ? "Origem + mídia detalhada (google/cpc, facebook/social, etc)"
+                              : "Cada UTM campaign individualmente"
+                      }
                     >
-                      {v === "channel" ? "Por Canal" : v === "sourceMedium" ? "Por Origem/Mídia" : "Por Campanha"}
+                      {v === "campaignXPage"
+                        ? "📊 Campanha × LP"
+                        : v === "channel"
+                          ? "Por Canal"
+                          : v === "sourceMedium"
+                            ? "Por Origem/Mídia"
+                            : "Por Campanha"}
                     </button>
                   ))}
                 </div>
@@ -483,76 +552,356 @@ export function CampaignAttribution() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50/50 border-b border-[color:var(--border)] sticky top-0">
-                  <tr>
-                    <Th label={view === "channel" ? "Canal" : view === "campaign" ? "Campanha" : "Origem / Mídia"} align="left" />
-                    <ThSortable label="Sessões" sortKey="sessions" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
-                    <ThSortable label="Leads" sortKey="leads" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
-                    <ThSortable label="Vendas" sortKey="purchases" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
-                    <ThSortable label="Receita" sortKey="revenue" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
-                    <ThSortable label="Conv. Lead %" sortKey="leadConvRate" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
-                    <ThSortable label="Conv. Venda %" sortKey="purchaseConvRate" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
-                    <ThSortable label="Ticket" sortKey="avgTicket" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.length === 0 && (
+              {view === "campaignXPage" ? (
+                // ========================================================
+                // VIEW ESPECIAL: Campanha × LP — formato GA4 export
+                // Mostra qual campanha trouxe o lead E onde ele converteu
+                // ========================================================
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50/50 border-b border-[color:var(--border)] sticky top-0">
                     <tr>
-                      <td colSpan={8} className="px-4 py-12 text-center text-slate-400 text-xs italic">
-                        Nenhum dado retornado nesta combinação de propriedade + período.
-                      </td>
+                      <Th label="Campanha (origem)" align="left" />
+                      <Th label="Origem / Mídia" align="left" />
+                      <Th label="LP de conversão" align="left" />
+                      <ThSortable label="Leads" sortKey="leads" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
+                      <ThSortable label="Vendas" sortKey="purchases" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
+                      <ThSortable label="Receita" sortKey="revenue" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
                     </tr>
-                  )}
-                  {rows.slice(0, 50).map((r, i) => {
-                    const isTopConv = r.leadConvRate > (data.totals.avgLeadConvRate || 0) * 1.5;
-                    return (
-                      <tr
-                        key={`${rowLabel(r)}-${rowSub(r) || ""}-${i}`}
-                        className="border-b border-slate-100 hover:bg-slate-50/50"
-                      >
-                        <td className="px-4 py-2.5 max-w-[280px]">
-                          <p className="font-semibold text-xs truncate" title={rowLabel(r)}>
-                            {rowLabel(r) === "(not set)" ? <span className="text-slate-400 italic">(sem UTM)</span> : rowLabel(r)}
-                          </p>
-                          {rowSub(r) && (
-                            <p className="text-[10px] font-mono text-slate-500 truncate">{rowSub(r)}</p>
-                          )}
+                  </thead>
+                  <tbody>
+                    {rows.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-12 text-center text-slate-400 text-xs italic">
+                          Nenhuma conversão (lead ou venda) atribuída a campanha+LP no período selecionado.
                         </td>
-                        <td className="px-4 py-2.5 text-right text-xs tabular-nums">{formatNumber(r.sessions)}</td>
-                        <td className="px-4 py-2.5 text-right text-xs tabular-nums font-semibold text-emerald-700">
+                      </tr>
+                    )}
+                    {(rows as CampaignPageRow[]).slice(0, 100).map((r, i) => (
+                      <tr
+                        key={`${r.campaign}-${r.sourceMedium}-${r.conversionPage}-${i}`}
+                        onClick={() => setSelectedRow(r)}
+                        className="border-b border-slate-100 hover:bg-violet-50/50 cursor-pointer transition"
+                      >
+                        <td className="px-4 py-2.5 max-w-[240px]">
+                          <p className="font-semibold text-xs truncate" title={r.campaign}>
+                            {r.campaign === "(not set)" ? (
+                              <span className="text-slate-400 italic">(sem UTM)</span>
+                            ) : (
+                              r.campaign
+                            )}
+                          </p>
+                        </td>
+                        <td className="px-4 py-2.5 max-w-[180px]">
+                          <p className="text-[11px] font-mono text-slate-700 truncate" title={r.sourceMedium}>
+                            {r.sourceMedium}
+                          </p>
+                        </td>
+                        <td className="px-4 py-2.5 max-w-[260px]">
+                          <p
+                            className="text-[11px] font-mono text-blue-700 truncate"
+                            title={r.conversionPage}
+                          >
+                            {r.conversionPage}
+                          </p>
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-xs tabular-nums font-bold text-emerald-700">
                           {formatNumber(r.leads)}
                         </td>
-                        <td className="px-4 py-2.5 text-right text-xs tabular-nums font-semibold text-violet-700">
+                        <td className="px-4 py-2.5 text-right text-xs tabular-nums font-bold text-violet-700">
                           {formatNumber(r.purchases)}
                         </td>
                         <td className="px-4 py-2.5 text-right text-xs tabular-nums">
                           {r.revenue > 0 ? formatBRL(r.revenue) : "—"}
                         </td>
-                        <td className={`px-4 py-2.5 text-right text-xs tabular-nums font-bold ${
-                          isTopConv ? "text-emerald-600" : "text-slate-700"
-                        }`}>
-                          {r.leadConvRate}%
-                          {isTopConv && <span className="ml-1 text-[9px]">🔥</span>}
-                        </td>
-                        <td className="px-4 py-2.5 text-right text-xs tabular-nums">{r.purchaseConvRate}%</td>
-                        <td className="px-4 py-2.5 text-right text-xs tabular-nums text-slate-500">
-                          {r.avgTicket > 0 ? formatBRL(r.avgTicket) : "—"}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                // ========================================================
+                // VIEWS PADRÃO: channel / sourceMedium / campaign
+                // ========================================================
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50/50 border-b border-[color:var(--border)] sticky top-0">
+                    <tr>
+                      <Th
+                        label={view === "channel" ? "Canal" : view === "campaign" ? "Campanha" : "Origem / Mídia"}
+                        align="left"
+                      />
+                      <ThSortable label="Sessões" sortKey="sessions" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
+                      <ThSortable label="Leads" sortKey="leads" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
+                      <ThSortable label="Vendas" sortKey="purchases" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
+                      <ThSortable label="Receita" sortKey="revenue" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
+                      <ThSortable label="Conv. Lead %" sortKey="leadConvRate" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
+                      <ThSortable label="Conv. Venda %" sortKey="purchaseConvRate" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
+                      <ThSortable label="Ticket" sortKey="avgTicket" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="px-4 py-12 text-center text-slate-400 text-xs italic">
+                          Nenhum dado retornado nesta combinação de propriedade + período.
                         </td>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    )}
+                    {(rows as (ChannelRow | SourceMediumRow | CampaignRow)[]).slice(0, 50).map((r, i) => {
+                      const isTopConv = r.leadConvRate > (data.totals.avgLeadConvRate || 0) * 1.5;
+                      return (
+                        <tr
+                          key={`${rowLabel(r)}-${rowSub(r) || ""}-${i}`}
+                          onClick={() => setSelectedRow(r)}
+                          className="border-b border-slate-100 hover:bg-violet-50/50 cursor-pointer transition"
+                        >
+                          <td className="px-4 py-2.5 max-w-[280px]">
+                            <p className="font-semibold text-xs truncate" title={rowLabel(r)}>
+                              {rowLabel(r) === "(not set)" ? (
+                                <span className="text-slate-400 italic">(sem UTM)</span>
+                              ) : (
+                                rowLabel(r)
+                              )}
+                            </p>
+                            {rowSub(r) && (
+                              <p className="text-[10px] font-mono text-slate-500 truncate">{rowSub(r)}</p>
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5 text-right text-xs tabular-nums">{formatNumber(r.sessions)}</td>
+                          <td className="px-4 py-2.5 text-right text-xs tabular-nums font-semibold text-emerald-700">
+                            {formatNumber(r.leads)}
+                          </td>
+                          <td className="px-4 py-2.5 text-right text-xs tabular-nums font-semibold text-violet-700">
+                            {formatNumber(r.purchases)}
+                          </td>
+                          <td className="px-4 py-2.5 text-right text-xs tabular-nums">
+                            {r.revenue > 0 ? formatBRL(r.revenue) : "—"}
+                          </td>
+                          <td
+                            className={`px-4 py-2.5 text-right text-xs tabular-nums font-bold ${
+                              isTopConv ? "text-emerald-600" : "text-slate-700"
+                            }`}
+                          >
+                            {r.leadConvRate}%
+                            {isTopConv && <span className="ml-1 text-[9px]">🔥</span>}
+                          </td>
+                          <td className="px-4 py-2.5 text-right text-xs tabular-nums">{r.purchaseConvRate}%</td>
+                          <td className="px-4 py-2.5 text-right text-xs tabular-nums text-slate-500">
+                            {r.avgTicket > 0 ? formatBRL(r.avgTicket) : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
             </div>
-            {rows.length > 50 && (
+            {rows.length > (view === "campaignXPage" ? 100 : 50) && (
               <div className="px-5 py-3 text-[11px] text-slate-500 border-t border-[color:var(--border)]">
-                Mostrando 50 de {rows.length} linhas. Use a busca acima para filtrar, ou exporte pra ver tudo.
+                Mostrando {view === "campaignXPage" ? 100 : 50} de {rows.length} linhas. Use a busca acima para filtrar, ou exporte pra ver tudo.
               </div>
             )}
           </div>
         </>
       )}
+
+      {/* MODAL DE DETALHES — abre ao clicar em qualquer linha da tabela */}
+      {selectedRow && (
+        <Dialog
+          open={!!selectedRow}
+          onClose={() => setSelectedRow(null)}
+          title={
+            "conversionPage" in selectedRow
+              ? `${selectedRow.campaign === "(not set)" ? "(sem UTM)" : selectedRow.campaign}`
+              : "channel" in selectedRow
+                ? `Detalhes: ${selectedRow.channel}`
+                : "campaign" in selectedRow
+                  ? `${selectedRow.campaign === "(not set)" ? "(sem UTM)" : selectedRow.campaign}`
+                  : `${selectedRow.source} / ${selectedRow.medium}`
+          }
+          subtitle={
+            "conversionPage" in selectedRow
+              ? `${selectedRow.sourceMedium} → ${selectedRow.conversionPage}`
+              : "campaign" in selectedRow
+                ? `${selectedRow.source} / ${selectedRow.medium}`
+                : "source" in selectedRow
+                  ? "Origem / Mídia"
+                  : "Canal default GA4"
+          }
+          maxWidth="max-w-2xl"
+          icon={
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#7c5cff] to-[#5b3dd4] flex items-center justify-center text-white">
+              <Target size={18} />
+            </div>
+          }
+        >
+          <RowDetailModal row={selectedRow} totals={data?.totals} />
+        </Dialog>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Modal de detalhes — abre quando user clica numa linha da tabela
+// ============================================================
+
+function RowDetailModal({
+  row,
+  totals,
+}: {
+  row: ChannelRow | SourceMediumRow | CampaignRow | CampaignPageRow;
+  totals?: AttributionResponse["totals"];
+}) {
+  const isCampaignPage = "conversionPage" in row;
+
+  if (isCampaignPage) {
+    // View especial pra linha do tipo Campanha × LP
+    return (
+      <div className="space-y-4 text-sm">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="rounded-xl border border-slate-200 p-4 bg-slate-50/40">
+            <p className="text-[10px] uppercase font-bold tracking-wider text-slate-500 mb-1">
+              Campanha (origem)
+            </p>
+            <p className="font-bold text-slate-800 break-all">
+              {row.campaign === "(not set)" ? <em className="text-slate-400">(sem UTM)</em> : row.campaign}
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-200 p-4 bg-slate-50/40">
+            <p className="text-[10px] uppercase font-bold tracking-wider text-slate-500 mb-1">
+              Origem / Mídia
+            </p>
+            <p className="font-mono text-xs text-slate-800 break-all">{row.sourceMedium}</p>
+          </div>
+          <div className="rounded-xl border border-blue-200 p-4 bg-blue-50/40">
+            <p className="text-[10px] uppercase font-bold tracking-wider text-blue-700 mb-1">
+              LP de conversão
+            </p>
+            <a
+              href={`https://${window.location.host}${row.conversionPage}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono text-xs text-blue-800 break-all hover:underline inline-flex items-start gap-1"
+            >
+              {row.conversionPage}
+              <ExternalLink size={11} className="mt-0.5 shrink-0" />
+            </a>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          <KpiBox icon={Target} label="Leads gerados" value={formatNumber(row.leads)} color="#10b981" />
+          <KpiBox icon={ShoppingCart} label="Vendas concluídas" value={formatNumber(row.purchases)} color="#7c5cff" />
+          <KpiBox
+            icon={TrendingUp}
+            label="Receita total"
+            value={row.revenue > 0 ? formatBRL(row.revenue) : "—"}
+            color="#f59e0b"
+          />
+        </div>
+
+        {row.purchases > 0 && row.leads > 0 && (
+          <div className="rounded-xl bg-amber-50/40 border border-amber-200 p-4 text-xs text-amber-900">
+            <strong>Taxa de venda no funil:</strong>{" "}
+            <span className="font-mono">
+              {((row.purchases / row.leads) * 100).toFixed(1)}%
+            </span>{" "}
+            ({row.purchases} venda{row.purchases !== 1 ? "s" : ""} a cada {row.leads} lead
+            {row.leads !== 1 ? "s" : ""}).
+            {row.purchases > 0 && (
+              <>
+                {" "}Ticket médio: <strong>{formatBRL(row.revenue / row.purchases)}</strong>.
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="rounded-xl bg-blue-50/30 border border-blue-200 p-3 text-[11px] text-blue-900 flex gap-2">
+          <ArrowUpRight size={14} className="text-blue-700 shrink-0 mt-0.5" />
+          <p>
+            <strong>Como ler:</strong> a campanha{" "}
+            <code className="bg-white px-1 rounded font-mono text-[10px]">{row.campaign}</code> trouxe o
+            usuário via{" "}
+            <code className="bg-white px-1 rounded font-mono text-[10px]">{row.sourceMedium}</code>, e ele
+            converteu (lead/venda) na página{" "}
+            <code className="bg-white px-1 rounded font-mono text-[10px]">{row.conversionPage}</code>.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // View padrão (channel / source-medium / campaign)
+  const standardRow = row as ChannelRow | SourceMediumRow | CampaignRow;
+  const share = totals?.sessions ? (standardRow.sessions / totals.sessions) * 100 : 0;
+  return (
+    <div className="space-y-4 text-sm">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <KpiBox icon={Users} label="Sessões" value={formatNumber(standardRow.sessions)} color="#7c5cff" />
+        <KpiBox icon={Target} label="Leads" value={formatNumber(standardRow.leads)} color="#10b981" />
+        <KpiBox icon={ShoppingCart} label="Vendas" value={formatNumber(standardRow.purchases)} color="#8b5cf6" />
+        <KpiBox
+          icon={TrendingUp}
+          label="Receita"
+          value={standardRow.revenue > 0 ? formatBRL(standardRow.revenue) : "—"}
+          color="#f59e0b"
+        />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <KpiBox label="Conv. Lead" value={`${standardRow.leadConvRate}%`} color="#10b981" />
+        <KpiBox label="Conv. Venda" value={`${standardRow.purchaseConvRate}%`} color="#8b5cf6" />
+        <KpiBox
+          label="Ticket Médio"
+          value={standardRow.avgTicket > 0 ? formatBRL(standardRow.avgTicket) : "—"}
+          color="#f59e0b"
+        />
+        <KpiBox label="Engajamento" value={`${standardRow.engagementRate}%`} color="#7c5cff" />
+        <KpiBox
+          label="Receita / sessão"
+          value={standardRow.revenuePerSession > 0 ? formatBRL(standardRow.revenuePerSession) : "—"}
+          color="#f97316"
+        />
+        <KpiBox label="Share do tráfego" value={`${share.toFixed(1)}%`} color="#06b6d4" />
+      </div>
+
+      {/* Avaliação automática */}
+      <div className="rounded-xl bg-blue-50/40 border border-blue-200 p-3 text-xs text-blue-900">
+        <strong>Diagnóstico rápido:</strong>{" "}
+        {totals && standardRow.leadConvRate > totals.avgLeadConvRate * 1.5
+          ? `Conversão de lead ${(standardRow.leadConvRate / Math.max(totals.avgLeadConvRate, 0.01)).toFixed(1)}x acima da média da propriedade. Forte candidato a escalar.`
+          : totals && standardRow.leadConvRate < totals.avgLeadConvRate * 0.5
+            ? `Conversão de lead ${(standardRow.leadConvRate / Math.max(totals.avgLeadConvRate, 0.01)).toFixed(1)}x abaixo da média. Investigar qualidade do tráfego ou UX da LP.`
+            : "Conversão dentro da média da propriedade."}
+      </div>
+    </div>
+  );
+}
+
+function KpiBox({
+  icon: Icon,
+  label,
+  value,
+  color,
+}: {
+  icon?: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
+  label: string;
+  value: string;
+  color: string;
+}) {
+  return (
+    <div
+      className="rounded-xl border p-3"
+      style={{ background: `${color}0d`, borderColor: `${color}33` }}
+    >
+      <div className="flex items-center gap-1.5 mb-1">
+        {Icon && <Icon size={11} style={{ color }} />}
+        <p className="text-[10px] uppercase font-bold tracking-wider" style={{ color }}>
+          {label}
+        </p>
+      </div>
+      <p className="text-lg font-bold tabular-nums" style={{ color }}>
+        {value}
+      </p>
     </div>
   );
 }

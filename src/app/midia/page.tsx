@@ -215,13 +215,17 @@ export default function RelatoriosPage() {
               <Crown size={10} /> dim custom ativa
             </span>
           )}
-          {/* Aviso explícito quando dim selecionada NÃO tem dado real ainda */}
+          {/* Aviso explícito quando dim selecionada NÃO tem dado real ainda.
+              "Por Campanha", "Por Página" e "Por Device" ainda vêm de mock na
+              tabela DESSA SEÇÃO (acima). Para análise REAL de campanha com
+              dados do GA4, role até o final da página → "Onde concentrar
+              investimento" (que faz queries reais cruzando origem × conversão). */}
           {useRealData && !isRealForDimension && (
             <span
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-50 text-red-700 border border-red-200"
-              title="Esta dimensão ainda usa dados de exemplo. Apenas sunoChannel e channel têm GA4 real conectado."
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200"
+              title={`A tabela abaixo desta dimensão (${dimension}) ainda usa dados de exemplo. Pra análise REAL com GA4, role até "Onde concentrar investimento" no final da página.`}
             >
-              ⚠ dados de exemplo
+              ℹ tabela com exemplo · veja análise real no final ↓
             </span>
           )}
         </div>
@@ -241,14 +245,6 @@ export default function RelatoriosPage() {
           <DataErrorCard meta={meta} error={ga4Error} onRetry={() => window.location.reload()} />
         </div>
       )}
-
-      {/* ============================================================
-          ATRIBUIÇÃO DE CONVERSÃO — "Onde concentrar investimento"
-          Análise origem/canal/campanha cruzada com conversões (lead +
-          venda). Responde a propriedade + range do header de forma
-          rigorosa (re-fetch em qualquer mudança, anti race-condition).
-         ============================================================ */}
-      <CampaignAttribution />
 
       {/* Filter bar */}
       <div className="bg-white rounded-2xl border border-[color:var(--border)] p-4 mb-4 flex flex-wrap gap-3 items-center">
@@ -707,6 +703,16 @@ export default function RelatoriosPage() {
           </div>
         </div>
       </Dialog>
+
+      {/* ============================================================
+          ATRIBUIÇÃO DE CONVERSÃO — "Onde concentrar investimento"
+          Posicionada no FINAL da página (após tabela principal) pra ser
+          uma análise complementar/conclusiva. Responde de forma rigorosa
+          à propriedade + range do header.
+         ============================================================ */}
+      <div className="mt-8 pt-8 border-t-2 border-slate-200">
+        <CampaignAttribution />
+      </div>
     </main>
   );
 }

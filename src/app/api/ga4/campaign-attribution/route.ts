@@ -84,6 +84,7 @@ export async function GET(req: NextRequest) {
     sourceMediumEventsRes,
     campaignSessRes,
     campaignEventsRes,
+    campaignPageConvRes,
   ] = await Promise.all([
     // Channel — sessões + usuários
     runReport(propertyId, {
@@ -154,6 +155,20 @@ export async function GET(req: NextRequest) {
       metrics: [{ name: "eventCount" }, { name: "eventValue" }],
       dimensionFilter: eventFilter,
       limit: 2000,
+    }),
+    // Campaign × LP de conversão — formato relatório GA4 exportado
+    // Cruza qual campanha trouxe o usuário com qual página ele converteu
+    runReport(propertyId, {
+      dateRanges: [dateRange],
+      dimensions: [
+        { name: "sessionCampaignName" },
+        { name: "sessionSourceMedium" },
+        { name: "pagePath" }, // página onde o evento aconteceu (LP de conversão)
+        { name: "eventName" },
+      ],
+      metrics: [{ name: "eventCount" }, { name: "eventValue" }],
+      dimensionFilter: eventFilter,
+      limit: 5000,
     }),
   ]);
 
@@ -311,6 +326,50 @@ export async function GET(req: NextRequest) {
     .sort((a, b) => b.sessions - a.sessions);
 
   // ========================================================
+  // 4) Campaign × LP de conversão — formato GA4 export
+  // Mostra qual CAMPANHA trouxe o usuário + qual PÁGINA ele converteu
+  // (lead) + qual página ele comprou (purchase). É o cruzamento mais
+  // útil pra entender o caminho real de aquisição → conversão.
+  // ========================================================
+  type CampaignPageRow = {
+    campaign: string;
+    sourceMedium: string;
+    conversionPage: string;
+    leads: number;
+    purchases: number;
+    revenue: number;
+  };
+  const cpMap = new Map<string, CampaignPageRow>();
+  for (const r of campaignPageConvRes.data?.rows || []) {
+    const campaign = r.dimensionValues?.[0]?.value || "(not set)";
+    const sourceMedium = r.dimensionValues?.[1]?.value || "(direct)/(none)";
+    const conversionPage = r.dimensionValues?.[2]?.value || "/";
+    const eventName = r.dimensionValues?.[3]?.value || "";
+    const count = Number(r.metricValues?.[0]?.value || 0);
+    const value = Number(r.metricValues?.[1]?.value || 0);
+    if (count === 0) continue;
+
+    const key = `${campaign}|${sourceMedium}|${conversionPage}`;
+    let entry = cpMap.get(key);
+    if (!entry) {
+      entry = { campaign, sourceMedium, conversionPage, leads: 0, purchases: 0, revenue: 0 };
+      cpMap.set(key, entry);
+    }
+    if (eventName === "generate_lead") entry.leads += count;
+    else if (eventName === "purchase" || eventName === "purchase_success") {
+      entry.purchases += count;
+      entry.revenue += value;
+    }
+  }
+  const byCampaignXPage = [...cpMap.values()]
+    .filter((r) => r.leads > 0 || r.purchases > 0)
+    .sort((a, b) => {
+      const aTotal = a.leads + a.purchases * 5; // pondera vendas 5x leads no sort
+      const bTotal = b.leads + b.purchases * 5;
+      return bTotal - aTotal;
+    });
+
+  // ========================================================
   // RECOMENDAÇÕES — "Onde investir" insights
   // Critério: combina volume + eficiência. Premia canais que JÁ entregam
   // bem e têm capacidade (volume) de escalar.
@@ -411,6 +470,7 @@ export async function GET(req: NextRequest) {
       byChannel,
       bySourceMedium,
       byCampaign,
+      byCampaignXPage, // nova visão: campanha × LP de conversão (formato GA4 export)
       recommendations: recommendations.slice(0, 8),
       totals: {
         sessions: totalSessions,
@@ -425,6 +485,7 @@ export async function GET(req: NextRequest) {
         channelsCount: byChannel.length,
         sourceMediumCount: bySourceMedium.length,
         campaignsCount: byCampaign.length,
+        campaignXPageCount: byCampaignXPage.length,
         recommendationsCount: recommendations.length,
         errors: {
           channelSess: channelSessRes.error,
@@ -433,6 +494,7 @@ export async function GET(req: NextRequest) {
           sourceMediumEvents: sourceMediumEventsRes.error,
           campaignSess: campaignSessRes.error,
           campaignEvents: campaignEventsRes.error,
+          campaignPageConv: campaignPageConvRes.error,
         },
       },
     },
