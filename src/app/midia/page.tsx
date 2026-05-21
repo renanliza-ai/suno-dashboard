@@ -39,6 +39,7 @@ import {
 } from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
 import { CampaignPerformance } from "@/components/campaign-performance";
+import { CampaignAttribution } from "@/components/campaign-attribution";
 import { Dialog } from "@/components/dialog";
 import { useGA4, useGA4Reports } from "@/lib/ga4-context";
 import { DataStatus, SkeletonBlock, DataErrorCard } from "@/components/data-status";
@@ -240,6 +241,14 @@ export default function RelatoriosPage() {
           <DataErrorCard meta={meta} error={ga4Error} onRetry={() => window.location.reload()} />
         </div>
       )}
+
+      {/* ============================================================
+          ATRIBUIÇÃO DE CONVERSÃO — "Onde concentrar investimento"
+          Análise origem/canal/campanha cruzada com conversões (lead +
+          venda). Responde a propriedade + range do header de forma
+          rigorosa (re-fetch em qualquer mudança, anti race-condition).
+         ============================================================ */}
+      <CampaignAttribution />
 
       {/* Filter bar */}
       <div className="bg-white rounded-2xl border border-[color:var(--border)] p-4 mb-4 flex flex-wrap gap-3 items-center">
