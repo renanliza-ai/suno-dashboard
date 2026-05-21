@@ -85,6 +85,7 @@ export async function GET(req: NextRequest) {
     campaignSessRes,
     campaignEventsRes,
     campaignPageConvRes,
+    campaignSourceMediumKeyEventsRes,
   ] = await Promise.all([
     // Channel — sessões + usuários
     runReport(propertyId, {
@@ -169,6 +170,25 @@ export async function GET(req: NextRequest) {
       metrics: [{ name: "eventCount" }, { name: "eventValue" }],
       dimensionFilter: eventFilter,
       limit: 5000,
+    }),
+    // Campaign × Source/Medium com keyEvents (Todas as conversões) —
+    // formato IDÊNTICO ao GA4 export que o Renan compartilhou.
+    // Usa a métrica `keyEvents` nativa do GA4 (não filtra event_name)
+    // pra somar TODAS as conversões marcadas como key event na property.
+    runReport(propertyId, {
+      dateRanges: [dateRange],
+      dimensions: [
+        { name: "sessionCampaignName" },
+        { name: "sessionSourceMedium" },
+      ],
+      metrics: [
+        { name: "keyEvents" },
+        { name: "totalRevenue" },
+        { name: "purchaseRevenue" },
+        { name: "sessions" },
+      ],
+      orderBys: [{ metric: { metricName: "keyEvents" }, desc: true }],
+      limit: 500,
     }),
   ]);
 
@@ -370,6 +390,52 @@ export async function GET(req: NextRequest) {
     });
 
   // ========================================================
+  // 5) Campaign × Source/Medium com keyEvents — FORMATO GA4 EXPORT
+  // Réplica fiel do relatório que o Renan compartilhou: campanha +
+  // origem/mídia + total de conversões (sum de TODOS os key events
+  // marcados na property) + receita total.
+  // ========================================================
+  type CampaignSourceMediumRow = {
+    campaign: string;
+    sourceMedium: string;
+    keyEvents: number;
+    revenue: number;
+    sessions: number;
+    keyEventsShare: number; // % das conversões totais
+    revenueShare: number;   // % da receita total
+  };
+
+  type RawCSM = {
+    campaign: string;
+    sourceMedium: string;
+    keyEvents: number;
+    revenue: number;
+    sessions: number;
+  };
+  const csmRows: RawCSM[] = [];
+  let totalKeyEvents = 0;
+  let totalRevenueAll = 0;
+  for (const r of campaignSourceMediumKeyEventsRes.data?.rows || []) {
+    const campaign = r.dimensionValues?.[0]?.value || "(not set)";
+    const sourceMedium = r.dimensionValues?.[1]?.value || "(direct)/(none)";
+    const keyEvents = Number(r.metricValues?.[0]?.value || 0);
+    const totalRevenue = Number(r.metricValues?.[1]?.value || 0);
+    const purchaseRevenue = Number(r.metricValues?.[2]?.value || 0);
+    const sessions = Number(r.metricValues?.[3]?.value || 0);
+    // Receita: prefere purchaseRevenue (ecommerce-native), cai pra totalRevenue
+    const revenue = purchaseRevenue > 0 ? purchaseRevenue : totalRevenue;
+    if (keyEvents === 0 && revenue === 0) continue;
+    csmRows.push({ campaign, sourceMedium, keyEvents, revenue, sessions });
+    totalKeyEvents += keyEvents;
+    totalRevenueAll += revenue;
+  }
+  const byCampaignXSourceMedium: CampaignSourceMediumRow[] = csmRows.map((r) => ({
+    ...r,
+    keyEventsShare: totalKeyEvents > 0 ? Number(((r.keyEvents / totalKeyEvents) * 100).toFixed(2)) : 0,
+    revenueShare: totalRevenueAll > 0 ? Number(((r.revenue / totalRevenueAll) * 100).toFixed(2)) : 0,
+  }));
+
+  // ========================================================
   // RECOMENDAÇÕES — "Onde investir" insights
   // Critério: combina volume + eficiência. Premia canais que JÁ entregam
   // bem e têm capacidade (volume) de escalar.
@@ -470,7 +536,10 @@ export async function GET(req: NextRequest) {
       byChannel,
       bySourceMedium,
       byCampaign,
-      byCampaignXPage, // nova visão: campanha × LP de conversão (formato GA4 export)
+      byCampaignXPage, // campanha × LP de conversão
+      byCampaignXSourceMedium, // campanha × origem-mídia (FORMATO IDÊNTICO ao GA4 export)
+      totalKeyEvents,
+      totalRevenueKeyEvents: totalRevenueAll,
       recommendations: recommendations.slice(0, 8),
       totals: {
         sessions: totalSessions,
@@ -486,6 +555,7 @@ export async function GET(req: NextRequest) {
         sourceMediumCount: bySourceMedium.length,
         campaignsCount: byCampaign.length,
         campaignXPageCount: byCampaignXPage.length,
+        campaignXSourceMediumCount: byCampaignXSourceMedium.length,
         recommendationsCount: recommendations.length,
         errors: {
           channelSess: channelSessRes.error,
@@ -495,6 +565,7 @@ export async function GET(req: NextRequest) {
           campaignSess: campaignSessRes.error,
           campaignEvents: campaignEventsRes.error,
           campaignPageConv: campaignPageConvRes.error,
+          campaignSourceMediumKeyEvents: campaignSourceMediumKeyEventsRes.error,
         },
       },
     },

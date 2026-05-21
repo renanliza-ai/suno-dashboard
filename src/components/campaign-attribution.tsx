@@ -68,6 +68,17 @@ type CampaignPageRow = {
   revenue: number;
 };
 
+// Row no formato IDÊNTICO ao GA4 export: campanha + origem/mídia + keyEvents + receita
+type CampaignSourceMediumRow = {
+  campaign: string;
+  sourceMedium: string;
+  keyEvents: number;
+  revenue: number;
+  sessions: number;
+  keyEventsShare: number;
+  revenueShare: number;
+};
+
 type Recommendation = {
   type: "scale" | "optimize" | "pause" | "explore";
   target: string;
@@ -84,6 +95,9 @@ type AttributionResponse = {
   bySourceMedium: SourceMediumRow[];
   byCampaign: CampaignRow[];
   byCampaignXPage: CampaignPageRow[];
+  byCampaignXSourceMedium: CampaignSourceMediumRow[];
+  totalKeyEvents: number;
+  totalRevenueKeyEvents: number;
   recommendations: Recommendation[];
   totals: {
     sessions: number;
@@ -96,7 +110,7 @@ type AttributionResponse = {
   };
 };
 
-type ViewMode = "campaignXPage" | "channel" | "sourceMedium" | "campaign";
+type ViewMode = "campaignXSourceMedium" | "campaignXPage" | "channel" | "sourceMedium" | "campaign";
 type SortableKey = "sessions" | "leads" | "purchases" | "revenue" | "leadConvRate" | "purchaseConvRate" | "avgTicket";
 
 function formatBRL(v: number): string {
@@ -113,13 +127,15 @@ export function CampaignAttribution() {
   const [data, setData] = useState<AttributionResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Default na view "campaignXPage" — é a mais útil pra responder "onde investir"
-  const [view, setView] = useState<ViewMode>("campaignXPage");
+  // Default: visão idêntica ao GA4 export (Campanha × Origem/Mídia + keyEvents)
+  const [view, setView] = useState<ViewMode>("campaignXSourceMedium");
   const [sortKey, setSortKey] = useState<SortableKey>("sessions");
   const [sortDesc, setSortDesc] = useState(true);
   const [search, setSearch] = useState("");
   // Modal de detalhes ao clicar numa linha
-  const [selectedRow, setSelectedRow] = useState<ChannelRow | SourceMediumRow | CampaignRow | CampaignPageRow | null>(null);
+  const [selectedRow, setSelectedRow] = useState<
+    ChannelRow | SourceMediumRow | CampaignRow | CampaignPageRow | CampaignSourceMediumRow | null
+  >(null);
 
   // ========================================================
   // Fetch — RE-EXECUTA em qualquer mudança de:
@@ -184,6 +200,24 @@ export function CampaignAttribution() {
   const rows = useMemo(() => {
     if (!data) return [];
     const q = search.toLowerCase().trim();
+
+    // VIEW PADRÃO (formato GA4 export): Campanha × Origem/Mídia + keyEvents
+    if (view === "campaignXSourceMedium") {
+      let source = data.byCampaignXSourceMedium;
+      if (q) {
+        source = source.filter(
+          (r) => r.campaign.toLowerCase().includes(q) || r.sourceMedium.toLowerCase().includes(q)
+        );
+      }
+      const sortBy: (r: CampaignSourceMediumRow) => number = (r) => {
+        if (sortKey === "revenue") return r.revenue;
+        if (sortKey === "sessions") return r.sessions;
+        // qualquer outro key → ordena por keyEvents (default GA4)
+        return r.keyEvents;
+      };
+      const sorted = [...source].sort((a, b) => (sortDesc ? sortBy(b) - sortBy(a) : sortBy(a) - sortBy(b)));
+      return sorted as (ChannelRow | SourceMediumRow | CampaignRow | CampaignPageRow | CampaignSourceMediumRow)[];
+    }
 
     if (view === "campaignXPage") {
       let source = data.byCampaignXPage;
@@ -252,6 +286,7 @@ export function CampaignAttribution() {
   function handleExport(format: "xlsx" | "pdf" | "csv") {
     if (!data) return;
     const labels: Record<ViewMode, string> = {
+      campaignXSourceMedium: "Campanha × Origem (GA4)",
       campaignXPage: "Campanha × LP",
       channel: "Canal",
       sourceMedium: "Origem / Mídia",
@@ -259,7 +294,29 @@ export function CampaignAttribution() {
     };
 
     let sheet: ReportSheet;
-    if (view === "campaignXPage") {
+    if (view === "campaignXSourceMedium") {
+      sheet = {
+        name: "Campanha x Origem (GA4)",
+        columns: [
+          "Campanha",
+          "Origem / Mídia",
+          "Todas as conversões",
+          "% Conversões",
+          "Receita total (R$)",
+          "% Receita",
+          "Sessões",
+        ],
+        rows: (rows as CampaignSourceMediumRow[]).map((r) => [
+          r.campaign,
+          r.sourceMedium,
+          r.keyEvents,
+          r.keyEventsShare,
+          r.revenue,
+          r.revenueShare,
+          r.sessions,
+        ]),
+      };
+    } else if (view === "campaignXPage") {
       sheet = {
         name: "Campanha x LP",
         columns: ["Campanha (origem)", "Origem / Mídia", "LP de conversão", "Leads", "Vendas", "Receita (R$)"],
@@ -487,9 +544,9 @@ export function CampaignAttribution() {
                 </p>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
-                {/* Toggle de view — Campanha × LP é o default (mais útil) */}
-                <div className="inline-flex rounded-lg border border-[color:var(--border)] overflow-hidden text-xs">
-                  {(["campaignXPage", "channel", "sourceMedium", "campaign"] as const).map((v) => (
+                {/* Toggle de view — formato GA4 export é o default */}
+                <div className="inline-flex rounded-lg border border-[color:var(--border)] overflow-hidden text-xs flex-wrap">
+                  {(["campaignXSourceMedium", "campaignXPage", "channel", "sourceMedium", "campaign"] as const).map((v) => (
                     <button
                       key={v}
                       onClick={() => setView(v)}
@@ -497,22 +554,26 @@ export function CampaignAttribution() {
                         view === v ? "bg-[#7c5cff] text-white" : "bg-white text-slate-600 hover:bg-slate-50"
                       }`}
                       title={
-                        v === "campaignXPage"
-                          ? "Formato GA4 export: campanha que trouxe o lead + página onde converteu"
-                          : v === "channel"
-                            ? "Visão agregada por canal (Organic, Paid Search, etc)"
-                            : v === "sourceMedium"
-                              ? "Origem + mídia detalhada (google/cpc, facebook/social, etc)"
-                              : "Cada UTM campaign individualmente"
+                        v === "campaignXSourceMedium"
+                          ? "Idêntico ao seu GA4 export: campanha + origem/mídia + total de conversões (keyEvents) + receita"
+                          : v === "campaignXPage"
+                            ? "Cruzamento extra: campanha que trouxe + página onde converteu"
+                            : v === "channel"
+                              ? "Visão agregada por canal (Organic, Paid Search, etc)"
+                              : v === "sourceMedium"
+                                ? "Origem + mídia detalhada (google/cpc, facebook/social, etc)"
+                                : "Cada UTM campaign individualmente"
                       }
                     >
-                      {v === "campaignXPage"
-                        ? "📊 Campanha × LP"
-                        : v === "channel"
-                          ? "Por Canal"
-                          : v === "sourceMedium"
-                            ? "Por Origem/Mídia"
-                            : "Por Campanha"}
+                      {v === "campaignXSourceMedium"
+                        ? "📋 Campanha × Origem (GA4)"
+                        : v === "campaignXPage"
+                          ? "🎯 Campanha × LP"
+                          : v === "channel"
+                            ? "Por Canal"
+                            : v === "sourceMedium"
+                              ? "Por Origem/Mídia"
+                              : "Por Campanha"}
                     </button>
                   ))}
                 </div>
@@ -552,10 +613,91 @@ export function CampaignAttribution() {
             </div>
 
             <div className="overflow-x-auto">
-              {view === "campaignXPage" ? (
+              {view === "campaignXSourceMedium" ? (
                 // ========================================================
-                // VIEW ESPECIAL: Campanha × LP — formato GA4 export
-                // Mostra qual campanha trouxe o lead E onde ele converteu
+                // VIEW PADRÃO: Formato IDÊNTICO ao GA4 export
+                // Campanha | Origem/Mídia | Todas conversões (keyEvents) | Receita
+                // ========================================================
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50/50 border-b border-[color:var(--border)] sticky top-0">
+                    <tr>
+                      <Th label="Campanha" align="left" />
+                      <Th label="Origem / Mídia" align="left" />
+                      <ThSortable label="Todas as conversões" sortKey="leads" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
+                      <ThSortable label="Receita total" sortKey="revenue" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
+                      <ThSortable label="Sessões" sortKey="sessions" currentSort={sortKey} desc={sortDesc} onClick={toggleSort} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* Linha de total — espelha o GA4 */}
+                    <tr className="bg-slate-50 border-b-2 border-slate-200 font-bold">
+                      <td className="px-4 py-2.5 text-xs">Total</td>
+                      <td className="px-4 py-2.5 text-xs">—</td>
+                      <td className="px-4 py-2.5 text-right text-xs tabular-nums">
+                        {formatNumber(data.totalKeyEvents)}{" "}
+                        <span className="text-[10px] font-normal text-slate-500">(100%)</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-xs tabular-nums">
+                        {data.totalRevenueKeyEvents > 0 ? formatBRL(data.totalRevenueKeyEvents) : "—"}{" "}
+                        <span className="text-[10px] font-normal text-slate-500">(100%)</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-xs tabular-nums">
+                        {formatNumber(data.totals.sessions)}
+                      </td>
+                    </tr>
+                    {rows.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-12 text-center text-slate-400 text-xs italic">
+                          Nenhuma conversão atribuída no período. Verifique se há eventos marcados como Key Events no GA4 dessa propriedade.
+                        </td>
+                      </tr>
+                    )}
+                    {(rows as CampaignSourceMediumRow[]).slice(0, 100).map((r, i) => (
+                      <tr
+                        key={`${r.campaign}-${r.sourceMedium}-${i}`}
+                        onClick={() => setSelectedRow(r)}
+                        className="border-b border-slate-100 hover:bg-violet-50/50 cursor-pointer transition"
+                      >
+                        <td className="px-4 py-2.5 max-w-[280px]">
+                          <p className="text-xs truncate font-medium" title={r.campaign}>
+                            {r.campaign === "(not set)" ? (
+                              <span className="text-slate-400 italic">(sem UTM)</span>
+                            ) : (
+                              r.campaign
+                            )}
+                          </p>
+                        </td>
+                        <td className="px-4 py-2.5 max-w-[200px]">
+                          <p className="text-[11px] font-mono text-slate-700 truncate" title={r.sourceMedium}>
+                            {r.sourceMedium}
+                          </p>
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-xs tabular-nums">
+                          <span className="font-bold">{formatNumber(r.keyEvents)}</span>{" "}
+                          {r.keyEventsShare > 0 && (
+                            <span className="text-[10px] text-slate-500">({r.keyEventsShare}%)</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-xs tabular-nums">
+                          {r.revenue > 0 ? (
+                            <>
+                              <span className="font-bold">{formatBRL(r.revenue)}</span>{" "}
+                              <span className="text-[10px] text-slate-500">({r.revenueShare}%)</span>
+                            </>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-xs tabular-nums text-slate-500">
+                          {formatNumber(r.sessions)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : view === "campaignXPage" ? (
+                // ========================================================
+                // VIEW: Campanha × LP — cruza com página de conversão
                 // ========================================================
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50/50 border-b border-[color:var(--border)] sticky top-0">
@@ -709,22 +851,26 @@ export function CampaignAttribution() {
           open={!!selectedRow}
           onClose={() => setSelectedRow(null)}
           title={
-            "conversionPage" in selectedRow
+            "keyEvents" in selectedRow
               ? `${selectedRow.campaign === "(not set)" ? "(sem UTM)" : selectedRow.campaign}`
-              : "channel" in selectedRow
-                ? `Detalhes: ${selectedRow.channel}`
-                : "campaign" in selectedRow
-                  ? `${selectedRow.campaign === "(not set)" ? "(sem UTM)" : selectedRow.campaign}`
-                  : `${selectedRow.source} / ${selectedRow.medium}`
+              : "conversionPage" in selectedRow
+                ? `${selectedRow.campaign === "(not set)" ? "(sem UTM)" : selectedRow.campaign}`
+                : "channel" in selectedRow
+                  ? `Detalhes: ${selectedRow.channel}`
+                  : "campaign" in selectedRow
+                    ? `${selectedRow.campaign === "(not set)" ? "(sem UTM)" : selectedRow.campaign}`
+                    : `${selectedRow.source} / ${selectedRow.medium}`
           }
           subtitle={
-            "conversionPage" in selectedRow
-              ? `${selectedRow.sourceMedium} → ${selectedRow.conversionPage}`
-              : "campaign" in selectedRow
-                ? `${selectedRow.source} / ${selectedRow.medium}`
-                : "source" in selectedRow
-                  ? "Origem / Mídia"
-                  : "Canal default GA4"
+            "keyEvents" in selectedRow
+              ? `${selectedRow.sourceMedium}`
+              : "conversionPage" in selectedRow
+                ? `${selectedRow.sourceMedium} → ${selectedRow.conversionPage}`
+                : "campaign" in selectedRow
+                  ? `${selectedRow.source} / ${selectedRow.medium}`
+                  : "source" in selectedRow
+                    ? "Origem / Mídia"
+                    : "Canal default GA4"
           }
           maxWidth="max-w-2xl"
           icon={
@@ -748,10 +894,78 @@ function RowDetailModal({
   row,
   totals,
 }: {
-  row: ChannelRow | SourceMediumRow | CampaignRow | CampaignPageRow;
+  row: ChannelRow | SourceMediumRow | CampaignRow | CampaignPageRow | CampaignSourceMediumRow;
   totals?: AttributionResponse["totals"];
 }) {
+  const isCampaignSourceMedium = "keyEvents" in row;
   const isCampaignPage = "conversionPage" in row;
+
+  if (isCampaignSourceMedium) {
+    return (
+      <div className="space-y-4 text-sm">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="rounded-xl border border-slate-200 p-4 bg-slate-50/40">
+            <p className="text-[10px] uppercase font-bold tracking-wider text-slate-500 mb-1">Campanha (UTM)</p>
+            <p className="font-bold text-slate-800 break-all">
+              {row.campaign === "(not set)" ? <em className="text-slate-400">(sem UTM)</em> : row.campaign}
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-200 p-4 bg-slate-50/40">
+            <p className="text-[10px] uppercase font-bold tracking-wider text-slate-500 mb-1">Origem / Mídia</p>
+            <p className="font-mono text-xs text-slate-800 break-all">{row.sourceMedium}</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <KpiBox
+            icon={Target}
+            label="Todas as conversões"
+            value={formatNumber(row.keyEvents)}
+            color="#10b981"
+          />
+          <KpiBox
+            icon={TrendingUp}
+            label="% das conversões"
+            value={`${row.keyEventsShare}%`}
+            color="#10b981"
+          />
+          <KpiBox
+            icon={ShoppingCart}
+            label="Receita total"
+            value={row.revenue > 0 ? formatBRL(row.revenue) : "—"}
+            color="#7c5cff"
+          />
+          <KpiBox
+            icon={TrendingUp}
+            label="% da receita"
+            value={`${row.revenueShare}%`}
+            color="#7c5cff"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <KpiBox icon={Users} label="Sessões" value={formatNumber(row.sessions)} color="#3b82f6" />
+          <KpiBox
+            label="Conversões / sessão"
+            value={row.sessions > 0 ? `${((row.keyEvents / row.sessions) * 100).toFixed(2)}%` : "—"}
+            color="#f59e0b"
+          />
+        </div>
+
+        <div className="rounded-xl bg-blue-50/40 border border-blue-200 p-3 text-[11px] text-blue-900 flex gap-2">
+          <ArrowUpRight size={14} className="text-blue-700 shrink-0 mt-0.5" />
+          <p>
+            <strong>Como ler:</strong> a campanha{" "}
+            <code className="bg-white px-1 rounded font-mono text-[10px]">{row.campaign}</code> via origem{" "}
+            <code className="bg-white px-1 rounded font-mono text-[10px]">{row.sourceMedium}</code> gerou{" "}
+            <strong>{formatNumber(row.keyEvents)}</strong> conversões totais (Key Events do GA4) e{" "}
+            <strong>{formatBRL(row.revenue)}</strong> de receita —{" "}
+            <strong>{row.keyEventsShare}%</strong> do total no período.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (isCampaignPage) {
     // View especial pra linha do tipo Campanha × LP
