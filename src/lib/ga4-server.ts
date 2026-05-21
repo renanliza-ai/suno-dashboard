@@ -567,12 +567,17 @@ export async function getLPChannels(
   // GA4 cobra cada dimensão extra. Padrão: hostName + pagePath + breakdown.
   // Quando temos filtros UTM, adicionamos sessionSource/Medium/CampaignName
   // como dimensões extras pra poder filtrar no pós-processamento.
+  //
+  // ⚠ DEDUPLICAÇÃO: se a breakdownDimension já inclui uma dessas (ex: quando
+  // breakdownDimension="campaign", breakdownDims já tem sessionCampaignName),
+  // não adicionamos de novo — GA4 retorna 400 "Found duplicate dimensions".
+  const breakdownDimNames = new Set(breakdownDims.map((d) => d.name));
   const utmDims = hasAnyUtmFilter
     ? [
         { name: "sessionSource" },
         { name: "sessionMedium" },
         { name: "sessionCampaignName" },
-      ]
+      ].filter((d) => !breakdownDimNames.has(d.name))
     : [];
 
   // ⚠ CRUCIAL: pré-filtrar pelos paths solicitados na própria query do GA4.
@@ -701,11 +706,27 @@ export async function getLPChannels(
     conversions: number;
   };
   const breakdownDimCount = Array.isArray(dimMap) ? dimMap.length : 1;
+
+  // ⚠ Mapping dinâmico — encontra o índice de cada dimensão UTM na lista
+  // final de dimensões da query (hostName, pagePath, ...breakdownDims, ...utmDims).
+  // Pode estar tanto em breakdownDims (quando breakdownDimension="campaign" por ex)
+  // quanto em utmDims (quando hasAnyUtmFilter mas breakdownDim é outra).
+  const fullDimsList = [
+    { name: "hostName" },
+    { name: "pagePath" },
+    ...breakdownDims,
+    ...utmDims,
+  ];
+  const dimIndex = (name: string): number => fullDimsList.findIndex((d) => d.name === name);
+  const sourceIdx = dimIndex("sessionSource");
+  const mediumIdx = dimIndex("sessionMedium");
+  const campaignIdx = dimIndex("sessionCampaignName");
+
   const rows: Row[] = (res.data?.rows || []).map((r) => {
     // hostName e pagePath são as 2 primeiras dimensões
     const host = r.dimensionValues?.[0]?.value || "";
     const path = (r.dimensionValues?.[1]?.value || "/").replace(/\/+$/, "") || "/";
-    // Dimensões de breakdown vêm a partir do índice 2
+    // Label do breakdown — junta os valores das dimensões 2..2+breakdownDimCount
     let label = "(not set)";
     if (breakdownDimCount === 1) {
       label = r.dimensionValues?.[2]?.value || "(not set)";
@@ -716,11 +737,10 @@ export async function getLPChannels(
       }
       label = parts.join(" / ");
     }
-    // UTMs vêm DEPOIS de host+path+breakdown (apenas quando hasAnyUtmFilter)
-    const utmOffset = 2 + breakdownDimCount;
-    const utmSource = hasAnyUtmFilter ? r.dimensionValues?.[utmOffset]?.value || "" : "";
-    const utmMedium = hasAnyUtmFilter ? r.dimensionValues?.[utmOffset + 1]?.value || "" : "";
-    const utmCampaign = hasAnyUtmFilter ? r.dimensionValues?.[utmOffset + 2]?.value || "" : "";
+    // UTMs lidos pelo índice correto (pode estar em breakdownDims ou utmDims)
+    const utmSource = sourceIdx >= 0 ? r.dimensionValues?.[sourceIdx]?.value || "" : "";
+    const utmMedium = mediumIdx >= 0 ? r.dimensionValues?.[mediumIdx]?.value || "" : "";
+    const utmCampaign = campaignIdx >= 0 ? r.dimensionValues?.[campaignIdx]?.value || "" : "";
     return {
       host,
       path,
