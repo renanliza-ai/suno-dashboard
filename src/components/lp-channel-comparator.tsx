@@ -141,10 +141,53 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
   const dimMeta =
     DIMENSION_OPTIONS.find((d) => d.value === breakdownDimension) || DIMENSION_OPTIONS[0];
 
+  // Heurística pra detectar inputs que NÃO são URL/path:
+  // - Suno UTM campaign IDs começam com _SNC, _SNL, _RS, etc. seguidos de hash
+  // - Strings sem barras nem ponto (não parecem URL)
+  function detectInputProblem(input: string): string | null {
+    const v = input.trim();
+    if (!v) return null;
+    // Campaign ID Suno (ex.: _SNC9AAF8834_, _SNL170A5736_, etc.)
+    if (/^_(SN[A-Z]|RS)\w*_?$/i.test(v) || /^_[A-Z0-9]{6,}_?$/i.test(v)) {
+      return "Isso parece um ID de campanha (UTM), não uma URL. Pra filtrar por campanha, use a aba 'Onde concentrar investimento' no /midia.";
+    }
+    // Sem barra e sem ponto — não é URL nem path
+    if (!v.includes("/") && !v.includes(".") && !v.startsWith("http")) {
+      return "Cole uma URL (ex: https://lp.suno.com.br/...) ou path (ex: /pv/eu-invisto-2026/).";
+    }
+    return null;
+  }
+
+  // Extrai apenas o path se o usuário colou URL completa com query string
+  function extractPath(input: string): string {
+    const v = input.trim();
+    if (!v) return v;
+    try {
+      const url = new URL(v);
+      // Retorna só pathname (remove query string e hash)
+      return url.pathname;
+    } catch {
+      // Não é URL absoluta — assume que já é path. Se tem ?, corta no ?
+      const qIndex = v.indexOf("?");
+      return qIndex >= 0 ? v.substring(0, qIndex) : v;
+    }
+  }
+
   function addUrl() {
     const trimmed = inputValue.trim();
     if (!trimmed) return;
-    if (pendingUrls.includes(trimmed)) {
+
+    // Validação prévia — se parece um campaign ID ou inválido, avisa
+    const problem = detectInputProblem(trimmed);
+    if (problem) {
+      alert(`⚠ Input não parece um URL/path:\n\n${problem}`);
+      return;
+    }
+
+    // Auto-extrai path da URL completa (ex.: cola URL com ?utm_campaign=...,
+    // ele pega só /pv/eu-invisto-2026/)
+    const cleaned = extractPath(trimmed);
+    if (pendingUrls.includes(cleaned)) {
       setInputValue("");
       return;
     }
@@ -152,7 +195,7 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
       alert("Limite de 20 URLs por comparação.");
       return;
     }
-    setPendingUrls([...pendingUrls, trimmed]);
+    setPendingUrls([...pendingUrls, cleaned]);
     setInputValue("");
   }
 
@@ -621,6 +664,16 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
         </div>
       )}
 
+      {/* Hint inteligente — alerta quando o input parece problemático */}
+      {inputValue.trim() && detectInputProblem(inputValue) && (
+        <div data-export-hide className="mb-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
+          <AlertCircle size={13} className="shrink-0 mt-0.5" />
+          <div>
+            <strong>Atenção:</strong> {detectInputProblem(inputValue)}
+          </div>
+        </div>
+      )}
+
       {/* Input de URL — escondido na exportação (controle interativo) */}
       <div data-export-hide className="flex flex-wrap gap-2 mb-3">
         <input
@@ -633,7 +686,7 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
               addUrl();
             }
           }}
-          placeholder="Cole uma URL (https://...) ou path (/cl/lp-x) e aperte Enter"
+          placeholder="Cole URL (https://lp.suno.com.br/pv/...) ou só o path (/pv/eu-invisto-2026/)"
           className="flex-1 min-w-[260px] px-3 py-2 text-sm rounded-lg border border-[color:var(--border)] focus:outline-none focus:border-[#7c5cff] font-mono"
         />
         <button
@@ -885,9 +938,26 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
                     })}
                   </div>
                 ) : (
-                  <p className="text-xs text-slate-400 italic">
-                    Nenhuma sessão encontrada nessa LP no período. Confira: URL escrita certo? Período tem dados?
-                  </p>
+                  <div className="text-xs text-slate-600 bg-amber-50/40 border border-amber-200 rounded-lg p-3 space-y-1">
+                    <p className="font-semibold text-amber-900">
+                      🔍 Nenhuma sessão encontrada nessa URL no período.
+                    </p>
+                    <p className="text-amber-800">Possíveis causas:</p>
+                    <ul className="list-disc list-inside space-y-0.5 text-amber-800">
+                      <li>
+                        Você colou um <strong>ID de campanha</strong> (ex: <code className="font-mono bg-white px-1 rounded">_SNC9AAF8834_</code>) em vez de URL/path
+                      </li>
+                      <li>
+                        A URL não bate exatamente com o que o GA4 registra (verifique barras finais, query strings)
+                      </li>
+                      <li>
+                        A LP existe em outra propriedade GA4 (troque a propriedade no header)
+                      </li>
+                      <li>
+                        O período selecionado não tem tráfego nessa LP — tente expandir o range
+                      </li>
+                    </ul>
+                  </div>
                 )}
               </div>
             ))}
