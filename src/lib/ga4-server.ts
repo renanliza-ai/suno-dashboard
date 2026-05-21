@@ -580,7 +580,21 @@ export async function getLPChannels(
   // CORTAR combinações de cauda longa (URLs específicas com UTM específico
   // e poucas sessões). Adicionando o filter, garantimos que TODAS as linhas
   // correspondentes aos paths pedidos sejam retornadas — sem corte.
-  const pathValues = Array.from(new Set(parsed.map((p) => p.path)));
+  //
+  // ⚠ Inclui ambas variantes (com e sem trailing slash) pois o GA4 pode
+  // armazenar de qualquer forma dependendo de como o pageview foi disparado.
+  // Sem isso, /pv/eu-invisto-2026/ no GA4 nunca casa com /pv/eu-invisto-2026
+  // no filter (que foi normalizado por parseUrl).
+  const pathValues = Array.from(
+    new Set(
+      parsed.flatMap((p) => {
+        if (p.path === "/") return ["/"];
+        const noSlash = p.path.replace(/\/+$/, "");
+        const withSlash = `${noSlash}/`;
+        return [noSlash, withSlash];
+      })
+    )
+  );
   const pathFilter = {
     filter: {
       fieldName: "pagePath",
@@ -627,8 +641,9 @@ export async function getLPChannels(
     limit: 10000,
   });
 
-  if (res.error || !res.data?.rows) {
-    // Tentativa de fallback sem `keyEvents` (properties antigas usam `conversions`)
+  // Só tenta fallback quando houve ERRO real (não quando rows é vazio/undefined,
+  // que significa simplesmente "GA4 não tem dados pra esse filtro" — caso válido)
+  if (res.error) {
     const fb = await runReport(propertyId, {
       dateRanges: [range.ga4Range],
       dimensions: [
@@ -648,10 +663,26 @@ export async function getLPChannels(
       orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
       limit: 10000,
     });
-    if (fb.error || !fb.data?.rows) {
-      return { data: null, error: fb.error || res.error || "no_rows" };
+    if (fb.error) {
+      return { data: null, error: fb.error || res.error };
     }
-    res.data = fb.data;
+    res.data = fb.data || { rows: [] };
+  }
+
+  // Se chegou aqui sem erro mas sem rows, retorna empty results com matched=false
+  // (não é erro — significa que o filtro não bateu, mostra "sem dados" na UI)
+  if (!res.data?.rows || res.data.rows.length === 0) {
+    const emptyResults: LPChannelResult[] = parsed.map((p) => ({
+      url: p.original,
+      matched: false,
+      totalUsers: 0,
+      totalSessions: 0,
+      totalEngagedSessions: 0,
+      avgBounceRate: 0,
+      totalConversions: 0,
+      byChannel: [],
+    }));
+    return { data: emptyResults, error: null };
   }
 
   // Indexa rows
