@@ -127,6 +127,12 @@ export function CampaignAttribution() {
   const [data, setData] = useState<AttributionResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Estado específico de 429 — pra UI mostrar contador de retry
+  const [quotaError, setQuotaError] = useState<{
+    message: string;
+    retryAfterSeconds: number;
+    blockedUntil: number;
+  } | null>(null);
   // Default: visão idêntica ao GA4 export (Campanha × Origem/Mídia + keyEvents)
   const [view, setView] = useState<ViewMode>("campaignXSourceMedium");
   const [sortKey, setSortKey] = useState<SortableKey>("sessions");
@@ -155,8 +161,14 @@ export function CampaignAttribution() {
     const requestEnd = customRange?.endDate;
     const requestDays = days;
 
+    // Se está bloqueado por quota, não tenta de novo até o tempo passar
+    if (quotaError && Date.now() < quotaError.blockedUntil) {
+      return;
+    }
+
     setLoading(true);
     setError(null);
+    setQuotaError(null);
     setData(null); // limpa imediatamente pra UI não exibir dado antigo
 
     const params = new URLSearchParams({ propertyId: selectedId });
@@ -172,15 +184,31 @@ export function CampaignAttribution() {
       cache: "no-store",
       signal: controller.signal,
     })
-      .then((r) => r.json())
-      .then((d: AttributionResponse & { error?: string }) => {
+      .then(async (r) => {
+        const json = await r.json();
+        return { status: r.status, body: json };
+      })
+      .then(({ status, body }) => {
         // ⚠ Anti race-condition: descarta se mudou property/range no meio
-        if (d.propertyId !== requestPropertyId) return;
+        const d = body as AttributionResponse & { error?: string; message?: string; retryAfterSeconds?: number };
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
         if (customRange?.startDate !== requestStart || customRange?.endDate !== requestEnd) return;
         if (!customRange && days !== requestDays) return;
 
+        // Trata 429 específico — UI dedicada
+        if (status === 429 || d.error === "quota_exceeded") {
+          const retrySeconds = d.retryAfterSeconds || 600;
+          setQuotaError({
+            message: d.message || "Quota do GA4 atingida pra essa propriedade.",
+            retryAfterSeconds: retrySeconds,
+            blockedUntil: Date.now() + retrySeconds * 1000,
+          });
+          setData(null);
+          return;
+        }
+
         if (d.error) {
-          setError(d.error);
+          setError(d.message || d.error);
           setData(null);
         } else {
           setData(d);
@@ -194,7 +222,7 @@ export function CampaignAttribution() {
       .finally(() => setLoading(false));
 
     return () => controller.abort();
-  }, [selectedId, useRealData, days, customRange?.startDate, customRange?.endDate]);
+  }, [selectedId, useRealData, days, customRange?.startDate, customRange?.endDate, quotaError]);
 
   // Sorting + filtering — diferenciado pela view escolhida
   const rows = useMemo(() => {
@@ -443,11 +471,65 @@ export function CampaignAttribution() {
         </div>
       </motion.div>
 
-      {error && (
+      {error && !quotaError && (
         <div className="rounded-xl bg-red-50 border border-red-200 p-4 mb-4 flex items-start gap-2 text-sm text-red-800">
           <AlertTriangle size={16} className="shrink-0 mt-0.5" />
           <div>
             <strong>Erro ao carregar atribuição:</strong> {error}
+          </div>
+        </div>
+      )}
+
+      {/* UI específica pra erro 429 (quota GA4 atingida) */}
+      {quotaError && (
+        <div className="rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-300 p-5 mb-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center shrink-0">
+              <AlertTriangle size={20} className="text-amber-700" />
+            </div>
+            <div className="flex-1">
+              <h3 className="text-base font-bold text-amber-900 mb-1">
+                Quota do GA4 atingida temporariamente
+              </h3>
+              <p className="text-sm text-amber-900 leading-relaxed">
+                {quotaError.message}
+              </p>
+              <div className="mt-3 bg-white/70 rounded-lg p-3 border border-amber-200 text-xs">
+                <p className="font-semibold text-amber-900 mb-1">O que aconteceu:</p>
+                <p className="text-amber-800 leading-relaxed">
+                  O Google Analytics 4 limita o número de queries por propriedade por hora. Esse painel faz queries
+                  pesadas (8 dimensões cruzadas) pra trazer a análise completa, e o limite foi atingido em algum
+                  momento — provavelmente outros dashboards consultando a mesma propriedade ou refreshes rápidos.
+                </p>
+                <p className="font-semibold text-amber-900 mt-2 mb-1">O que fazer agora:</p>
+                <ul className="text-amber-800 space-y-0.5 list-disc list-inside">
+                  <li>
+                    <strong>Aguarde ~10 minutos</strong> — os tokens são renovados continuamente, não precisa esperar 1h cheia
+                  </li>
+                  <li>
+                    Ou <strong>troque pra outra propriedade</strong> no header (Suno Research / Statusinvest) — cada uma tem quota independente
+                  </li>
+                  <li>
+                    Quando voltar, a próxima query fica cacheada por 10min — não vai bater no quota de novo
+                  </li>
+                </ul>
+              </div>
+              <div className="mt-3 flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    setQuotaError(null);
+                    setData(null);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition"
+                >
+                  <Loader2 size={12} />
+                  Tentar novamente agora
+                </button>
+                <p className="text-[11px] text-amber-700">
+                  💡 Auto-tentativa em <strong>{Math.ceil(quotaError.retryAfterSeconds / 60)}min</strong>
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       )}

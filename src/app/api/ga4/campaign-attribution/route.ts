@@ -40,6 +40,45 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+// ============================================================
+// Cache em memória — TTL 10 min. Mesma combinação (propertyId + range)
+// reaproveita resultado dentro da janela, evitando hammer no GA4 quota.
+// Especialmente importante porque essa rota faz 5 queries pesadas.
+// ============================================================
+type CachedResponse = { data: unknown; expiresAt: number };
+const RESPONSE_CACHE = new Map<string, CachedResponse>();
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 min
+
+function cacheKey(propertyId: string, range: { startDate: string; endDate: string }): string {
+  return `${propertyId}|${range.startDate}|${range.endDate}`;
+}
+
+function getCached(key: string): unknown | null {
+  const entry = RESPONSE_CACHE.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    RESPONSE_CACHE.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCached(key: string, data: unknown): void {
+  RESPONSE_CACHE.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+  // Limita tamanho do cache (LRU simples)
+  if (RESPONSE_CACHE.size > 100) {
+    const firstKey = RESPONSE_CACHE.keys().next().value;
+    if (firstKey) RESPONSE_CACHE.delete(firstKey);
+  }
+}
+
+// Detecta erro 429 (quota exceeded) em qualquer das respostas
+function detectQuotaError(errors: (string | null | undefined)[]): boolean {
+  return errors.some(
+    (e) => typeof e === "string" && (e.includes("429") || e.toLowerCase().includes("quota") || e.toLowerCase().includes("exhausted"))
+  );
+}
+
 export async function GET(req: NextRequest) {
   const propertyId = req.nextUrl.searchParams.get("propertyId");
   if (!propertyId) {
@@ -68,7 +107,22 @@ export async function GET(req: NextRequest) {
   }
 
   // ========================================================
-  // 6 queries em paralelo cruzando todas as dimensões úteis
+  // Cache check — se a mesma propriedade + range foi consultada nos
+  // últimos 10 min, retorna o resultado cacheado (evita 429 quota)
+  // ========================================================
+  const cKey = cacheKey(propertyId, dateRange);
+  const cached = getCached(cKey);
+  if (cached) {
+    return NextResponse.json(cached, {
+      headers: {
+        "X-Cache": "HIT",
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
+  // ========================================================
+  // 8 queries em paralelo cruzando todas as dimensões úteis
   // ========================================================
   const eventFilter = {
     filter: {
@@ -87,7 +141,6 @@ export async function GET(req: NextRequest) {
     campaignPageConvRes,
     campaignSourceMediumKeyEventsRes,
   ] = await Promise.all([
-    // Channel — sessões + usuários
     runReport(propertyId, {
       dateRanges: [dateRange],
       dimensions: [{ name: "sessionDefaultChannelGroup" }],
@@ -100,7 +153,6 @@ export async function GET(req: NextRequest) {
       orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
       limit: 50,
     }),
-    // Channel — eventos
     runReport(propertyId, {
       dateRanges: [dateRange],
       dimensions: [{ name: "sessionDefaultChannelGroup" }, { name: "eventName" }],
@@ -108,31 +160,20 @@ export async function GET(req: NextRequest) {
       dimensionFilter: eventFilter,
       limit: 200,
     }),
-    // Source/Medium — sessões + usuários
     runReport(propertyId, {
       dateRanges: [dateRange],
       dimensions: [{ name: "sessionSource" }, { name: "sessionMedium" }],
-      metrics: [
-        { name: "sessions" },
-        { name: "totalUsers" },
-        { name: "engagedSessions" },
-      ],
+      metrics: [{ name: "sessions" }, { name: "totalUsers" }, { name: "engagedSessions" }],
       orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
       limit: 100,
     }),
-    // Source/Medium — eventos
     runReport(propertyId, {
       dateRanges: [dateRange],
-      dimensions: [
-        { name: "sessionSource" },
-        { name: "sessionMedium" },
-        { name: "eventName" },
-      ],
+      dimensions: [{ name: "sessionSource" }, { name: "sessionMedium" }, { name: "eventName" }],
       metrics: [{ name: "eventCount" }, { name: "eventValue" }],
       dimensionFilter: eventFilter,
       limit: 500,
     }),
-    // Campaign — sessões + usuários
     runReport(propertyId, {
       dateRanges: [dateRange],
       dimensions: [
@@ -144,7 +185,6 @@ export async function GET(req: NextRequest) {
       orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
       limit: 200,
     }),
-    // Campaign — eventos
     runReport(propertyId, {
       dateRanges: [dateRange],
       dimensions: [
@@ -157,30 +197,21 @@ export async function GET(req: NextRequest) {
       dimensionFilter: eventFilter,
       limit: 2000,
     }),
-    // Campaign × LP de conversão — formato relatório GA4 exportado
-    // Cruza qual campanha trouxe o usuário com qual página ele converteu
     runReport(propertyId, {
       dateRanges: [dateRange],
       dimensions: [
         { name: "sessionCampaignName" },
         { name: "sessionSourceMedium" },
-        { name: "pagePath" }, // página onde o evento aconteceu (LP de conversão)
+        { name: "pagePath" },
         { name: "eventName" },
       ],
       metrics: [{ name: "eventCount" }, { name: "eventValue" }],
       dimensionFilter: eventFilter,
       limit: 5000,
     }),
-    // Campaign × Source/Medium com keyEvents (Todas as conversões) —
-    // formato IDÊNTICO ao GA4 export que o Renan compartilhou.
-    // Usa a métrica `keyEvents` nativa do GA4 (não filtra event_name)
-    // pra somar TODAS as conversões marcadas como key event na property.
     runReport(propertyId, {
       dateRanges: [dateRange],
-      dimensions: [
-        { name: "sessionCampaignName" },
-        { name: "sessionSourceMedium" },
-      ],
+      dimensions: [{ name: "sessionCampaignName" }, { name: "sessionSourceMedium" }],
       metrics: [
         { name: "keyEvents" },
         { name: "totalRevenue" },
@@ -191,6 +222,32 @@ export async function GET(req: NextRequest) {
       limit: 500,
     }),
   ]);
+
+  // ⚠ Detecta 429 ANTES de processar — retorna erro específico (sem cachear o erro)
+  const allErrors = [
+    channelSessRes.error,
+    channelEventsRes.error,
+    sourceMediumSessRes.error,
+    sourceMediumEventsRes.error,
+    campaignSessRes.error,
+    campaignEventsRes.error,
+    campaignPageConvRes.error,
+    campaignSourceMediumKeyEventsRes.error,
+  ];
+  if (detectQuotaError(allErrors)) {
+    return NextResponse.json(
+      {
+        error: "quota_exceeded",
+        message:
+          "Limite de quota do GA4 atingido pra essa propriedade. Os tokens são renovados em até 1h. Aguarde alguns minutos ou troque de propriedade.",
+        details: allErrors.filter(Boolean),
+        propertyId,
+        range: dateRange,
+        retryAfterSeconds: 600,
+      },
+      { status: 429, headers: { "Cache-Control": "no-store" } }
+    );
+  }
 
   // ========================================================
   // Helpers de agregação
@@ -528,52 +585,56 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json(
-    {
-      propertyId, // ⚠ devolvido pro client validar (anti-race)
-      range: dateRange,
-      days,
-      byChannel,
-      bySourceMedium,
-      byCampaign,
-      byCampaignXPage, // campanha × LP de conversão
-      byCampaignXSourceMedium, // campanha × origem-mídia (FORMATO IDÊNTICO ao GA4 export)
-      totalKeyEvents,
-      totalRevenueKeyEvents: totalRevenueAll,
-      recommendations: recommendations.slice(0, 8),
-      totals: {
-        sessions: totalSessions,
-        users: byChannel.reduce((s, c) => s + c.users, 0),
-        leads: byChannel.reduce((s, c) => s + c.leads, 0),
-        purchases: byChannel.reduce((s, c) => s + c.purchases, 0),
-        revenue: byChannel.reduce((s, c) => s + c.revenue, 0),
-        avgLeadConvRate: Number(avgLeadConvGlobal.toFixed(2)),
-        avgPurchaseConvRate: Number(avgPurchaseConvGlobal.toFixed(2)),
-      },
-      meta: {
-        channelsCount: byChannel.length,
-        sourceMediumCount: bySourceMedium.length,
-        campaignsCount: byCampaign.length,
-        campaignXPageCount: byCampaignXPage.length,
-        campaignXSourceMediumCount: byCampaignXSourceMedium.length,
-        recommendationsCount: recommendations.length,
-        errors: {
-          channelSess: channelSessRes.error,
-          channelEvents: channelEventsRes.error,
-          sourceMediumSess: sourceMediumSessRes.error,
-          sourceMediumEvents: sourceMediumEventsRes.error,
-          campaignSess: campaignSessRes.error,
-          campaignEvents: campaignEventsRes.error,
-          campaignPageConv: campaignPageConvRes.error,
-          campaignSourceMediumKeyEvents: campaignSourceMediumKeyEventsRes.error,
-        },
+  // Monta payload final e cacheia
+  const payload = {
+    propertyId, // ⚠ devolvido pro client validar (anti-race)
+    range: dateRange,
+    days,
+    byChannel,
+    bySourceMedium,
+    byCampaign,
+    byCampaignXPage,
+    byCampaignXSourceMedium,
+    totalKeyEvents,
+    totalRevenueKeyEvents: totalRevenueAll,
+    recommendations: recommendations.slice(0, 8),
+    totals: {
+      sessions: totalSessions,
+      users: byChannel.reduce((s, c) => s + c.users, 0),
+      leads: byChannel.reduce((s, c) => s + c.leads, 0),
+      purchases: byChannel.reduce((s, c) => s + c.purchases, 0),
+      revenue: byChannel.reduce((s, c) => s + c.revenue, 0),
+      avgLeadConvRate: Number(avgLeadConvGlobal.toFixed(2)),
+      avgPurchaseConvRate: Number(avgPurchaseConvGlobal.toFixed(2)),
+    },
+    cachedAt: new Date().toISOString(),
+    meta: {
+      channelsCount: byChannel.length,
+      sourceMediumCount: bySourceMedium.length,
+      campaignsCount: byCampaign.length,
+      campaignXPageCount: byCampaignXPage.length,
+      campaignXSourceMediumCount: byCampaignXSourceMedium.length,
+      recommendationsCount: recommendations.length,
+      errors: {
+        channelSess: channelSessRes.error,
+        channelEvents: channelEventsRes.error,
+        sourceMediumSess: sourceMediumSessRes.error,
+        sourceMediumEvents: sourceMediumEventsRes.error,
+        campaignSess: campaignSessRes.error,
+        campaignEvents: campaignEventsRes.error,
+        campaignPageConv: campaignPageConvRes.error,
+        campaignSourceMediumKeyEvents: campaignSourceMediumKeyEventsRes.error,
       },
     },
-    {
-      headers: {
-        // no-store pra garantir que cada mudança de property/range refaça a query
-        "Cache-Control": "no-store, must-revalidate",
-      },
-    }
-  );
+  };
+
+  // Salva no cache pra próximas chamadas (10 min TTL)
+  setCached(cKey, payload);
+
+  return NextResponse.json(payload, {
+    headers: {
+      "X-Cache": "MISS",
+      "Cache-Control": "no-store",
+    },
+  });
 }
