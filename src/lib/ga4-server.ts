@@ -575,6 +575,38 @@ export async function getLPChannels(
       ]
     : [];
 
+  // ⚠ CRUCIAL: pré-filtrar pelos paths solicitados na própria query do GA4.
+  // Sem isso, queries com `limit: 10000` ordenadas por sessions desc podem
+  // CORTAR combinações de cauda longa (URLs específicas com UTM específico
+  // e poucas sessões). Adicionando o filter, garantimos que TODAS as linhas
+  // correspondentes aos paths pedidos sejam retornadas — sem corte.
+  const pathValues = Array.from(new Set(parsed.map((p) => p.path)));
+  const pathFilter = {
+    filter: {
+      fieldName: "pagePath",
+      inListFilter: { values: pathValues },
+    },
+  };
+
+  // Adicionalmente, quando há UTM filter, restringimos por UTM também na
+  // própria query — assim trazemos só as combinações relevantes (vs trazer
+  // tudo e filtrar depois). Isso reduz drasticamente o payload + chance de
+  // cauda longa ser cortada.
+  const utmFilterExpressions: { filter: { fieldName: string; inListFilter: { values: string[] } } }[] = [];
+  if (hasAnyUtmFilter) {
+    const sourceVals = Array.from(new Set(utmsPerUrl.map((u) => u?.source).filter((v): v is string => !!v)));
+    const mediumVals = Array.from(new Set(utmsPerUrl.map((u) => u?.medium).filter((v): v is string => !!v)));
+    const campaignVals = Array.from(new Set(utmsPerUrl.map((u) => u?.campaign).filter((v): v is string => !!v)));
+    if (sourceVals.length > 0) utmFilterExpressions.push({ filter: { fieldName: "sessionSource", inListFilter: { values: sourceVals } } });
+    if (mediumVals.length > 0) utmFilterExpressions.push({ filter: { fieldName: "sessionMedium", inListFilter: { values: mediumVals } } });
+    if (campaignVals.length > 0) utmFilterExpressions.push({ filter: { fieldName: "sessionCampaignName", inListFilter: { values: campaignVals } } });
+  }
+
+  const dimensionFilter =
+    utmFilterExpressions.length > 0
+      ? { andGroup: { expressions: [pathFilter, ...utmFilterExpressions] } }
+      : pathFilter;
+
   const res = await runReport(propertyId, {
     dateRanges: [range.ga4Range],
     dimensions: [
@@ -590,6 +622,7 @@ export async function getLPChannels(
       { name: "bounceRate" },
       { name: "keyEvents" },
     ],
+    dimensionFilter,
     orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
     limit: 10000,
   });
@@ -611,6 +644,7 @@ export async function getLPChannels(
         { name: "bounceRate" },
         { name: "conversions" },
       ],
+      dimensionFilter,
       orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
       limit: 10000,
     });
