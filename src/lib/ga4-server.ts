@@ -507,7 +507,9 @@ export type LPBreakdownRow = {
   sessions: number;
   engagedSessions: number;
   bounceRate: number; // %
-  conversions: number;
+  conversions: number; // keyEvents (mantido por compat)
+  leads: number; // count de generate_lead nesse breakdown
+  purchases: number; // count de purchase nesse breakdown
 };
 export type LPChannelResult = {
   url: string;
@@ -516,7 +518,9 @@ export type LPChannelResult = {
   totalSessions: number;
   totalEngagedSessions: number;
   avgBounceRate: number; // % ponderada por sessões
-  totalConversions: number;
+  totalConversions: number; // keyEvents total
+  totalLeads: number; // soma generate_lead total
+  totalPurchases: number; // soma purchase total
   byChannel: LPBreakdownRow[]; // mantido `byChannel` por compat retroativa, mas é "byBreakdown"
 };
 
@@ -626,25 +630,60 @@ export async function getLPChannels(
       ? { andGroup: { expressions: [pathFilter, ...utmFilterExpressions] } }
       : pathFilter;
 
-  const res = await runReport(propertyId, {
-    dateRanges: [range.ga4Range],
-    dimensions: [
-      { name: "hostName" },
-      { name: "pagePath" },
-      ...breakdownDims,
-      ...utmDims,
-    ],
-    metrics: [
-      { name: "totalUsers" },
-      { name: "sessions" },
-      { name: "engagedSessions" },
-      { name: "bounceRate" },
-      { name: "keyEvents" },
-    ],
-    dimensionFilter,
-    orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
-    limit: 10000,
-  });
+  // Query principal — sessões/users + keyEvents
+  // Query de eventos — splita generate_lead vs purchase por path × breakdown
+  // Rodam em paralelo pra economizar tempo
+  const eventNameFilter = {
+    filter: {
+      fieldName: "eventName",
+      inListFilter: { values: ["generate_lead", "purchase", "purchase_success"] },
+    },
+  };
+  // Combina o dimensionFilter principal com o filter de eventName pra query de eventos
+  const eventsDimensionFilter = {
+    andGroup: {
+      expressions: [
+        dimensionFilter as object,
+        eventNameFilter,
+      ],
+    },
+  };
+
+  const [res, eventsRes] = await Promise.all([
+    runReport(propertyId, {
+      dateRanges: [range.ga4Range],
+      dimensions: [
+        { name: "hostName" },
+        { name: "pagePath" },
+        ...breakdownDims,
+        ...utmDims,
+      ],
+      metrics: [
+        { name: "totalUsers" },
+        { name: "sessions" },
+        { name: "engagedSessions" },
+        { name: "bounceRate" },
+        { name: "keyEvents" },
+      ],
+      dimensionFilter,
+      orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+      limit: 10000,
+    }),
+    // Query secundária — count de generate_lead + purchase por (host, path, breakdown, utms)
+    runReport(propertyId, {
+      dateRanges: [range.ga4Range],
+      dimensions: [
+        { name: "hostName" },
+        { name: "pagePath" },
+        ...breakdownDims,
+        ...utmDims,
+        { name: "eventName" },
+      ],
+      metrics: [{ name: "eventCount" }],
+      dimensionFilter: eventsDimensionFilter,
+      limit: 10000,
+    }),
+  ]);
 
   // Só tenta fallback quando houve ERRO real (não quando rows é vazio/undefined,
   // que significa simplesmente "GA4 não tem dados pra esse filtro" — caso válido)
@@ -685,6 +724,8 @@ export async function getLPChannels(
       totalEngagedSessions: 0,
       avgBounceRate: 0,
       totalConversions: 0,
+      totalLeads: 0,
+      totalPurchases: 0,
       byChannel: [],
     }));
     return { data: emptyResults, error: null };
@@ -704,6 +745,8 @@ export async function getLPChannels(
     engagedSessions: number;
     bounceRate: number; // 0..1 do GA4
     conversions: number;
+    leads: number; // generate_lead count
+    purchases: number; // purchase count
   };
   const breakdownDimCount = Array.isArray(dimMap) ? dimMap.length : 1;
 
@@ -753,8 +796,55 @@ export async function getLPChannels(
       engagedSessions: Number(r.metricValues?.[2]?.value || 0),
       bounceRate: Number(r.metricValues?.[3]?.value || 0),
       conversions: Number(r.metricValues?.[4]?.value || 0),
+      leads: 0, // preenchido abaixo via eventsRes
+      purchases: 0, // preenchido abaixo via eventsRes
     };
   });
+
+  // Cruza eventsRes (que tem split lead vs purchase) com rows
+  // Key = `${host}|${path}|${label}|${utmSource}|${utmMedium}|${utmCampaign}`
+  type EventCounts = { leads: number; purchases: number };
+  const eventsByKey = new Map<string, EventCounts>();
+  // No eventsRes a dimensão eventName é a ÚLTIMA. Outras seguem a mesma ordem
+  // que res principal (host, path, ...breakdownDims, ...utmDims).
+  const eventNameIdx = 2 + breakdownDimCount + utmDims.length;
+  for (const r of eventsRes.data?.rows || []) {
+    const host = r.dimensionValues?.[0]?.value || "";
+    const path = (r.dimensionValues?.[1]?.value || "/").replace(/\/+$/, "") || "/";
+    let label = "(not set)";
+    if (breakdownDimCount === 1) {
+      label = r.dimensionValues?.[2]?.value || "(not set)";
+    } else {
+      const parts: string[] = [];
+      for (let i = 0; i < breakdownDimCount; i++) {
+        parts.push(r.dimensionValues?.[2 + i]?.value || "(not set)");
+      }
+      label = parts.join(" / ");
+    }
+    const utmSource = sourceIdx >= 0 ? r.dimensionValues?.[sourceIdx]?.value || "" : "";
+    const utmMedium = mediumIdx >= 0 ? r.dimensionValues?.[mediumIdx]?.value || "" : "";
+    const utmCampaign = campaignIdx >= 0 ? r.dimensionValues?.[campaignIdx]?.value || "" : "";
+    const eventName = r.dimensionValues?.[eventNameIdx]?.value || "";
+    const count = Number(r.metricValues?.[0]?.value || 0);
+    const key = `${host}|${path}|${label}|${utmSource}|${utmMedium}|${utmCampaign}`;
+    const existing = eventsByKey.get(key) || { leads: 0, purchases: 0 };
+    if (eventName === "generate_lead") {
+      existing.leads += count;
+    } else if (eventName === "purchase" || eventName === "purchase_success") {
+      existing.purchases += count;
+    }
+    eventsByKey.set(key, existing);
+  }
+
+  // Mescla leads/purchases nos rows da query principal
+  for (const r of rows) {
+    const key = `${r.host}|${r.path}|${r.label}|${r.utmSource}|${r.utmMedium}|${r.utmCampaign}`;
+    const ev = eventsByKey.get(key);
+    if (ev) {
+      r.leads = ev.leads;
+      r.purchases = ev.purchases;
+    }
+  }
 
   // Pra cada URL pedida, filtra rows que casam (host + path + UTM opcional)
   const results: LPChannelResult[] = parsed.map((p) => {
@@ -780,13 +870,16 @@ export async function getLPChannels(
         engagedSessions: 0,
         bounceRate: 0,
         conversions: 0,
+        leads: 0,
+        purchases: 0,
       };
       cur.users += m.users;
       cur.sessions += m.sessions;
       cur.engagedSessions += m.engagedSessions;
-      // bounceRate por linha é % daquela combinação; pra agregar fazemos média ponderada
-      cur.bounceRate += m.bounceRate * m.sessions; // soma temporária, divide depois
+      cur.bounceRate += m.bounceRate * m.sessions;
       cur.conversions += m.conversions;
+      cur.leads += m.leads;
+      cur.purchases += m.purchases;
       byChannelMap.set(m.label, cur);
     }
     // Finaliza bounce rate (média ponderada)
@@ -801,7 +894,8 @@ export async function getLPChannels(
     const totalSessions = byChannel.reduce((s, c) => s + c.sessions, 0);
     const totalEngagedSessions = byChannel.reduce((s, c) => s + c.engagedSessions, 0);
     const totalConversions = byChannel.reduce((s, c) => s + c.conversions, 0);
-    // Bounce rate global ponderado pelas sessões totais
+    const totalLeads = byChannel.reduce((s, c) => s + c.leads, 0);
+    const totalPurchases = byChannel.reduce((s, c) => s + c.purchases, 0);
     const totalBounceWeighted = byChannel.reduce((s, c) => s + (c.bounceRate / 100) * c.sessions, 0);
     const avgBounceRate = totalSessions > 0
       ? Number(((totalBounceWeighted / totalSessions) * 100).toFixed(1))
@@ -815,6 +909,8 @@ export async function getLPChannels(
       totalEngagedSessions,
       avgBounceRate,
       totalConversions,
+      totalLeads,
+      totalPurchases,
       byChannel,
     };
   });

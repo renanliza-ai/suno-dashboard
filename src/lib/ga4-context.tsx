@@ -877,7 +877,9 @@ export type LPChannelsResult = {
   totalSessions: number;
   totalEngagedSessions: number;
   avgBounceRate: number;
-  totalConversions: number;
+  totalConversions: number; // keyEvents
+  totalLeads: number; // generate_lead
+  totalPurchases: number; // purchase
   byChannel: {
     label: string;
     users: number;
@@ -885,6 +887,8 @@ export type LPChannelsResult = {
     engagedSessions: number;
     bounceRate: number;
     conversions: number;
+    leads: number;
+    purchases: number;
   }[];
 };
 

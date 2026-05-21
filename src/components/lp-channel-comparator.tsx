@@ -913,8 +913,11 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
                   <th className="text-right px-3 py-2 font-medium" title="Taxa de rejeição (média ponderada)">
                     <TrendingDown size={11} className="inline mr-1" /> Bounce
                   </th>
-                  <th className="text-right px-3 py-2 font-medium" title="Conversões (key events)">
-                    <Target size={11} className="inline mr-1" /> Conv.
+                  <th className="text-right px-3 py-2 font-medium" title="Eventos generate_lead">
+                    <Target size={11} className="inline mr-1" /> Leads
+                  </th>
+                  <th className="text-right px-3 py-2 font-medium" title="Eventos purchase / purchase_success">
+                    <Target size={11} className="inline mr-1" /> Vendas
                   </th>
                 </tr>
               </thead>
@@ -966,7 +969,10 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
                       {r.avgBounceRate.toFixed(1)}%
                     </td>
                     <td className="px-3 py-3 text-right tabular-nums font-semibold text-emerald-700">
-                      {formatNumber(r.totalConversions)}
+                      {formatNumber(r.totalLeads)}
+                    </td>
+                    <td className="px-3 py-3 text-right tabular-nums font-semibold text-violet-700">
+                      {formatNumber(r.totalPurchases)}
                     </td>
                   </tr>
                 ))}
@@ -1009,10 +1015,18 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
                   </div>
                   <div>
                     <p className="text-[10px] uppercase text-[color:var(--muted-foreground)]">
-                      Conv.
+                      Leads
                     </p>
                     <p className="text-sm font-bold tabular-nums text-emerald-700">
-                      {formatNumber(r.totalConversions)}
+                      {formatNumber(r.totalLeads)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase text-[color:var(--muted-foreground)]">
+                      Vendas
+                    </p>
+                    <p className="text-sm font-bold tabular-nums text-violet-700">
+                      {formatNumber(r.totalPurchases)}
                     </p>
                   </div>
                 </div>
@@ -1070,13 +1084,17 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
                               }}
                             />
                           </div>
-                          <div className="flex gap-2 mt-0.5 text-[9px] text-[color:var(--muted-foreground)]">
+                          <div className="flex gap-2 mt-0.5 text-[9px] text-[color:var(--muted-foreground)] flex-wrap">
                             <span>Sess: {formatNumber(c.sessions)}</span>
                             <span>·</span>
                             <span>Bounce: {c.bounceRate.toFixed(0)}%</span>
                             <span>·</span>
                             <span className="text-emerald-700 font-semibold">
-                              Conv: {formatNumber(c.conversions)}
+                              Leads: {formatNumber(c.leads)}
+                            </span>
+                            <span>·</span>
+                            <span className="text-violet-700 font-semibold">
+                              Vendas: {formatNumber(c.purchases)}
                             </span>
                           </div>
                         </div>
