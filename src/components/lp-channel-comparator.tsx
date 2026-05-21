@@ -151,18 +151,34 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
     DIMENSION_OPTIONS.find((d) => d.value === breakdownDimension) || DIMENSION_OPTIONS[0];
 
   // Heurística pra detectar inputs que NÃO são URL/path:
-  // - Suno UTM campaign IDs começam com _SNC, _SNL, _RS, etc. seguidos de hash
+  // - Suno UTM campaign IDs (com ou sem prefixo: _SNC9AAF8834_, rs.lan.mai...)
+  // - Strings que parecem padrão de UTM (várias palavras separadas por ponto)
   // - Strings sem barras nem ponto (não parecem URL)
   function detectInputProblem(input: string): string | null {
     const v = input.trim();
     if (!v) return null;
-    // Campaign ID Suno (ex.: _SNC9AAF8834_, _SNL170A5736_, etc.)
+
+    // Tem // ou começa com / = parece URL/path → ok
+    const looksLikeUrl = v.startsWith("http") || v.startsWith("/") || v.includes("://");
+    if (looksLikeUrl) return null;
+
+    // ID de campanha Suno isolado (_SNC9AAF8834_, _SNL170A5736_, _RS123_)
     if (/^_(SN[A-Z]|RS)\w*_?$/i.test(v) || /^_[A-Z0-9]{6,}_?$/i.test(v)) {
-      return "Isso parece um ID de campanha (UTM), não uma URL. Pra filtrar por campanha, use a aba 'Onde concentrar investimento' no /midia.";
+      return "Isso parece um ID de campanha (UTM), não uma URL. Pra filtrar por campanha SEM URL, use a seção 'Onde concentrar investimento' em /midia.";
     }
+
+    // utm_campaign value típico Suno: contém ".lan.", ".mai.", ".abr.", "_SNC", "_SNL"
+    // ou várias palavras conectadas por ponto (4+ dots seguidos)
+    if (/_SN[A-Z]\w+_/i.test(v) || /_SNL\w+_/i.test(v)) {
+      return `Isso parece o VALOR de utm_campaign (ex: "rs.lan.mai..._SNCxxxxx_"), não uma URL. Cole a URL COMPLETA com http(s):// — ex: https://lp2.suno.com.br/pv/eu-invisto-2026/?utm_campaign=${v}`;
+    }
+    if ((v.match(/\./g) || []).length >= 4 && !v.includes("/")) {
+      return "Isso parece um valor de utm_campaign (vários pontos), não uma URL. Cole a URL completa com https://... ou só o path começando com /.";
+    }
+
     // Sem barra e sem ponto — não é URL nem path
-    if (!v.includes("/") && !v.includes(".") && !v.startsWith("http")) {
-      return "Cole uma URL (ex: https://lp.suno.com.br/...) ou path (ex: /pv/eu-invisto-2026/).";
+    if (!v.includes("/") && !v.includes(".")) {
+      return "Cole uma URL (ex: https://lp.suno.com.br/...) ou path começando com / (ex: /pv/eu-invisto-2026/).";
     }
     return null;
   }
@@ -720,6 +736,41 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
           <AlertCircle size={13} className="shrink-0 mt-0.5" />
           <div>
             <strong>Atenção:</strong> {detectInputProblem(inputValue)}
+          </div>
+        </div>
+      )}
+
+      {/* Mini-guia de formatos aceitos — sempre visível abaixo do input.
+          Exemplos clicáveis pra ilustrar (não preenchem o input pra evitar
+          confusão, apenas mostram). */}
+      {!inputValue.trim() && pendingUrls.length === 0 && (
+        <div data-export-hide className="mb-3 px-3 py-2.5 rounded-lg bg-blue-50/50 border border-blue-200 text-xs">
+          <p className="font-semibold text-blue-900 mb-1.5">📋 Como colar URLs:</p>
+          <div className="space-y-1 font-mono text-[11px]">
+            <div className="flex items-start gap-1.5">
+              <span className="text-emerald-600 font-bold shrink-0">✓</span>
+              <div>
+                <span className="text-emerald-700">URL completa com UTMs:</span>{" "}
+                <code className="bg-white px-1 rounded">https://lp.suno.com.br/pv/x/?utm_campaign=...</code>
+                <span className="text-blue-700"> ← UTMs viram filtros automáticos</span>
+              </div>
+            </div>
+            <div className="flex items-start gap-1.5">
+              <span className="text-emerald-600 font-bold shrink-0">✓</span>
+              <div>
+                <span className="text-emerald-700">Só o path:</span>{" "}
+                <code className="bg-white px-1 rounded">/pv/eu-invisto-2026/</code>
+                <span className="text-blue-700"> ← mostra TODAS as campanhas dessa página</span>
+              </div>
+            </div>
+            <div className="flex items-start gap-1.5">
+              <span className="text-red-600 font-bold shrink-0">✗</span>
+              <div>
+                <span className="text-red-700">UTM value sozinho:</span>{" "}
+                <code className="bg-white px-1 rounded">rs.lan.mai..._SNC9AAF8834_</code>
+                <span className="text-red-700"> ← pra filtrar só por campanha, use a aba /midia</span>
+              </div>
+            </div>
           </div>
         </div>
       )}
