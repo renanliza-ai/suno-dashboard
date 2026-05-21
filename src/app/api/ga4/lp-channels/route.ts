@@ -106,7 +106,9 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(
     { propertyId, results: data || [], days, breakdownDimension },
     {
-      headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=600" },
+      // no-store pra garantir resposta fresca a cada query (evita cache de respostas
+      // antigas que tinham 'no_rows' como erro antes do fix do trailing slash)
+      headers: { "Cache-Control": "no-store, must-revalidate" },
     }
   );
 }
