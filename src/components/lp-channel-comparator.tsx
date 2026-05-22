@@ -996,7 +996,7 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
                     }
                   })()}
                 </p>
-                <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="grid grid-cols-4 gap-2 mb-3">
                   <div>
                     <p className="text-[10px] uppercase text-[color:var(--muted-foreground)]">
                       Users
