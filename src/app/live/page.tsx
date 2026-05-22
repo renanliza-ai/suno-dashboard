@@ -161,6 +161,24 @@ export default function LivePage() {
         </p>
       </motion.div>
 
+      {/* ⚠ Banner explícito quando os números são simulados (sem GA4 conectado).
+          Tick fake de Math.random() a cada 3s parece dashboard real — gerente
+          PRECISA ver claramente que é demo. */}
+      {!useRealData && (
+        <div className="mb-6 rounded-xl border-2 border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 p-4 flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+            <AlertTriangle size={18} className="text-amber-700" />
+          </div>
+          <div className="flex-1 text-xs leading-relaxed text-amber-900">
+            <strong className="text-sm">⚠ Modo demo — dados simulados:</strong>{" "}
+            Os números abaixo (usuários ativos, top páginas, devices) são <strong>simulados</strong>{" "}
+            por <code className="bg-white px-1 rounded font-mono">Math.random()</code> que atualiza a cada 3 segundos
+            pra dar a impressão de realtime. <strong>Não são dados reais</strong>. Pra ver realtime do GA4,
+            selecione uma propriedade no header.
+          </div>
+        </div>
+      )}
+
       {useRealData && error && meta.status === "error" && (
         <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
           Não foi possível consultar GA4 Realtime: <span className="font-mono">{error}</span>

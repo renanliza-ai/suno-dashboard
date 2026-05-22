@@ -37,6 +37,11 @@ export function PagesChart() {
         <h3 className="text-base font-semibold flex items-center gap-2 flex-wrap">
           Top Páginas
           <DataStatus meta={meta} usingMock={usingMock} compact />
+          {usingMock && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-200">
+              ⚠ dados de exemplo
+            </span>
+          )}
         </h3>
         <p className="text-sm text-[color:var(--muted-foreground)] mt-0.5">{periodLabel}</p>
       </div>

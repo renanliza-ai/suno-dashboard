@@ -199,15 +199,29 @@ export function JourneyChart() {
 
   return (
     <div className="bg-white rounded-2xl border border-[color:var(--border)] p-6">
+      {/* Banner explicativo quando estamos em modo mock (sem GA4 real conectado) */}
+      {!isReal && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/60 p-3 flex items-start gap-2">
+          <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-900 leading-relaxed">
+            <strong>Modo demo:</strong> os valores de cada etapa (sessões, leads, compras) são <strong>exemplos
+            ilustrativos</strong> do funil padrão Suno. Conecte uma propriedade GA4 no header pra ver dados reais
+            da jornada de aquisição.
+          </p>
+        </div>
+      )}
       <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
         <div>
           <h3 className="text-base font-semibold flex items-center gap-2 flex-wrap">
             Jornada do Usuário Suno
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-gradient-to-r from-[#7c5cff] to-[#b297ff] text-white uppercase tracking-wider">
-              Mapeamento real
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider ${
+              isReal
+                ? "bg-gradient-to-r from-[#7c5cff] to-[#b297ff] text-white"
+                : "bg-amber-100 text-amber-800 border border-amber-200"
+            }`}>
+              {isReal ? "Mapeamento real" : "Mapeamento ilustrativo"}
             </span>
             <DataStatus meta={meta} usingMock={!useRealData} compact />
-            {isReal && null}
           </h3>
           <p className="text-sm text-[color:var(--muted-foreground)] mt-0.5">
             Da primeira visita ao up-sell na área do investidor · <strong>clique em qualquer etapa</strong>

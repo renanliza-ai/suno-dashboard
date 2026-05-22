@@ -860,6 +860,32 @@ export default function TrackingPage() {
           {useRealData && <DataStatus meta={pagesMeta} />}
         </div>
 
+        {/* ⚠ Banner explicativo da natureza dos dados desta página */}
+        <div className="mb-6 rounded-xl border-2 border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 p-4 flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+            <AlertTriangle size={18} className="text-amber-700" />
+          </div>
+          <div className="flex-1 text-xs leading-relaxed text-amber-900">
+            <strong className="text-sm">Atenção — natureza dos dados desta página:</strong>
+            <ul className="mt-1.5 space-y-1 list-disc list-inside">
+              <li>
+                <strong>CAPI Status</strong> (abaixo): validação REAL via Meta Graph API ✓
+              </li>
+              <li>
+                <strong>Listas de páginas/UTMs/Jornadas Fantasma/Cross-Device</strong>: usam{" "}
+                <code className="bg-white px-1 rounded font-mono">hashSeed(propertyId)</code> pra gerar
+                statuses determinísticos a partir do nome da propriedade — <strong>não são checagens
+                ao vivo</strong> de cada página. Servem como amostra do que essa página seria
+                quando integrarmos verificação ao vivo de GTM/dataLayer página-por-página.
+              </li>
+              <li>
+                <strong>Pageviews/usuários</strong> de cada linha (quando aparecem): vêm do GA4 real
+                quando há propriedade conectada.
+              </li>
+            </ul>
+          </div>
+        </div>
+
         {/* CAPI Status — saúde REAL do tracking server-side via Meta Graph API */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}

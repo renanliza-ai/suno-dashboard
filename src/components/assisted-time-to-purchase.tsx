@@ -120,16 +120,23 @@ export function AssistedTimeToPurchase() {
             <Clock size={18} className="text-white" />
           </div>
           <div>
-            <h3 className="text-base font-semibold flex items-center gap-2">
+            <h3 className="text-base font-semibold flex items-center gap-2 flex-wrap">
               Tempo até a compra por canal
               <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-[#ede9fe] text-[#5b3dd4]">
                 atribuição assistida
               </span>
+              <span
+                className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200"
+                title="GA4 Data API v1beta não expõe time-lag direto. Esses dias são heurística calculada de convRate + avgDuration + medium."
+              >
+                ⚠ Estimativa heurística
+              </span>
             </h3>
             <p className="text-sm text-[color:var(--muted-foreground)] mt-0.5 max-w-xl">
               Dias médios entre o <strong>primeiro toque</strong> daquele canal e o{" "}
-              <code className="text-[11px] bg-[color:var(--muted)] px-1 rounded">purchase</code>.
-              Quanto menor, mais rápido o ciclo comercial deste canal.
+              <code className="text-[11px] bg-[color:var(--muted)] px-1 rounded">purchase</code>.{" "}
+              <strong className="text-amber-700">Não são dados GA4 diretos</strong> — são estimativas
+              derivadas de heurística (Data API v1beta não expõe time-lag).
             </p>
           </div>
         </div>
