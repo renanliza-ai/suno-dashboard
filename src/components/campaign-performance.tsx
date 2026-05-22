@@ -118,6 +118,23 @@ export function CampaignPerformance() {
       animate={{ opacity: 1, y: 0 }}
       className="mb-4"
     >
+      {/* ⚠ BANNER DE TRANSPARÊNCIA — esse bloco inteiro mostra dados de
+          DEMONSTRAÇÃO (escalados pela property mas não vindos das APIs
+          reais de Google Ads / Meta Ads / etc). Pra não enganar gestor. */}
+      <div className="mb-3 rounded-xl border-2 border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 p-3 flex items-start gap-3">
+        <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+          <span className="text-amber-700 font-bold">⚠</span>
+        </div>
+        <div className="flex-1 text-xs leading-relaxed text-amber-900">
+          <strong className="text-sm">Atenção — dados de demonstração:</strong>{" "}
+          O bloco "Performance de Campanhas" abaixo (impressões, cliques, investimento, ROAS, CAPI delta)
+          é um <strong>mockup interativo</strong> — números escalam pela propriedade selecionada mas <strong>não vêm</strong> das
+          APIs reais de Google Ads, Meta Ads, LinkedIn ou TikTok. Pra <strong>análise REAL</strong> de
+          campanhas (UTMs do GA4 + conversões + receita), role até o final da página → seção{" "}
+          <strong>"Onde concentrar investimento"</strong>.
+        </div>
+      </div>
+
       <div className="bg-gradient-to-br from-white via-white to-[#f5f2ff] rounded-2xl border border-[color:var(--border)] overflow-hidden mb-4">
         <div className="p-5 flex items-center justify-between flex-wrap gap-3 border-b border-[color:var(--border)]">
           <div className="flex items-center gap-3">
