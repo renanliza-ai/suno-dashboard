@@ -1,13 +1,83 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { ArrowUpDown, Megaphone, Target, TrendingUp, Wallet, Eye, MousePointerClick, Pause, Play, AlertCircle } from "lucide-react";
+import { ArrowUpDown, Megaphone, Target, TrendingUp, Wallet, Eye, MousePointerClick, Pause, Play, AlertCircle, Loader2 } from "lucide-react";
 import { platformColors, CampaignMediaRow } from "@/lib/data";
 import { getCampaignsForProperty } from "@/lib/property-campaigns";
 import { formatNumber } from "@/lib/utils";
 import { useGA4 } from "@/lib/ga4-context";
+
+// Tipo retornado pelo endpoint /api/ads/campaigns
+type RealCampaign = {
+  id: string;
+  name: string;
+  platform: "Meta Ads" | "Google Ads";
+  status?: string;
+  impressions: number;
+  clicks: number;
+  spend: number;
+  ctr: number;
+  cpm: number;
+  cpc: number;
+  conversions: number;
+  revenue: number;
+  roas: number;
+  cpa: number;
+};
+
+type AdsApiResponse = {
+  ok: boolean;
+  campaigns: RealCampaign[];
+  totals: {
+    impressions: number;
+    clicks: number;
+    spend: number;
+    conversions: number;
+    revenue: number;
+    roas: number;
+    cpa: number;
+    ctr: number;
+  };
+  platforms: {
+    meta: { ok: boolean; error?: string; message?: string; campaignsCount: number };
+    google: { ok: boolean; error?: string; message?: string; campaignsCount: number };
+  };
+};
+
+// Mapeia RealCampaign (do endpoint) pro shape CampaignMediaRow (que a UI espera)
+function mapRealToMediaRow(c: RealCampaign): CampaignMediaRow {
+  const platformType: Record<string, CampaignMediaRow["type"]> = {
+    "Meta Ads": "Social",
+    "Google Ads": "Search",
+  };
+  const statusMap: Record<string, CampaignMediaRow["status"]> = {
+    ENABLED: "ativa",
+    PAUSED: "pausada",
+    REMOVED: "encerrada",
+    ACTIVE: "ativa",
+  };
+  return {
+    campaign: c.name,
+    platform: c.platform,
+    type: platformType[c.platform] || "Search",
+    status: statusMap[c.status || "ENABLED"] || "ativa",
+    impressions: c.impressions,
+    clicks: c.clicks,
+    ctr: c.ctr,
+    // sessions não vem da API de Ads (é dimensão GA4). Aproximamos como clicks
+    // pra preservar o shape do CampaignMediaRow.
+    sessions: c.clicks,
+    spend: c.spend,
+    cpc: c.cpc,
+    conversions: c.conversions,
+    convRate: c.clicks > 0 ? (c.conversions / c.clicks) * 100 : 0,
+    cpa: c.cpa,
+    revenue: c.revenue,
+    roas: c.roas,
+  };
+}
 
 type SortKey = keyof Omit<CampaignMediaRow, "campaign" | "platform" | "type" | "status">;
 
@@ -35,12 +105,54 @@ export function CampaignPerformance() {
     ? `${customRange.startDate} → ${customRange.endDate}`
     : `últimos ${days} dias`;
 
-  // Campanhas reagem à propriedade selecionada (Suno Research, Statusinvest etc)
-  // — naming e mix de plataformas mudam.
-  const propertyCampaigns = useMemo(
-    () => getCampaignsForProperty(selected?.displayName, selectedId),
-    [selected?.displayName, selectedId]
-  );
+  // ============================================================
+  // FETCH REAL — chama /api/ads/campaigns (Meta + Google em paralelo)
+  // ============================================================
+  const [realData, setRealData] = useState<AdsApiResponse | null>(null);
+  const [adsLoading, setAdsLoading] = useState(false);
+  const [adsFetchedAt, setAdsFetchedAt] = useState<Date | null>(null);
+
+  useEffect(() => {
+    if (!selected?.displayName) {
+      setRealData(null);
+      return;
+    }
+    const requestProperty = selected.displayName;
+    setAdsLoading(true);
+    const params = new URLSearchParams({ propertyName: requestProperty });
+    if (customRange?.startDate) params.set("startDate", customRange.startDate);
+    if (customRange?.endDate) params.set("endDate", customRange.endDate);
+
+    const ctrl = new AbortController();
+    fetch(`/api/ads/campaigns?${params.toString()}`, {
+      cache: "no-store",
+      signal: ctrl.signal,
+    })
+      .then((r) => r.json())
+      .then((d: AdsApiResponse & { propertyName?: string }) => {
+        // Anti race: confirma que a propriedade não mudou no meio
+        if (d.propertyName && d.propertyName !== requestProperty) return;
+        setRealData(d);
+        setAdsFetchedAt(new Date());
+      })
+      .catch((e) => {
+        if ((e as Error).name !== "AbortError") {
+          console.error("Ads API fetch failed", e);
+        }
+      })
+      .finally(() => setAdsLoading(false));
+
+    return () => ctrl.abort();
+  }, [selected?.displayName, customRange?.startDate, customRange?.endDate, days]);
+
+  // Decide fonte: real (quando ok com campanhas) > mock (fallback)
+  const hasRealCampaigns = realData?.ok && (realData?.campaigns?.length || 0) > 0;
+  const propertyCampaigns: CampaignMediaRow[] = useMemo(() => {
+    if (hasRealCampaigns && realData) {
+      return realData.campaigns.map(mapRealToMediaRow);
+    }
+    return getCampaignsForProperty(selected?.displayName, selectedId);
+  }, [hasRealCampaigns, realData, selected?.displayName, selectedId]);
 
   const platforms = Array.from(new Set(propertyCampaigns.map((c) => c.platform)));
 
@@ -118,22 +230,83 @@ export function CampaignPerformance() {
       animate={{ opacity: 1, y: 0 }}
       className="mb-4"
     >
-      {/* ⚠ BANNER DE TRANSPARÊNCIA — esse bloco inteiro mostra dados de
-          DEMONSTRAÇÃO (escalados pela property mas não vindos das APIs
-          reais de Google Ads / Meta Ads / etc). Pra não enganar gestor. */}
-      <div className="mb-3 rounded-xl border-2 border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 p-3 flex items-start gap-3">
-        <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
-          <span className="text-amber-700 font-bold">⚠</span>
+      {/* Banner de status — varia conforme o que as APIs retornaram */}
+      {adsLoading && (
+        <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50/40 p-3 flex items-center gap-3">
+          <Loader2 size={16} className="text-blue-600 animate-spin shrink-0" />
+          <p className="text-xs text-blue-900">
+            Consultando Meta Ads + Google Ads pra <strong>{selected?.displayName}</strong>...
+          </p>
         </div>
-        <div className="flex-1 text-xs leading-relaxed text-amber-900">
-          <strong className="text-sm">Atenção — dados de demonstração:</strong>{" "}
-          O bloco "Performance de Campanhas" abaixo (impressões, cliques, investimento, ROAS, CAPI delta)
-          é um <strong>mockup interativo</strong> — números escalam pela propriedade selecionada mas <strong>não vêm</strong> das
-          APIs reais de Google Ads, Meta Ads, LinkedIn ou TikTok. Pra <strong>análise REAL</strong> de
-          campanhas (UTMs do GA4 + conversões + receita), role até o final da página → seção{" "}
-          <strong>"Onde concentrar investimento"</strong>.
+      )}
+
+      {!adsLoading && realData && hasRealCampaigns && (
+        <div className="mb-3 rounded-xl border-2 border-emerald-200 bg-gradient-to-r from-emerald-50 to-green-50 p-3 flex items-start gap-3">
+          <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
+            <span className="text-emerald-700 font-bold">✓</span>
+          </div>
+          <div className="flex-1 text-xs leading-relaxed text-emerald-900">
+            <strong className="text-sm">Dados reais conectados ·</strong>{" "}
+            {realData.platforms.meta.ok && (
+              <span className="font-mono text-[11px] mr-2">
+                Meta Ads ✓ ({realData.platforms.meta.campaignsCount} campanhas)
+              </span>
+            )}
+            {realData.platforms.google.ok && (
+              <span className="font-mono text-[11px]">
+                Google Ads ✓ ({realData.platforms.google.campaignsCount} campanhas)
+              </span>
+            )}
+            {(!realData.platforms.meta.ok || !realData.platforms.google.ok) && (
+              <span className="text-amber-700 text-[11px] ml-2">
+                {!realData.platforms.meta.ok && "· Meta Ads não configurado "}
+                {!realData.platforms.google.ok && "· Google Ads não configurado"}
+              </span>
+            )}
+            {adsFetchedAt && (
+              <span className="opacity-70 text-[10px] ml-2">
+                · {adsFetchedAt.toLocaleTimeString("pt-BR")}
+              </span>
+            )}
+          </div>
         </div>
-      </div>
+      )}
+
+      {!adsLoading && realData && !hasRealCampaigns && (
+        <div className="mb-3 rounded-xl border-2 border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 p-4 flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+            <AlertCircle size={18} className="text-amber-700" />
+          </div>
+          <div className="flex-1 text-xs leading-relaxed text-amber-900">
+            <strong className="text-sm">APIs de Ads não configuradas — exibindo dados de demonstração</strong>
+            <p className="mt-1">
+              {realData.platforms.meta.error === "not_configured" && (
+                <>
+                  <strong>Meta Ads:</strong> {realData.platforms.meta.message}{" "}
+                  <br />
+                </>
+              )}
+              {realData.platforms.google.error === "not_configured" && (
+                <>
+                  <strong>Google Ads:</strong> {realData.platforms.google.message}
+                </>
+              )}
+            </p>
+            <p className="mt-2">
+              Os números abaixo escalam pela propriedade mas <strong>são mockup</strong>. Pra ativar dados reais,
+              configure as env vars na Vercel:
+            </p>
+            <ul className="mt-1 list-disc list-inside text-[11px] font-mono">
+              <li>META_ADS_PROPERTY_N_NAME, META_ADS_PROPERTY_N_AD_ACCOUNT_ID, META_ADS_PROPERTY_N_TOKEN</li>
+              <li>GOOGLE_ADS_CLIENT_ID/SECRET/REFRESH_TOKEN/DEVELOPER_TOKEN + GOOGLE_ADS_PROPERTY_N_CUSTOMER_ID</li>
+            </ul>
+            <p className="mt-2 opacity-90">
+              Pra <strong>análise REAL</strong> de campanhas via GA4 (UTMs + conversões), role até{" "}
+              <strong>"Onde concentrar investimento"</strong> no final da página.
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="bg-gradient-to-br from-white via-white to-[#f5f2ff] rounded-2xl border border-[color:var(--border)] overflow-hidden mb-4">
         <div className="p-5 flex items-center justify-between flex-wrap gap-3 border-b border-[color:var(--border)]">
