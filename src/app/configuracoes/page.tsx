@@ -1,15 +1,16 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Settings, CheckCircle2, AlertCircle, Bell, Shield, Database, Link as LinkIcon, User, ExternalLink, X, Copy } from "lucide-react";
+import { Settings, CheckCircle2, AlertCircle, Bell, Shield, Database, Link as LinkIcon, User, ExternalLink, X, Copy, Loader2 } from "lucide-react";
 import { accounts } from "@/lib/data";
 import { AccountLogo } from "@/components/account-logo";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 // ============================================================
 // Instruções de cada integração — guia visual passo-a-passo
 // ============================================================
 type Integration = {
+  id: string;
   title: string;
   desc: string;
   status: "Conectado" | "Pendente";
@@ -18,10 +19,28 @@ type Integration = {
   envVars?: { name: string; description: string; example?: string }[];
   steps?: string[];
   docsUrl?: string;
+  // Dinâmico — preenchido pelo endpoint /api/integrations/status
+  configuredProperties?: string[];
+  missingVars?: string[];
+  statusNotes?: string;
 };
 
-const integrations: Integration[] = [
+// Resposta do endpoint /api/integrations/status
+type StatusResponse = {
+  integrations: {
+    id: string;
+    title: string;
+    configured: boolean;
+    properties: string[];
+    missing: string[];
+    notes?: string;
+  }[];
+  summary: { total: number; configured: number; pending: number };
+};
+
+const integrationsBase: Integration[] = [
   {
+    id: "ga4",
     title: "Google Analytics 4",
     desc: "Propriedades GA4 via GMP-CLI",
     status: "Conectado",
@@ -29,6 +48,7 @@ const integrations: Integration[] = [
     connected: true,
   },
   {
+    id: "google-ads",
     title: "Google Ads",
     desc: "Campanhas e custos",
     status: "Pendente",
@@ -54,6 +74,7 @@ const integrations: Integration[] = [
     docsUrl: "https://developers.google.com/google-ads/api/docs/oauth/cloud-project",
   },
   {
+    id: "meta-ads",
     title: "Meta Ads",
     desc: "Facebook + Instagram",
     status: "Pendente",
@@ -74,6 +95,7 @@ const integrations: Integration[] = [
     docsUrl: "https://developers.facebook.com/docs/marketing-api/insights",
   },
   {
+    id: "gtm",
     title: "Google Tag Manager",
     desc: "Containers e tags",
     status: "Conectado",
@@ -81,6 +103,7 @@ const integrations: Integration[] = [
     connected: true,
   },
   {
+    id: "gsc",
     title: "Search Console",
     desc: "Queries orgânicas",
     status: "Pendente",
@@ -98,6 +121,7 @@ const integrations: Integration[] = [
     docsUrl: "https://developers.google.com/webmaster-tools/v1/searchanalytics/query",
   },
   {
+    id: "bigquery",
     title: "BigQuery",
     desc: "Export raw GA4",
     status: "Pendente",
@@ -121,6 +145,31 @@ const integrations: Integration[] = [
 
 export default function ConfiguracoesPage() {
   const [selectedIntegration, setSelectedIntegration] = useState<Integration | null>(null);
+  const [statusData, setStatusData] = useState<StatusResponse | null>(null);
+  const [loadingStatus, setLoadingStatus] = useState(true);
+
+  // Fetch status real das integrações (verifica env vars na Vercel)
+  useEffect(() => {
+    fetch("/api/integrations/status", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data: StatusResponse) => setStatusData(data))
+      .catch(() => undefined)
+      .finally(() => setLoadingStatus(false));
+  }, []);
+
+  // Combina dados estáticos (instruções) com status dinâmico (env vars reais)
+  const integrations: Integration[] = integrationsBase.map((base) => {
+    const status = statusData?.integrations.find((s) => s.id === base.id);
+    if (!status) return base;
+    return {
+      ...base,
+      connected: status.configured,
+      status: status.configured ? "Conectado" : "Pendente",
+      configuredProperties: status.properties,
+      missingVars: status.missing,
+      statusNotes: status.notes,
+    };
+  });
 
   function copyEnvVar(name: string) {
     if (typeof navigator !== "undefined" && navigator.clipboard) {
@@ -218,9 +267,23 @@ export default function ConfiguracoesPage() {
         </div>
       </div>
 
+      {loadingStatus && (
+        <div className="rounded-xl bg-blue-50/40 border border-blue-200 p-3 flex items-center gap-2 text-xs text-blue-900 mb-4">
+          <Loader2 size={12} className="animate-spin" />
+          Verificando status das integrações nas env vars da Vercel...
+        </div>
+      )}
+      {statusData && (
+        <div className="rounded-xl bg-slate-50/60 border border-slate-200 p-3 mb-4 text-xs text-slate-700">
+          <strong>Status verificado:</strong> {statusData.summary.configured} de {statusData.summary.total} integrações
+          configuradas · {statusData.summary.pending} pendente{statusData.summary.pending !== 1 ? "s" : ""}.
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {integrations.map((int, i) => {
           const Icon = int.icon;
+          const hasProperties = int.configuredProperties && int.configuredProperties.length > 0;
           return (
             <motion.div
               key={int.title}
@@ -239,6 +302,22 @@ export default function ConfiguracoesPage() {
               </div>
               <h4 className="text-sm font-semibold">{int.title}</h4>
               <p className="text-[11px] text-[color:var(--muted-foreground)] mt-0.5">{int.desc}</p>
+              {hasProperties && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {int.configuredProperties!.slice(0, 3).map((p) => (
+                    <span
+                      key={p}
+                      className="text-[9px] font-mono bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded"
+                      title={p}
+                    >
+                      ✓ {p.length > 22 ? p.slice(0, 22) + "…" : p}
+                    </span>
+                  ))}
+                  {int.configuredProperties!.length > 3 && (
+                    <span className="text-[9px] text-slate-500 italic">+{int.configuredProperties!.length - 3}</span>
+                  )}
+                </div>
+              )}
               <button
                 onClick={() => setSelectedIntegration(int)}
                 className={`mt-3 w-full text-xs px-3 py-1.5 rounded-lg font-semibold transition ${int.connected ? "bg-[color:var(--muted)] text-[color:var(--muted-foreground)] hover:bg-slate-200" : "bg-[#7c5cff] text-white hover:bg-[#9b7fff]"}`}
@@ -289,12 +368,72 @@ export default function ConfiguracoesPage() {
 
             {/* Body */}
             <div className="p-6 space-y-5">
+              {/* Aviso especial: Meta Ads é diferente de Meta CAPI */}
+              {selectedIntegration.id === "meta-ads" && (
+                <div className="rounded-xl bg-amber-50 border-2 border-amber-200 p-4">
+                  <h3 className="text-sm font-bold text-amber-900 mb-1.5 flex items-center gap-1.5">
+                    <AlertCircle size={14} className="text-amber-700" />
+                    Atenção: Meta Ads ≠ Meta CAPI
+                  </h3>
+                  <p className="text-xs text-amber-900 leading-relaxed">
+                    São <strong>integrações DIFERENTES</strong> da Meta:
+                  </p>
+                  <ul className="mt-1.5 space-y-1 text-xs text-amber-900 list-disc list-inside">
+                    <li>
+                      <strong>CAPI</strong> envia eventos (purchase, lead) server-side · usa <strong>Pixel ID</strong>
+                    </li>
+                    <li>
+                      <strong>Meta Ads</strong> lê métricas de campanhas (gastos, ROAS) · usa <strong>Ad Account ID</strong> (número diferente do Pixel)
+                    </li>
+                  </ul>
+                  <p className="text-xs text-amber-900 mt-2">
+                    Você pode <strong>reusar o mesmo token</strong> que configurou pro CAPI, desde que ele tenha permissão{" "}
+                    <code className="bg-white px-1 rounded font-mono">ads_read</code> +{" "}
+                    <code className="bg-white px-1 rounded font-mono">business_management</code>.
+                  </p>
+                </div>
+              )}
+
               {selectedIntegration.connected && (
-                <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 flex items-start gap-2">
-                  <CheckCircle2 size={16} className="text-emerald-700 shrink-0 mt-0.5" />
-                  <div className="text-sm text-emerald-900">
-                    <strong>Integração já ativa.</strong> Pra desconectar ou reconfigurar, edite as variáveis de
-                    ambiente na Vercel e faça redeploy.
+                <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4">
+                  <div className="flex items-start gap-2">
+                    <CheckCircle2 size={16} className="text-emerald-700 shrink-0 mt-0.5" />
+                    <div className="text-sm text-emerald-900 flex-1">
+                      <strong>Integração ativa.</strong>{" "}
+                      {selectedIntegration.statusNotes || "Configuração detectada nas env vars da Vercel."}
+                    </div>
+                  </div>
+                  {selectedIntegration.configuredProperties && selectedIntegration.configuredProperties.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-emerald-200">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-800 mb-1.5">
+                        Propriedades configuradas ({selectedIntegration.configuredProperties.length})
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedIntegration.configuredProperties.map((p) => (
+                          <span
+                            key={p}
+                            className="text-[11px] font-mono bg-white border border-emerald-300 text-emerald-800 px-2 py-0.5 rounded"
+                          >
+                            ✓ {p}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!selectedIntegration.connected && selectedIntegration.missingVars && selectedIntegration.missingVars.length > 0 && (
+                <div className="rounded-xl bg-red-50 border border-red-200 p-3">
+                  <p className="text-xs font-semibold text-red-900 mb-1">
+                    ❌ Variáveis faltando ({selectedIntegration.missingVars.length})
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {selectedIntegration.missingVars.map((v) => (
+                      <code key={v} className="text-[10px] bg-white px-1.5 py-0.5 rounded border border-red-200 text-red-800 font-mono">
+                        {v}
+                      </code>
+                    ))}
                   </div>
                 </div>
               )}
