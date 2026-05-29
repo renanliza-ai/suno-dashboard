@@ -1601,6 +1601,83 @@ export async function getReportsByChannel(
   };
 }
 
+/**
+ * getReportsByDimension — usado pela página /midia
+ *
+ * Suporta dimensões além de canal:
+ * - "page"     → pagePath
+ * - "device"   → deviceCategory
+ * - "campaign" → sessionCampaignName + sessionSource + sessionMedium
+ *
+ * Quando dim = "channel" ou "sunoChannel", delega pra getReportsByChannel
+ * (mantém o comportamento atual).
+ */
+export async function getReportsByDimension(
+  propertyId: string,
+  dim: "channel" | "sunoChannel" | "page" | "device" | "campaign",
+  days = 30,
+  startDate?: string | null,
+  endDate?: string | null
+): Promise<GA4Response<{ rows: ReportByChannelRow[]; usedCustomDim: boolean }>> {
+  if (dim === "channel" || dim === "sunoChannel") {
+    return getReportsByChannel(propertyId, days, startDate, endDate);
+  }
+
+  const metricNames = [
+    { name: "totalUsers" },
+    { name: "sessions" },
+    { name: "engagedSessions" },
+    { name: "conversions" },
+    { name: "sessionConversionRate" },
+    { name: "totalRevenue" },
+  ];
+  const range = buildDateRangeIncludingToday(days, startDate, endDate);
+  const dateRanges = [range.ga4Range];
+
+  let dimensions: { name: string }[];
+  if (dim === "page") {
+    dimensions = [{ name: "pagePath" }];
+  } else if (dim === "device") {
+    dimensions = [{ name: "deviceCategory" }];
+  } else {
+    // campaign
+    dimensions = [
+      { name: "sessionCampaignName" },
+      { name: "sessionSource" },
+      { name: "sessionMedium" },
+    ];
+  }
+
+  const res = await runReport(propertyId, {
+    dateRanges,
+    dimensions,
+    metrics: metricNames,
+    orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+    limit: dim === "page" ? 100 : 50,
+  });
+  if (res.error || !res.data?.rows) return { data: null, error: res.error };
+
+  const rows: ReportByChannelRow[] = res.data.rows.map((r) => {
+    const d = r.dimensionValues || [];
+    const m = r.metricValues || [];
+    // Pra page/device, source/medium não aplicam — coloca "—"
+    const hasSourceMedium = dim === "campaign";
+    return {
+      dimension: d[0]?.value || "(não classificado)",
+      source: hasSourceMedium ? d[1]?.value || "(direct)" : "—",
+      medium: hasSourceMedium ? d[2]?.value || "(none)" : "—",
+      users: Number(m[0]?.value || 0),
+      sessions: Number(m[1]?.value || 0),
+      engagedSessions: Number(m[2]?.value || 0),
+      conversions: Number(m[3]?.value || 0),
+      sessionConvRate: Number(m[4]?.value || 0) * 100,
+      revenue: Number(m[5]?.value || 0),
+    };
+  });
+
+  return { data: { rows, usedCustomDim: false }, error: null };
+}
+
 type GA4Row = { dimensionValues?: { value: string }[]; metricValues?: { value: string }[] };
 
 function parseChannelRows(rows: GA4Row[]): ReportByChannelRow[] {

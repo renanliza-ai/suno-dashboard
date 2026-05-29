@@ -117,9 +117,10 @@ export default function RelatoriosPage() {
   const [selectedRow, setSelectedRow] = useState<ReportRow | null>(null);
   const [showCustomDimInfo, setShowCustomDimInfo] = useState(false);
 
-  // Dados reais do GA4 (quando conectado e dim = sunoChannel ou channel)
+  // Dados reais do GA4 — agora suporta TODAS as dimensões (channel, sunoChannel,
+  // page, device, campaign). O hook refaz a query quando dimension muda.
   const { useRealData } = useGA4();
-  const { rows: ga4Rows, usedCustomDim, meta, error: ga4Error } = useGA4Reports(30);
+  const { rows: ga4Rows, usedCustomDim, meta, error: ga4Error } = useGA4Reports(30, dimension);
   const usingMock = !useRealData;
   const isLoading = useRealData && meta.status === "loading";
   const hasError = useRealData && meta.status === "error";
@@ -143,9 +144,11 @@ export default function RelatoriosPage() {
         }))
       : null;
 
-  const isRealForDimension =
-    useRealData && realRows && (dimension === "sunoChannel" || dimension === "channel");
+  // Agora QUALQUER dimensão tem dado real (page → pagePath, device →
+  // deviceCategory, campaign → sessionCampaignName etc).
+  const isRealForDimension = useRealData && realRows !== null;
   const data = isRealForDimension ? realRows! : dimensionData[dimension];
+  // source/medium só faz sentido em canal/campanha (page/device não têm origem)
   const showSourceMedium = dimension === "sunoChannel" || dimension === "channel" || dimension === "campaign";
 
   const filtered = useMemo(() => {
@@ -213,19 +216,6 @@ export default function RelatoriosPage() {
           {isRealForDimension && usedCustomDim && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
               <Crown size={10} /> dim custom ativa
-            </span>
-          )}
-          {/* Aviso explícito quando dim selecionada NÃO tem dado real ainda.
-              "Por Campanha", "Por Página" e "Por Device" ainda vêm de mock na
-              tabela DESSA SEÇÃO (acima). Para análise REAL de campanha com
-              dados do GA4, role até o final da página → "Onde concentrar
-              investimento" (que faz queries reais cruzando origem × conversão). */}
-          {useRealData && !isRealForDimension && (
-            <span
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200"
-              title={`A tabela abaixo desta dimensão (${dimension}) ainda usa dados de exemplo. Pra análise REAL com GA4, role até "Onde concentrar investimento" no final da página.`}
-            >
-              ℹ tabela com exemplo · veja análise real no final ↓
             </span>
           )}
         </div>

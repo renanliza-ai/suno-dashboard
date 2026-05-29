@@ -373,7 +373,9 @@ export type GA4ReportRow = {
   revenue: number;
 };
 
-export function useGA4Reports(daysOverride?: number) {
+export type GA4ReportDim = "channel" | "sunoChannel" | "page" | "device" | "campaign";
+
+export function useGA4Reports(daysOverride?: number, dim: GA4ReportDim = "sunoChannel") {
   const { selectedId, selected, useRealData, days: ctxDays, customRange } = useGA4();
   const days = daysOverride ?? ctxDays;
   const [rows, setRows] = useState<GA4ReportRow[] | null>(null);
@@ -395,6 +397,7 @@ export function useGA4Reports(daysOverride?: number) {
       return;
     }
     const requestPropertyId = selectedId;
+    const requestDim = dim;
     setMeta({
       status: "loading",
       propertyId: selectedId,
@@ -403,11 +406,13 @@ export function useGA4Reports(daysOverride?: number) {
     });
     const ctrl = new AbortController();
     const qs = buildDateQS(days, customRange, { propertyId: selectedId });
+    qs.set("dim", dim);
     cachedFetch(`/api/ga4/reports?${qs.toString()}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
-        // Anti race-condition
+        // Anti race-condition: valida property + dim
         if (d.propertyId && d.propertyId !== requestPropertyId) return;
+        if (d.dim && d.dim !== requestDim) return;
         if (d.error) setError(d.error);
         setRows(d.rows || null);
         setUsedCustomDim(Boolean(d.usedCustomDim));
@@ -431,7 +436,7 @@ export function useGA4Reports(daysOverride?: number) {
         }
       });
     return () => ctrl.abort();
-  }, [selectedId, selected, useRealData, days, customRange?.startDate, customRange?.endDate]);
+  }, [selectedId, selected, useRealData, days, customRange?.startDate, customRange?.endDate, dim]);
 
   return { rows, usedCustomDim, meta, loading: meta.status === "loading", error };
 }
