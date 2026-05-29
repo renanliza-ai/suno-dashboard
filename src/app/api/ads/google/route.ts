@@ -219,7 +219,10 @@ export async function GET(req: NextRequest) {
     };
   };
 
-  const url = `https://googleads.googleapis.com/v17/customers/${creds.customerId}/googleAds:searchStream`;
+  // ⚠ Versão da API atualizada periodicamente. Google deprecia versões antigas
+  // após ~14 meses. Em 2026 a versão atual é v20 (v17 e anteriores retornam HTML 404).
+  // Verificar releases em: https://developers.google.com/google-ads/api/docs/release-notes
+  const url = `https://googleads.googleapis.com/v20/customers/${creds.customerId}/googleAds:searchStream`;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     "developer-token": creds.developerToken,
@@ -250,21 +253,36 @@ export async function GET(req: NextRequest) {
 
   if (!resp.ok) {
     const errorText = await resp.text();
+    const isHtmlResponse = errorText.trim().startsWith("<");
+
+    let hint: string | null = null;
+    if (resp.status === 401) {
+      hint = "Access token inválido — refresh token expirou ou foi revogado.";
+    } else if (resp.status === 403) {
+      hint = "Token sem permissão — verifique se Developer Token está aprovado (Basic Access) e se a conta OAuth tem acesso ao MCC. Test tokens só leem contas de teste.";
+    } else if (resp.status === 404 && isHtmlResponse) {
+      hint = "Endpoint da API não encontrado — provavelmente versão da API foi atualizada. Verifique se v20 ainda é válida em https://developers.google.com/google-ads/api/docs/release-notes";
+    } else if (resp.status === 404) {
+      hint = `Customer ID '${creds.customerId}' não acessível. Possíveis causas: (1) ID errado, (2) MCC ${creds.loginCustomerId || "(não setado)"} não gerencia esse customer, (3) Developer Token sem permissão pra essa conta, (4) Conta OAuth do refresh_token não tem acesso ao MCC.`;
+    } else if (resp.status === 400) {
+      hint = "Requisição mal formada — geralmente GAQL inválido ou Customer ID com formato errado (sem traços, só números).";
+    }
+
     return NextResponse.json(
       {
         ok: false,
         error: "google_ads_api_error",
         httpStatus: resp.status,
         message: `Google Ads API retornou erro ${resp.status}`,
-        details: errorText.slice(0, 1000),
-        hint:
-          resp.status === 401
-            ? "Access token inválido ou developer token sem permissão pra esse customer."
-            : resp.status === 403
-              ? "Sem permissão de acesso pra esse Customer ID. Verifique login_customer_id."
-              : resp.status === 404
-                ? "Customer ID não encontrado. Verifique o número."
-                : null,
+        responseIsHtml: isHtmlResponse,
+        details: errorText.slice(0, 500),
+        hint,
+        diagnostics: {
+          customerId: creds.customerId,
+          loginCustomerId: creds.loginCustomerId,
+          apiVersion: "v20",
+          endpoint: url,
+        },
       },
       { status: 200 }
     );
