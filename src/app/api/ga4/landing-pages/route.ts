@@ -14,7 +14,13 @@ export const dynamic = "force-dynamic";
  * Query params:
  *   propertyId (obrigatório)
  *   days (default 30)
- *   hostContains (opcional) — filtra hostName por substring (ex: "greatpages")
+ *   hostContains (opcional, legacy) — filtra hostName por substring única (ex: "greatpages")
+ *   hostsIn (opcional) — lista CSV de hostnames pra filtrar via inListFilter server-side
+ *                       (ex: "lp.suno.com.br,lp2.suno.com.br"). Quando presente,
+ *                       SOBRESCREVE hostContains. Útil pra LP Analyzer que cruza
+ *                       múltiplos hostnames de captação por property.
+ *   leadEvent (default "generate_lead") — nome do evento de conversão de lead pra
+ *                       calcular leadCount + leadConvRate por LP.
  *   limit (default 100)
  */
 export async function GET(req: NextRequest) {
@@ -23,11 +29,19 @@ export async function GET(req: NextRequest) {
   const startDateQ = req.nextUrl.searchParams.get("startDate");
   const endDateQ = req.nextUrl.searchParams.get("endDate");
   const hostContains = req.nextUrl.searchParams.get("hostContains") || "";
+  const hostsInRaw = req.nextUrl.searchParams.get("hostsIn") || "";
+  const leadEvent = req.nextUrl.searchParams.get("leadEvent") || "generate_lead";
   const limit = Number(req.nextUrl.searchParams.get("limit") || 100);
 
   if (!propertyId) {
     return NextResponse.json({ error: "propertyId required" }, { status: 400 });
   }
+
+  // Parse hostsIn — lista CSV trim+lower
+  const hostsIn = hostsInRaw
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
 
   // Calcula o date range — honra custom start/end quando passados, senão usa o
   // formato relativo `${days}daysAgo`/`today` (preserva comportamento original
@@ -36,6 +50,20 @@ export async function GET(req: NextRequest) {
     startDateQ && endDateQ && /^\d{4}-\d{2}-\d{2}$/.test(startDateQ) && /^\d{4}-\d{2}-\d{2}$/.test(endDateQ)
       ? { startDate: startDateQ, endDate: endDateQ }
       : { startDate: `${days}daysAgo`, endDate: "today" };
+
+  // Server-side filter — quando hostsIn presente, aplica inListFilter (OR de hostnames)
+  // direto no GA4. Mais eficiente que filtrar client-side (evita corte por `limit`
+  // antes do filtro). Caso hostsIn não esteja presente, deixa hostContains como
+  // fallback client-side (comportamento legacy).
+  const hostFilter =
+    hostsIn.length > 0
+      ? {
+          filter: {
+            fieldName: "hostName",
+            inListFilter: { values: hostsIn, caseSensitive: false },
+          },
+        }
+      : undefined;
 
   // 1. Landing pages agregadas por hostName + landingPage (sem breakdown de source,
   // pra ter uma linha por LP). Isso é a tabela principal.
@@ -51,6 +79,7 @@ export async function GET(req: NextRequest) {
     ],
     orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
     limit,
+    ...(hostFilter ? { dimensionFilter: hostFilter } : {}),
   });
 
   if (pagesRes.error || !pagesRes.data?.rows) {
@@ -72,16 +101,74 @@ export async function GET(req: NextRequest) {
       engagementRate: sessions > 0 ? engagedSessions / sessions : 0,
       avgSessionDuration: Number(r.metricValues?.[3]?.value || 0),
       bounceRate: Number(r.metricValues?.[4]?.value || 0),
+      leadCount: 0, // populado abaixo
+      leadConvRate: 0, // populado abaixo
     };
   });
 
-  if (hostContains) {
+  // Fallback legacy: hostContains client-side só se hostsIn vazio
+  if (hostsIn.length === 0 && hostContains) {
     const needle = hostContains.toLowerCase();
     pages = pages.filter((p) => p.host.toLowerCase().includes(needle));
   }
 
-  // 2. Breakdown de source/medium → landingPage (para o filtro "origens/mídias que
-  // mais levam acesso para essas LPs"). Respeita hostContains via aggregation client-side.
+  // 2. Lead conversions por landing page — query separada filtrada por eventName
+  // (ex: generate_lead). Permite calcular taxa de captação por LP, que é a
+  // métrica primária de LP de captação na Suno (regra: conv = generate_lead/sessions).
+  const leadFilter = {
+    andGroup: {
+      expressions: [
+        {
+          filter: {
+            fieldName: "eventName",
+            stringFilter: { matchType: "EXACT" as const, value: leadEvent },
+          },
+        },
+        ...(hostsIn.length > 0
+          ? [
+              {
+                filter: {
+                  fieldName: "hostName",
+                  inListFilter: { values: hostsIn, caseSensitive: false },
+                },
+              },
+            ]
+          : []),
+      ],
+    },
+  };
+
+  const leadsRes = await runReport(propertyId, {
+    dateRanges: [dateRange],
+    dimensions: [{ name: "hostName" }, { name: "landingPagePlusQueryString" }],
+    metrics: [{ name: "eventCount" }],
+    orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
+    limit: Math.max(limit, 200),
+    dimensionFilter: leadFilter,
+  });
+
+  if (!leadsRes.error && leadsRes.data?.rows) {
+    const leadMap = new Map<string, number>();
+    for (const r of leadsRes.data.rows) {
+      const host = r.dimensionValues?.[0]?.value || "";
+      const path = r.dimensionValues?.[1]?.value || "/";
+      const key = `${host.toLowerCase()}|${path}`;
+      const count = Number(r.metricValues?.[0]?.value || 0);
+      leadMap.set(key, (leadMap.get(key) || 0) + count);
+    }
+    pages = pages.map((p) => {
+      const key = `${p.host.toLowerCase()}|${p.path}`;
+      const leadCount = leadMap.get(key) || 0;
+      return {
+        ...p,
+        leadCount,
+        leadConvRate: p.sessions > 0 ? leadCount / p.sessions : 0,
+      };
+    });
+  }
+
+  // 3. Breakdown de source/medium → landingPage (para o filtro "origens/mídias que
+  // mais levam acesso para essas LPs"). Aplica mesmo hostFilter server-side.
   const sourcesRes = await runReport(propertyId, {
     dateRanges: [dateRange],
     dimensions: [
@@ -93,6 +180,7 @@ export async function GET(req: NextRequest) {
     metrics: [{ name: "sessions" }, { name: "totalUsers" }],
     orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
     limit: 500,
+    ...(hostFilter ? { dimensionFilter: hostFilter } : {}),
   });
 
   const sourceRows =
@@ -110,9 +198,11 @@ export async function GET(req: NextRequest) {
       };
     }) || [];
 
-  const filteredSourceRows = hostContains
-    ? sourceRows.filter((r) => r.host.toLowerCase().includes(hostContains.toLowerCase()))
-    : sourceRows;
+  // Fallback legacy do hostContains
+  const filteredSourceRows =
+    hostsIn.length === 0 && hostContains
+      ? sourceRows.filter((r) => r.host.toLowerCase().includes(hostContains.toLowerCase()))
+      : sourceRows;
 
   // Top origens/mídias agregadas (para o filtro global)
   const sourceAgg = new Map<string, { source: string; medium: string; sessions: number; users: number }>();
@@ -138,6 +228,8 @@ export async function GET(req: NextRequest) {
       topSources,
       days,
       hostContains,
+      hostsIn,
+      leadEvent,
     },
     {
       headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=600" },

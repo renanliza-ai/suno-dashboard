@@ -14,6 +14,7 @@ import { formatNumber } from "@/lib/utils";
 import { useGA4, useGA4PagesDetail } from "@/lib/ga4-context";
 import { DataStatus } from "@/components/data-status";
 import { generateCROInsights, summarizeInsights, type CROInsight } from "@/lib/cro-engine";
+import { LPAnalyzer } from "@/components/lp-analyzer";
 
 // Hash determinístico do propertyId — garante que ao trocar a propriedade,
 // os números (mock e derivações) mudem de forma estável (mesma propriedade
@@ -1391,6 +1392,14 @@ export default function CROPage() {
               </>
             )}
           </div>
+        </div>
+
+        {/* LP Analyzer — análise focada em conversão das LPs ativas
+            por propriedade. Componente auto-detecta os hostnames de LP
+            (lp.suno + lp2.suno para Research, lp.statusinvest + lp2.statusinvest
+            para Status) e busca direto do GA4 via /api/ga4/landing-pages. */}
+        <div className="mb-8">
+          <LPAnalyzer />
         </div>
 
         {/* KPIs clicáveis */}
