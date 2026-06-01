@@ -67,7 +67,36 @@ type LPRow = {
   bounceRate: number;
   leadCount: number;
   leadConvRate: number;
+  ctaCount: number;
+  ctaConvRate: number;
 };
+
+/**
+ * LP Type — descoberto automaticamente pelo evento que mais dispara na LP.
+ * - "lead":     LP de captação (formulário). generate_lead > cta_click
+ * - "checkout": LP que leva direto ao checkout. cta_click > generate_lead
+ * - "mixed":    LP híbrida (volume similar de ambos). Tratamos como ambos.
+ * - "unknown":  Nenhum dos 2 eventos disparou. Pode ser LP nova, sem tráfego
+ *               relevante, ou problema de tracking.
+ */
+type LPType = "lead" | "checkout" | "mixed" | "unknown";
+
+function detectLPType(row: LPRow): LPType {
+  const total = row.leadCount + row.ctaCount;
+  if (total === 0) return "unknown";
+  const leadShare = row.leadCount / total;
+  // 30-70% de cada lado = mixed; senão domina o lado maior
+  if (leadShare >= 0.7) return "lead";
+  if (leadShare <= 0.3) return "checkout";
+  return "mixed";
+}
+
+/** Devolve a métrica primária baseada no tipo de LP. */
+function primaryConvRate(row: LPRow, type: LPType): { rate: number; label: string; count: number } {
+  if (type === "checkout") return { rate: row.ctaConvRate, label: "click CTA", count: row.ctaCount };
+  // lead, mixed, unknown → mostra lead como padrão
+  return { rate: row.leadConvRate, label: "lead", count: row.leadCount };
+}
 
 type Diagnosis = {
   level: "ok" | "atencao" | "critico";
@@ -78,20 +107,30 @@ type Diagnosis = {
 /**
  * Heurísticas de diagnóstico — gera sinais e sugestões por LP.
  *
- * Regras (todas baseadas em benchmarks comuns de CRO pra LP de captação):
+ * Considera o TIPO da LP (lead/checkout/mixed) pra usar a métrica de
+ * conversão correta e ajustar a sugestão. Sugestões específicas por tipo:
+ *
+ * - LP lead (formulário):  conv = generate_lead / sessions
+ *   Sugestões focam em formulário, copy do CTA, prova social.
+ *
+ * - LP checkout (sem form): conv = cta_click / sessions
+ *   Sugestões focam em fricção pré-checkout, escassez, garantia,
+ *   redução de objeções de preço.
+ *
+ * Regras universais (independente de tipo):
  * - Bounce > 60% → match conteúdo × fonte
  * - Sessão < 30s → primeira dobra não convence
- * - Sessão 30-90s → dúvida no CTA
+ * - Sessão 30-90s → CTA mal posicionado
  * - Engajamento < 40% → distração ou anxiety
- * - Conv < 50% da mediana do hostname → underperformer
- * - Conv > 150% da mediana → benchmark interno (melhor LP)
- * - Sessions < 100 → volume insuficiente pra conclusão estatística
+ * - Volume < 100 sessões → sem base estatística
  */
-function diagnose(p: LPRow, hostMedian: number): Diagnosis {
+function diagnose(p: LPRow, hostMedian: number, type: LPType): Diagnosis {
   const signals: string[] = [];
   const suggestions: string[] = [];
   let criticalCount = 0;
   let warnCount = 0;
+
+  const primary = primaryConvRate(p, type);
 
   // Volume insuficiente
   if (p.sessions < 100) {
@@ -99,10 +138,10 @@ function diagnose(p: LPRow, hostMedian: number): Diagnosis {
     suggestions.push("Aumentar investimento em mídia pra essa LP ou pausar se for teste");
   }
 
-  // Bounce
+  // Bounce — universal
   if (p.bounceRate > 0.7) {
     signals.push(`Rejeição muito alta (${(p.bounceRate * 100).toFixed(1)}%)`);
-    suggestions.push("Revisar correspondência entre criativo/anúncio e hero da LP — provavelmente promessa diferente");
+    suggestions.push("Revisar correspondência entre criativo/anúncio e hero da LP — provavelmente promessa diferente do anúncio");
     criticalCount++;
   } else if (p.bounceRate > 0.55) {
     signals.push(`Rejeição alta (${(p.bounceRate * 100).toFixed(1)}%)`);
@@ -110,53 +149,77 @@ function diagnose(p: LPRow, hostMedian: number): Diagnosis {
     warnCount++;
   }
 
-  // Tempo
+  // Tempo — universal
   if (p.avgSessionDuration < 30) {
     signals.push(`Sessão muito curta (${p.avgSessionDuration.toFixed(0)}s)`);
     suggestions.push("Primeira dobra não está convencendo. Revisar headline + prova social inicial");
     criticalCount++;
   } else if (p.avgSessionDuration < 90) {
     signals.push(`Sessão curta (${p.avgSessionDuration.toFixed(0)}s)`);
-    suggestions.push("Usuário lê parte do conteúdo mas não chega no CTA. Mover CTA pra mais cedo ou repetir ao longo da página");
+    suggestions.push(
+      type === "checkout"
+        ? "Usuário lê pouco antes de clicar (ou desiste). Adicionar elementos de urgência/escassez próximos ao CTA"
+        : "Usuário lê parte do conteúdo mas não chega no CTA. Mover CTA pra mais cedo ou repetir ao longo da página"
+    );
     warnCount++;
   }
 
-  // Engajamento (engaged sessions / sessions)
+  // Engajamento — universal
   if (p.engagementRate < 0.4) {
     signals.push(`Engajamento baixo (${(p.engagementRate * 100).toFixed(1)}%)`);
     suggestions.push("Pouca interação com a página — testar variação com vídeo curto ou prova social mais forte");
     warnCount++;
   }
 
-  // Conversão vs mediana do hostname (só se hostMedian > 0 e LP tem volume)
+  // Conversão vs mediana do hostname+tipo (só se LP tem volume e mediana >0)
   if (hostMedian > 0 && p.sessions >= 100) {
-    if (p.leadConvRate < hostMedian * 0.5 && p.leadConvRate >= 0) {
+    if (primary.rate < hostMedian * 0.5) {
       signals.push(
-        `Conversão ${(p.leadConvRate * 100).toFixed(2)}% — abaixo da metade da mediana do host (${(hostMedian * 100).toFixed(2)}%)`
+        `Conv. ${primary.label} ${(primary.rate * 100).toFixed(2)}% — abaixo da metade da mediana de LPs ${type === "checkout" ? "de checkout" : "de captação"} deste host (${(hostMedian * 100).toFixed(2)}%)`
       );
       suggestions.push(
-        "Comparar formulário, CTA e proposta de valor com as melhores LPs deste mesmo host (benchmark interno)"
+        type === "checkout"
+          ? "Comparar oferta, garantia e elementos de urgência com as melhores LPs de checkout deste host (benchmark interno)"
+          : "Comparar formulário, CTA e proposta de valor com as melhores LPs de captação deste host (benchmark interno)"
       );
       criticalCount++;
-    } else if (p.leadConvRate > hostMedian * 1.5) {
+    } else if (primary.rate > hostMedian * 1.5) {
       signals.push(
-        `Conversão ${(p.leadConvRate * 100).toFixed(2)}% — 50% acima da mediana (${(hostMedian * 100).toFixed(2)}%)`
+        `Conv. ${primary.label} ${(primary.rate * 100).toFixed(2)}% — 50% acima da mediana (${(hostMedian * 100).toFixed(2)}%)`
       );
-      suggestions.push("Replicar elementos dessa LP nas demais (hero, CTA, copy do formulário)");
-    } else if (p.leadConvRate < hostMedian * 0.75) {
+      suggestions.push(
+        type === "checkout"
+          ? "Replicar elementos dessa LP nas demais (oferta, urgência, posição do CTA, copy de garantia)"
+          : "Replicar elementos dessa LP nas demais (hero, CTA, copy do formulário, prova social)"
+      );
+    } else if (primary.rate < hostMedian * 0.75) {
       signals.push(
-        `Conversão ${(p.leadConvRate * 100).toFixed(2)}% — abaixo da mediana (${(hostMedian * 100).toFixed(2)}%)`
+        `Conv. ${primary.label} ${(primary.rate * 100).toFixed(2)}% — abaixo da mediana (${(hostMedian * 100).toFixed(2)}%)`
       );
-      suggestions.push("Testar variação de copy do CTA + reduzir campos do formulário");
+      suggestions.push(
+        type === "checkout"
+          ? "Testar variação de copy do CTA + simplificar próximo passo (botão único e claro)"
+          : "Testar variação de copy do CTA + reduzir campos do formulário"
+      );
       warnCount++;
     }
   }
 
-  // Sem nenhum lead apesar de volume relevante
-  if (p.sessions >= 500 && p.leadCount === 0) {
-    signals.push(`${p.sessions} sessões e 0 leads — possível problema de tracking`);
-    suggestions.push("Verificar se evento generate_lead está disparando nessa LP (testar manualmente)");
-    criticalCount++;
+  // Sem conversão apesar de volume relevante
+  if (p.sessions >= 500) {
+    if (type === "checkout" && p.ctaCount === 0) {
+      signals.push(`${p.sessions} sessões e 0 cliques no CTA — possível problema de tracking ou CTA quebrado`);
+      suggestions.push("Verificar se evento cta_click está disparando nessa LP (testar manualmente)");
+      criticalCount++;
+    } else if (type === "lead" && p.leadCount === 0) {
+      signals.push(`${p.sessions} sessões e 0 leads — possível problema de tracking ou formulário quebrado`);
+      suggestions.push("Verificar se evento generate_lead está disparando nessa LP (testar manualmente)");
+      criticalCount++;
+    } else if (type === "unknown") {
+      signals.push(`${p.sessions} sessões mas nenhum evento de conversão (generate_lead nem cta_click)`);
+      suggestions.push("Identificar qual evento essa LP deveria disparar e configurar no GTM");
+      criticalCount++;
+    }
   }
 
   // Se nada acionou, é saudável
@@ -235,28 +298,49 @@ export function LPAnalyzer() {
     return () => ctrl.abort();
   }, [selectedId, useRealData, days, customRange?.startDate, customRange?.endDate, lpConfig?.hosts.join(",")]);
 
-  // Aplica filtros + calcula mediana por host
+  // Aplica filtros + calcula medianas por (host, tipo).
+  // A mediana é calculada SEPARADA pra LPs de lead e LPs de checkout dentro
+  // do mesmo host — porque taxa de conv de lead (~5-20%) e taxa de click no
+  // CTA de checkout (~10-40%) tem ordem de grandeza diferentes; misturar
+  // as duas no benchmark daria sinal errado.
+  type EnrichedRow = LPRow & { diagnosis: Diagnosis; lpType: LPType; primary: ReturnType<typeof primaryConvRate> };
+  type MedianKey = `${string}|${LPType}`;
   const { rows, hostMedians, hostList } = useMemo(() => {
-    if (!data) return { rows: [] as Array<LPRow & { diagnosis: Diagnosis }>, hostMedians: {} as Record<string, number>, hostList: [] as string[] };
+    if (!data) return { rows: [] as EnrichedRow[], hostMedians: {} as Record<MedianKey, number>, hostList: [] as string[] };
     const pages = data.pages.filter((p) => p.sessions >= minSessions);
-    // Hosts disponíveis (pra filtro)
     const hosts = Array.from(new Set(pages.map((p) => p.host))).sort();
-    // Mediana de leadConvRate por host (só páginas com volume relevante)
-    const medians: Record<string, number> = {};
+    // Pré-calcula tipo de cada página
+    const typedPages = pages.map((p) => {
+      const lpType = detectLPType(p);
+      return { ...p, lpType, primary: primaryConvRate(p, lpType) };
+    });
+    // Mediana por (host, tipo) — só páginas com volume relevante
+    const medians: Record<MedianKey, number> = {};
     for (const h of hosts) {
-      const convs = pages.filter((p) => p.host === h && p.sessions >= 100).map((p) => p.leadConvRate);
-      medians[h] = median(convs);
+      const leadConvs = typedPages
+        .filter((p) => p.host === h && p.lpType === "lead" && p.sessions >= 100)
+        .map((p) => p.leadConvRate);
+      const ctaConvs = typedPages
+        .filter((p) => p.host === h && p.lpType === "checkout" && p.sessions >= 100)
+        .map((p) => p.ctaConvRate);
+      medians[`${h}|lead`] = median(leadConvs);
+      medians[`${h}|checkout`] = median(ctaConvs);
+      medians[`${h}|mixed`] = median(leadConvs.concat(ctaConvs));
+      medians[`${h}|unknown`] = 0;
     }
     // Filtro por host
-    const filtered = hostFilter === "all" ? pages : pages.filter((p) => p.host === hostFilter);
+    const filtered = hostFilter === "all" ? typedPages : typedPages.filter((p) => p.host === hostFilter);
     // Diagnóstico + ordenação
-    let withDiag = filtered.map((p) => ({ ...p, diagnosis: diagnose(p, medians[p.host] || 0) }));
+    let withDiag: EnrichedRow[] = filtered.map((p) => ({
+      ...p,
+      diagnosis: diagnose(p, medians[`${p.host}|${p.lpType}`] || 0, p.lpType),
+    }));
     if (showOnlyIssues) {
       withDiag = withDiag.filter((p) => p.diagnosis.level !== "ok");
     }
     withDiag.sort((a, b) => {
       if (sortKey === "sessions") return b.sessions - a.sessions;
-      if (sortKey === "leadConvRate") return b.leadConvRate - a.leadConvRate;
+      if (sortKey === "leadConvRate") return b.primary.rate - a.primary.rate;
       if (sortKey === "bounceRate") return b.bounceRate - a.bounceRate;
       return 0;
     });
@@ -312,8 +396,11 @@ export function LPAnalyzer() {
               </span>
             </h2>
             <p className="text-xs text-[color:var(--muted-foreground)] mt-1">
-              Análise de LPs ativas em <strong>{lpConfig.label}</strong> · taxa de captação calculada via{" "}
-              <code className="text-[11px]">generate_lead ÷ sessions</code>
+              Análise de LPs ativas em <strong>{lpConfig.label}</strong>. Tipo da LP é{" "}
+              <strong>auto-detectado</strong>: <span className="text-violet-700 font-semibold">captação</span> usa{" "}
+              <code className="text-[11px]">generate_lead</code>,{" "}
+              <span className="text-cyan-700 font-semibold">checkout direto</span> usa{" "}
+              <code className="text-[11px]">cta_click</code>.
             </p>
           </div>
           <div className="flex items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
@@ -371,7 +458,7 @@ export function LPAnalyzer() {
           className="px-2 py-1 text-xs rounded-md border border-slate-200 bg-white"
         >
           <option value="sessions">Ordenar por sessões</option>
-          <option value="leadConvRate">Ordenar por conv. de lead</option>
+          <option value="leadConvRate">Ordenar por conversão primária</option>
           <option value="bounceRate">Ordenar por rejeição</option>
         </select>
 
@@ -414,7 +501,7 @@ export function LPAnalyzer() {
       {!loading && !error && rows.length > 0 && (
         <div className="divide-y divide-slate-100">
           {rows.map((r, i) => (
-            <LPRow key={r.url} row={r} median={hostMedians[r.host] || 0} index={i} />
+            <LPRow key={r.url} row={r} median={hostMedians[`${r.host}|${r.lpType}`] || 0} index={i} />
           ))}
         </div>
       )}
@@ -426,7 +513,9 @@ export function LPAnalyzer() {
             <Info size={13} className="shrink-0 mt-0.5" />
             <span>
               <strong>Como ler:</strong> as sugestões são heurísticas baseadas em padrões de CRO — não substituem teste A/B.
-              Cada uma aponta o <em>ângulo a investigar</em>. Mediana do host é calculada só com LPs ≥100 sessões.
+              Cada uma aponta o <em>ângulo a investigar</em>. Mediana é calculada por host <strong>e por tipo</strong>{" "}
+              (LP de lead compara com LP de lead, LP de checkout com LP de checkout), só com LPs ≥100 sessões. Clique em
+              qualquer linha pra ver as 2 conversões + sinais completos.
             </span>
           </div>
         </div>
@@ -435,13 +524,30 @@ export function LPAnalyzer() {
   );
 }
 
-function LPRow({ row, median, index }: { row: LPRow & { diagnosis: Diagnosis }; median: number; index: number }) {
+function LPRow({
+  row,
+  median,
+  index,
+}: {
+  row: LPRow & { diagnosis: Diagnosis; lpType: LPType; primary: { rate: number; label: string; count: number } };
+  median: number;
+  index: number;
+}) {
   const [expanded, setExpanded] = useState(false);
   const levelStyle = {
     critico: { bg: "bg-rose-50", border: "border-rose-200", text: "text-rose-700", icon: <AlertCircle size={14} className="text-rose-600" /> },
     atencao: { bg: "bg-amber-50", border: "border-amber-200", text: "text-amber-700", icon: <TrendingDown size={14} className="text-amber-600" /> },
     ok: { bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-700", icon: <CheckCircle2 size={14} className="text-emerald-600" /> },
   }[row.diagnosis.level];
+
+  // Badge estilizado por tipo de LP — visual claro pra usuário diferenciar
+  // captação (lead) de checkout direto.
+  const typeBadge = {
+    lead: { label: "Captação de lead", bg: "bg-violet-100", text: "text-violet-700" },
+    checkout: { label: "Checkout direto", bg: "bg-cyan-100", text: "text-cyan-700" },
+    mixed: { label: "Híbrida (lead + checkout)", bg: "bg-slate-100", text: "text-slate-700" },
+    unknown: { label: "Sem conversão detectada", bg: "bg-zinc-100", text: "text-zinc-600" },
+  }[row.lpType];
 
   return (
     <motion.div
@@ -471,6 +577,9 @@ function LPRow({ row, median, index }: { row: LPRow & { diagnosis: Diagnosis }; 
               abrir <ExternalLink size={10} />
             </a>
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono">{row.host}</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${typeBadge.bg} ${typeBadge.text}`}>
+              {typeBadge.label}
+            </span>
             <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${levelStyle.bg} ${levelStyle.text}`}>
               {row.diagnosis.level === "critico" ? "Crítico" : row.diagnosis.level === "atencao" ? "Atenção" : "Saudável"}
             </span>
@@ -479,7 +588,8 @@ function LPRow({ row, median, index }: { row: LPRow & { diagnosis: Diagnosis }; 
           <div className="text-xs text-slate-600 mt-1">{row.diagnosis.signals[0]}</div>
         </div>
 
-        {/* Métricas em colunas */}
+        {/* Métricas em colunas — última coluna mostra a CONVERSÃO PRIMÁRIA
+            baseada no tipo da LP (lead pra captação, click CTA pra checkout). */}
         <div className="hidden md:flex items-center gap-6 text-right tabular-nums">
           <MetricCol label="Sessões" value={formatNumber(row.sessions)} />
           <MetricCol label="Rejeição" value={`${(row.bounceRate * 100).toFixed(1)}%`} highlight={row.bounceRate > 0.6 ? "warn" : undefined} />
@@ -488,51 +598,77 @@ function LPRow({ row, median, index }: { row: LPRow & { diagnosis: Diagnosis }; 
             value={row.avgSessionDuration < 60 ? `${row.avgSessionDuration.toFixed(0)}s` : `${(row.avgSessionDuration / 60).toFixed(1)}min`}
             highlight={row.avgSessionDuration < 30 ? "warn" : undefined}
           />
-          <MetricCol label="Leads" value={formatNumber(row.leadCount)} />
+          <MetricCol label={row.primary.label === "lead" ? "Leads" : "Cliques CTA"} value={formatNumber(row.primary.count)} />
           <MetricCol
-            label="Conv. lead"
-            value={`${(row.leadConvRate * 100).toFixed(2)}%`}
-            highlight={median > 0 && row.leadConvRate < median * 0.75 ? "warn" : median > 0 && row.leadConvRate > median * 1.2 ? "good" : undefined}
+            label={`Conv. ${row.primary.label}`}
+            value={`${(row.primary.rate * 100).toFixed(2)}%`}
+            highlight={median > 0 && row.primary.rate < median * 0.75 ? "warn" : median > 0 && row.primary.rate > median * 1.2 ? "good" : undefined}
           />
         </div>
       </div>
 
-      {/* Expandido — sinais completos + sugestões */}
+      {/* Expandido — sinais completos + sugestões + AMBAS as conversões (útil
+          pra LPs híbridas e pra dar contexto) */}
       {expanded && (
         <motion.div
           initial={{ opacity: 0, height: 0 }}
           animate={{ opacity: 1, height: "auto" }}
           exit={{ opacity: 0, height: 0 }}
-          className="px-6 pb-5 ml-14 grid md:grid-cols-2 gap-4"
+          className="px-6 pb-5 ml-14 space-y-4"
         >
-          <div>
-            <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-              <Activity size={12} /> Sinais detectados
-            </h4>
-            <ul className="space-y-1.5 text-xs text-slate-700">
-              {row.diagnosis.signals.map((s, i) => (
-                <li key={i} className="flex items-start gap-1.5">
-                  <span className="text-slate-400 mt-0.5">•</span>
-                  <span>{s}</span>
-                </li>
-              ))}
-            </ul>
+          {/* Bloco com as 2 conversões — usuário vê leadConv E ctaConv mesmo
+              que só uma seja a primária */}
+          <div className="bg-slate-50 rounded-lg p-3 grid grid-cols-2 gap-4">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-violet-600 font-bold mb-1">
+                Captação (generate_lead)
+              </div>
+              <div className="text-sm">
+                <span className="font-bold tabular-nums">{formatNumber(row.leadCount)} leads</span>
+                <span className="text-slate-500 ml-2">→ {(row.leadConvRate * 100).toFixed(2)}% conv</span>
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-cyan-600 font-bold mb-1">
+                Checkout (cta_click)
+              </div>
+              <div className="text-sm">
+                <span className="font-bold tabular-nums">{formatNumber(row.ctaCount)} cliques</span>
+                <span className="text-slate-500 ml-2">→ {(row.ctaConvRate * 100).toFixed(2)}% conv</span>
+              </div>
+            </div>
           </div>
-          {row.diagnosis.suggestions.length > 0 && (
+
+          <div className="grid md:grid-cols-2 gap-4">
             <div>
               <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                <Lightbulb size={12} className="text-amber-500" /> Sugestões de teste
+                <Activity size={12} /> Sinais detectados
               </h4>
               <ul className="space-y-1.5 text-xs text-slate-700">
-                {row.diagnosis.suggestions.map((s, i) => (
+                {row.diagnosis.signals.map((s, i) => (
                   <li key={i} className="flex items-start gap-1.5">
-                    <ArrowUpRight size={11} className="shrink-0 mt-0.5 text-[#7c5cff]" />
+                    <span className="text-slate-400 mt-0.5">•</span>
                     <span>{s}</span>
                   </li>
                 ))}
               </ul>
             </div>
-          )}
+            {row.diagnosis.suggestions.length > 0 && (
+              <div>
+                <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <Lightbulb size={12} className="text-amber-500" /> Sugestões de teste
+                </h4>
+                <ul className="space-y-1.5 text-xs text-slate-700">
+                  {row.diagnosis.suggestions.map((s, i) => (
+                    <li key={i} className="flex items-start gap-1.5">
+                      <ArrowUpRight size={11} className="shrink-0 mt-0.5 text-[#7c5cff]" />
+                      <span>{s}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         </motion.div>
       )}
     </motion.div>

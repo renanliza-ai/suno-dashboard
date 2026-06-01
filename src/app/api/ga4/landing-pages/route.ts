@@ -20,8 +20,16 @@ export const dynamic = "force-dynamic";
  *                       SOBRESCREVE hostContains. Útil pra LP Analyzer que cruza
  *                       múltiplos hostnames de captação por property.
  *   leadEvent (default "generate_lead") — nome do evento de conversão de lead pra
- *                       calcular leadCount + leadConvRate por LP.
+ *                       calcular leadCount + leadConvRate por LP (LPs de captação
+ *                       com formulário).
+ *   ctaEvent (default "cta_click") — nome do evento de clique no CTA pra calcular
+ *                       ctaCount + ctaConvRate por LP (LPs que levam direto ao
+ *                       checkout, sem formulário próprio).
  *   limit (default 100)
+ *
+ * Resposta inclui AMBAS as métricas por LP: leadCount/leadConvRate +
+ * ctaCount/ctaConvRate. O front decide qual é a métrica primária por LP
+ * (auto-detecção: o evento que mais disparou define o tipo).
  */
 export async function GET(req: NextRequest) {
   const propertyId = req.nextUrl.searchParams.get("propertyId");
@@ -31,6 +39,7 @@ export async function GET(req: NextRequest) {
   const hostContains = req.nextUrl.searchParams.get("hostContains") || "";
   const hostsInRaw = req.nextUrl.searchParams.get("hostsIn") || "";
   const leadEvent = req.nextUrl.searchParams.get("leadEvent") || "generate_lead";
+  const ctaEvent = req.nextUrl.searchParams.get("ctaEvent") || "cta_click";
   const limit = Number(req.nextUrl.searchParams.get("limit") || 100);
 
   if (!propertyId) {
@@ -103,6 +112,8 @@ export async function GET(req: NextRequest) {
       bounceRate: Number(r.metricValues?.[4]?.value || 0),
       leadCount: 0, // populado abaixo
       leadConvRate: 0, // populado abaixo
+      ctaCount: 0, // populado abaixo
+      ctaConvRate: 0, // populado abaixo
     };
   });
 
@@ -112,16 +123,14 @@ export async function GET(req: NextRequest) {
     pages = pages.filter((p) => p.host.toLowerCase().includes(needle));
   }
 
-  // 2. Lead conversions por landing page — query separada filtrada por eventName
-  // (ex: generate_lead). Permite calcular taxa de captação por LP, que é a
-  // métrica primária de LP de captação na Suno (regra: conv = generate_lead/sessions).
-  const leadFilter = {
+  // Helper pra construir filtro de evento + host
+  const buildEventFilter = (eventName: string) => ({
     andGroup: {
       expressions: [
         {
           filter: {
             fieldName: "eventName",
-            stringFilter: { matchType: "EXACT" as const, value: leadEvent },
+            stringFilter: { matchType: "EXACT" as const, value: eventName },
           },
         },
         ...(hostsIn.length > 0
@@ -136,36 +145,61 @@ export async function GET(req: NextRequest) {
           : []),
       ],
     },
-  };
-
-  const leadsRes = await runReport(propertyId, {
-    dateRanges: [dateRange],
-    dimensions: [{ name: "hostName" }, { name: "landingPagePlusQueryString" }],
-    metrics: [{ name: "eventCount" }],
-    orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
-    limit: Math.max(limit, 200),
-    dimensionFilter: leadFilter,
   });
 
-  if (!leadsRes.error && leadsRes.data?.rows) {
-    const leadMap = new Map<string, number>();
-    for (const r of leadsRes.data.rows) {
+  // 2. Lead conversions por landing page — métrica primária de LP de captação
+  //    (regra Suno: conv = generate_lead / sessions)
+  // 3. CTA conversions por landing page — métrica primária de LP que leva
+  //    direto ao checkout (não tem formulário, conv = cta_click / sessions)
+  // Rodadas em paralelo pra economizar latência.
+  const [leadsRes, ctaRes] = await Promise.all([
+    runReport(propertyId, {
+      dateRanges: [dateRange],
+      dimensions: [{ name: "hostName" }, { name: "landingPagePlusQueryString" }],
+      metrics: [{ name: "eventCount" }],
+      orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
+      limit: Math.max(limit, 200),
+      dimensionFilter: buildEventFilter(leadEvent),
+    }),
+    runReport(propertyId, {
+      dateRanges: [dateRange],
+      dimensions: [{ name: "hostName" }, { name: "landingPagePlusQueryString" }],
+      metrics: [{ name: "eventCount" }],
+      orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
+      limit: Math.max(limit, 200),
+      dimensionFilter: buildEventFilter(ctaEvent),
+    }),
+  ]);
+
+  // Helper genérico pra agregar contagem por (host, path)
+  const buildEventMap = (res: typeof leadsRes): Map<string, number> => {
+    const map = new Map<string, number>();
+    if (res.error || !res.data?.rows) return map;
+    for (const r of res.data.rows) {
       const host = r.dimensionValues?.[0]?.value || "";
       const path = r.dimensionValues?.[1]?.value || "/";
       const key = `${host.toLowerCase()}|${path}`;
       const count = Number(r.metricValues?.[0]?.value || 0);
-      leadMap.set(key, (leadMap.get(key) || 0) + count);
+      map.set(key, (map.get(key) || 0) + count);
     }
-    pages = pages.map((p) => {
-      const key = `${p.host.toLowerCase()}|${p.path}`;
-      const leadCount = leadMap.get(key) || 0;
-      return {
-        ...p,
-        leadCount,
-        leadConvRate: p.sessions > 0 ? leadCount / p.sessions : 0,
-      };
-    });
-  }
+    return map;
+  };
+
+  const leadMap = buildEventMap(leadsRes);
+  const ctaMap = buildEventMap(ctaRes);
+
+  pages = pages.map((p) => {
+    const key = `${p.host.toLowerCase()}|${p.path}`;
+    const leadCount = leadMap.get(key) || 0;
+    const ctaCount = ctaMap.get(key) || 0;
+    return {
+      ...p,
+      leadCount,
+      leadConvRate: p.sessions > 0 ? leadCount / p.sessions : 0,
+      ctaCount,
+      ctaConvRate: p.sessions > 0 ? ctaCount / p.sessions : 0,
+    };
+  });
 
   // 3. Breakdown de source/medium → landingPage (para o filtro "origens/mídias que
   // mais levam acesso para essas LPs"). Aplica mesmo hostFilter server-side.
@@ -230,6 +264,7 @@ export async function GET(req: NextRequest) {
       hostContains,
       hostsIn,
       leadEvent,
+      ctaEvent,
     },
     {
       headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=600" },
