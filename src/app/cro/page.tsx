@@ -15,6 +15,7 @@ import { useGA4, useGA4PagesDetail } from "@/lib/ga4-context";
 import { DataStatus } from "@/components/data-status";
 import { generateCROInsights, summarizeInsights, type CROInsight } from "@/lib/cro-engine";
 import { LPAnalyzer } from "@/components/lp-analyzer";
+import { CROProposalsBoard } from "@/components/cro-proposals-board";
 
 // Hash determinístico do propertyId — garante que ao trocar a propriedade,
 // os números (mock e derivações) mudem de forma estável (mesma propriedade
@@ -1392,6 +1393,14 @@ export default function CROPage() {
               </>
             )}
           </div>
+        </div>
+
+        {/* CRO Automation — propostas data-driven baseadas em 11 heurísticas.
+            Cards prioritários no topo + actions de aceitar (cria task Monday)
+            e descartar (persiste em Vercel KV).
+            Spec: docs/superpowers/specs/2026-06-04-cro-automation-design.md */}
+        <div className="mb-8">
+          <CROProposalsBoard />
         </div>
 
         {/* LP Analyzer — análise focada em conversão das LPs ativas
