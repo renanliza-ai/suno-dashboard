@@ -41,6 +41,7 @@ export async function GET(req: NextRequest) {
   const leadEvent = req.nextUrl.searchParams.get("leadEvent") || "generate_lead";
   const ctaEvent = req.nextUrl.searchParams.get("ctaEvent") || "cta_click";
   const limit = Number(req.nextUrl.searchParams.get("limit") || 100);
+  const comparePreviousPeriod = req.nextUrl.searchParams.get("comparePreviousPeriod") === "true";
 
   if (!propertyId) {
     return NextResponse.json({ error: "propertyId required" }, { status: 400 });
@@ -59,6 +60,30 @@ export async function GET(req: NextRequest) {
     startDateQ && endDateQ && /^\d{4}-\d{2}-\d{2}$/.test(startDateQ) && /^\d{4}-\d{2}-\d{2}$/.test(endDateQ)
       ? { startDate: startDateQ, endDate: endDateQ }
       : { startDate: `${days}daysAgo`, endDate: "today" };
+
+  // Calcula range do período ANTERIOR equivalente, quando comparePreviousPeriod=true.
+  // Usado pra detectar regressão semana-vs-semana no motor de CRO. Range deslocado
+  // pra trás pelo mesmo número de dias do range atual.
+  // CRO spec: docs/superpowers/specs/2026-06-04-cro-automation-design.md (3.2, 4.2)
+  let previousDateRange: { startDate: string; endDate: string } | null = null;
+  if (comparePreviousPeriod) {
+    const parseDate = (s: string): Date => {
+      if (/^(\d+)daysAgo$/.test(s)) {
+        const d = new Date();
+        d.setDate(d.getDate() - parseInt(s, 10));
+        return d;
+      }
+      if (s === "today") return new Date();
+      return new Date(s);
+    };
+    const start = parseDate(dateRange.startDate);
+    const end = parseDate(dateRange.endDate);
+    const diffMs = end.getTime() - start.getTime();
+    const prevEnd = new Date(start.getTime() - 24 * 60 * 60 * 1000); // 1 dia antes do start atual
+    const prevStart = new Date(prevEnd.getTime() - diffMs);
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    previousDateRange = { startDate: fmt(prevStart), endDate: fmt(prevEnd) };
+  }
 
   // Server-side filter — quando hostsIn presente, aplica inListFilter (OR de hostnames)
   // direto no GA4. Mais eficiente que filtrar client-side (evita corte por `limit`
@@ -151,8 +176,10 @@ export async function GET(req: NextRequest) {
   //    (regra Suno: conv = generate_lead / sessions)
   // 3. CTA conversions por landing page — métrica primária de LP que leva
   //    direto ao checkout (não tem formulário, conv = cta_click / sessions)
-  // Rodadas em paralelo pra economizar latência.
-  const [leadsRes, ctaRes] = await Promise.all([
+  // 4. (opcional) Período anterior — mesma query de pagesRes mas com range deslocado.
+  //    Usado pelo motor CRO pra detectar regressões. Só roda se solicitado.
+  // Todas em paralelo pra economizar latência.
+  const [leadsRes, ctaRes, previousRes] = await Promise.all([
     runReport(propertyId, {
       dateRanges: [dateRange],
       dimensions: [{ name: "hostName" }, { name: "landingPagePlusQueryString" }],
@@ -169,7 +196,37 @@ export async function GET(req: NextRequest) {
       limit: Math.max(limit, 200),
       dimensionFilter: buildEventFilter(ctaEvent),
     }),
+    previousDateRange
+      ? runReport(propertyId, {
+          dateRanges: [previousDateRange],
+          dimensions: [{ name: "hostName" }, { name: "landingPagePlusQueryString" }],
+          metrics: [
+            { name: "totalUsers" },
+            { name: "sessions" },
+            { name: "engagedSessions" },
+            { name: "averageSessionDuration" },
+            { name: "bounceRate" },
+          ],
+          orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+          limit,
+          ...(hostFilter ? { dimensionFilter: hostFilter } : {}),
+        })
+      : Promise.resolve({ data: null, error: null }),
   ]);
+
+  // Lead/CTA do PERÍODO ANTERIOR — só se comparePreviousPeriod=true. Roda em
+  // separado pra evitar muitas requests paralelas pra GA4 (limite RPS).
+  let previousLeadsRes: typeof leadsRes = { data: null, error: null };
+  if (previousDateRange) {
+    previousLeadsRes = await runReport(propertyId, {
+      dateRanges: [previousDateRange],
+      dimensions: [{ name: "hostName" }, { name: "landingPagePlusQueryString" }],
+      metrics: [{ name: "eventCount" }],
+      orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
+      limit: Math.max(limit, 200),
+      dimensionFilter: buildEventFilter(leadEvent),
+    });
+  }
 
   // Helper genérico pra agregar contagem por (host, path)
   const buildEventMap = (res: typeof leadsRes): Map<string, number> => {
@@ -200,6 +257,37 @@ export async function GET(req: NextRequest) {
       ctaConvRate: p.sessions > 0 ? ctaCount / p.sessions : 0,
     };
   });
+
+  // Constrói pagesPrevious[] com mesmo schema, se comparePreviousPeriod foi pedido.
+  // Inclui leadCount/leadConvRate do período anterior pra motor CRO detectar
+  // regressões. Sem ctaCount (não precisa pro regression-week rule, simplifica).
+  let pagesPrevious: typeof pages = [];
+  if (previousRes.data?.rows) {
+    const previousLeadMap = buildEventMap(previousLeadsRes);
+    pagesPrevious = previousRes.data.rows.map((r) => {
+      const host = r.dimensionValues?.[0]?.value || "(sem host)";
+      const path = r.dimensionValues?.[1]?.value || "/";
+      const sessions = Number(r.metricValues?.[1]?.value || 0);
+      const engagedSessions = Number(r.metricValues?.[2]?.value || 0);
+      const key = `${host.toLowerCase()}|${path}`;
+      const leadCount = previousLeadMap.get(key) || 0;
+      return {
+        host,
+        path,
+        url: `${host}${path}`,
+        users: Number(r.metricValues?.[0]?.value || 0),
+        sessions,
+        engagedSessions,
+        engagementRate: sessions > 0 ? engagedSessions / sessions : 0,
+        avgSessionDuration: Number(r.metricValues?.[3]?.value || 0),
+        bounceRate: Number(r.metricValues?.[4]?.value || 0),
+        leadCount,
+        leadConvRate: sessions > 0 ? leadCount / sessions : 0,
+        ctaCount: 0,
+        ctaConvRate: 0,
+      };
+    });
+  }
 
   // 3. Breakdown de source/medium → landingPage (para o filtro "origens/mídias que
   // mais levam acesso para essas LPs"). Aplica mesmo hostFilter server-side.
@@ -258,6 +346,7 @@ export async function GET(req: NextRequest) {
     {
       propertyId, // anti race-condition
       pages,
+      pagesPrevious, // [] se comparePreviousPeriod=false
       sourceBreakdown: filteredSourceRows,
       topSources,
       days,
@@ -265,6 +354,8 @@ export async function GET(req: NextRequest) {
       hostsIn,
       leadEvent,
       ctaEvent,
+      comparePreviousPeriod,
+      previousDateRange,
     },
     {
       headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=600" },
