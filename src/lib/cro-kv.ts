@@ -60,11 +60,15 @@ export async function listProposalStates(
     const pattern = `cro:proposal:${safePid}:*`;
     const keys: string[] = [];
     let cursor: number | string = 0;
-    do {
-      const res = await kv.scan(cursor, { match: pattern, count: 200 });
+    while (true) {
+      const res: [string | number, string[]] = await kv.scan(cursor, {
+        match: pattern,
+        count: 200,
+      });
       cursor = res[0];
       keys.push(...res[1]);
-    } while (cursor !== 0 && cursor !== "0");
+      if (cursor === 0 || cursor === "0") break;
+    }
 
     if (keys.length === 0) return [];
 
