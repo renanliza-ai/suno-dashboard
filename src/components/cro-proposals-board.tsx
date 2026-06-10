@@ -168,8 +168,14 @@ export function CROProposalsBoard() {
     try {
       // 1. Cria task no Monday
       const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
+      // URL completa da LP com protocolo — o time precisa abrir a página
+      // direto da task pra aplicar o teste. p.lp.url vem do GA4 sem https://.
+      const lpFullUrl = /^https?:\/\//i.test(p.lp.url) ? p.lp.url : `https://${p.lp.url}`;
       const description = [
-        `**LP:** \`${p.lp.url}\``,
+        `## 🔗 Página do teste`,
+        `**[${p.lp.url}](${lpFullUrl})**`,
+        `URL: ${lpFullUrl}`,
+        ``,
         `**Prioridade:** ${p.priority}`,
         ``,
         `### Hipótese`,

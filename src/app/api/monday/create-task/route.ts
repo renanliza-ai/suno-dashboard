@@ -302,10 +302,17 @@ export async function POST(req: NextRequest) {
   // ====================================================================
   const lines: string[] = [];
 
-  // Página analisada — link clicável no topo do markdown
-  if (ins.pageUrl && ins.pageRef) {
+  // Página analisada — link clicável no topo do markdown.
+  // Renderiza com pageUrl sozinho (pageRef vira fallback do próprio URL) —
+  // o time SEMPRE precisa saber em qual página aplicar o teste. URLs do GA4
+  // vêm sem protocolo (host/path), então normalizamos pra https:// aqui,
+  // no único ponto de saída pro Monday.
+  if (ins.pageUrl) {
+    const fullUrl = /^https?:\/\//i.test(ins.pageUrl) ? ins.pageUrl : `https://${ins.pageUrl}`;
+    const label = ins.pageRef || ins.pageUrl;
     lines.push("## 🔗 Página analisada");
-    lines.push(`**[${ins.pageRef}](${ins.pageUrl})**`);
+    lines.push(`**[${label}](${fullUrl})**`);
+    lines.push(`URL: ${fullUrl}`);
     if (ins.framework) lines.push(`_Framework aplicado: **${ins.framework}**_`);
     lines.push("");
   }

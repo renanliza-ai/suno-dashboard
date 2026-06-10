@@ -93,6 +93,17 @@ const BENCHMARKS = {
 // Detecta tipo de página (pra ajustar benchmark/hipótese)
 // ============================================================
 
+/**
+ * URL completa clicável da página. O GA4 (pages-detail) devolve `url` como
+ * `${host}${path}` SEM protocolo — usado como href direto, o browser trata
+ * como caminho relativo e quebra (e o link no Monday sai inválido).
+ * Este é o único ponto que monta pageUrl, então normaliza https:// pra todos.
+ */
+function fullPageUrl(page: { url?: string; host?: string; path: string }): string {
+  const raw = page.url || `${page.host || ""}${page.path}`;
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+
 function classifyPage(path: string): "lp" | "home" | "asset" | "checkout" | "logged" | "content" | "other" {
   const p = path.toLowerCase();
   if (p.startsWith("/lp/") || p.includes("/landing") || p.includes("/oferta") || p.includes("/aplicacao")) return "lp";
@@ -175,7 +186,7 @@ const rules: ((ctx: RuleCtx) => CROInsight | null)[] = [
       category: "Mensagem",
       priority: "Alta",
       page: page.path,
-      pageUrl: page.url || `https://${page.host}${page.path}`,
+      pageUrl: fullPageUrl(page),
       detectedFrom: `bounce ${page.bounceRate.toFixed(1)}% (crítico >75%) com ${page.views.toLocaleString("pt-BR")} pageviews`,
       metric: { name: "bounceRate", value: page.bounceRate, threshold: BENCHMARKS.bounceRate.critical, unit: "%" },
       hypothesis: `Bounce ${page.bounceRate.toFixed(0)}% indica desalinhamento entre origem de tráfego e mensagem da página. Ajustar headline pra prometer exatamente o que o anúncio/canal vendeu deve trazer bounce pra <60%.`,
@@ -216,7 +227,7 @@ const rules: ((ctx: RuleCtx) => CROInsight | null)[] = [
       category: "UX/CTA",
       priority: "Alta",
       page: page.path,
-      pageUrl: page.url || `https://${page.host}${page.path}`,
+      pageUrl: fullPageUrl(page),
       detectedFrom: `sessão média ${Math.floor(page.avgSessionDuration / 60)}m${page.avgSessionDuration % 60}s + engajamento/user ${page.engagementPerUser.toFixed(0)}s mas exit ${page.exitRate.toFixed(0)}%`,
       metric: { name: "avgSessionDuration", value: page.avgSessionDuration, threshold: BENCHMARKS.avgSessionSec.good, unit: "s" },
       hypothesis: `Usuário lê o conteúdo (sessão alta) mas não vê CTA forte ou não percebe o próximo passo claro. Reposicionar CTA + adicionar sticky bottom bar deve elevar CTR sem prejudicar engajamento.`,
@@ -254,7 +265,7 @@ const rules: ((ctx: RuleCtx) => CROInsight | null)[] = [
       category: "Conteúdo",
       priority: "Média",
       page: page.path,
-      pageUrl: page.url || `https://${page.host}${page.path}`,
+      pageUrl: fullPageUrl(page),
       detectedFrom: `sessão média ${page.avgSessionDuration}s com bounce ok (${page.bounceRate.toFixed(0)}%) — usuário chega mas não fica`,
       metric: { name: "avgSessionDuration", value: page.avgSessionDuration, threshold: BENCHMARKS.avgSessionSec.poor, unit: "s" },
       hypothesis: `Conteúdo não está respondendo à intenção do visitante na primeira tela. Falta resposta direta à pergunta que ele veio buscar — value prop pode estar enterrada.`,
@@ -292,7 +303,7 @@ const rules: ((ctx: RuleCtx) => CROInsight | null)[] = [
       category: "UX/CTA",
       priority: "Alta",
       page: page.path,
-      pageUrl: page.url || `https://${page.host}${page.path}`,
+      pageUrl: fullPageUrl(page),
       detectedFrom: `página de ativo com bounce ${page.bounceRate.toFixed(0)}% (>60%) e ${page.views.toLocaleString("pt-BR")} pageviews`,
       metric: { name: "bounceRate", value: page.bounceRate, threshold: BENCHMARKS.bounceRate.warning, unit: "%" },
       hypothesis: `Página de ativo com bounce alto sinaliza que oferta/preço não estão claros above-the-fold. Visitante busca dado rápido (yield, rentabilidade, ticker) e desiste se não acha em 5s.`,
@@ -331,7 +342,7 @@ const rules: ((ctx: RuleCtx) => CROInsight | null)[] = [
       category: "Funil",
       priority: "Alta",
       page: page.path,
-      pageUrl: page.url || `https://${page.host}${page.path}`,
+      pageUrl: fullPageUrl(page),
       detectedFrom: `bounce ${page.bounceRate.toFixed(0)}% em LP de captação (benchmark Suno: <55% pra LP de lead)`,
       metric: { name: "bounceRate", value: page.bounceRate, threshold: 55, unit: "%" },
       hypothesis: `LP de captação Suno deveria ficar com bounce <55% (gerar generate_lead). Acima disso, geralmente formulário longo demais ou prova social ausente. Reduzir campos do form + adicionar 2 logos de impressa parceiras eleva conversão.`,
@@ -369,7 +380,7 @@ const rules: ((ctx: RuleCtx) => CROInsight | null)[] = [
       category: "Retenção",
       priority: "Média",
       page: page.path,
-      pageUrl: page.url || `https://${page.host}${page.path}`,
+      pageUrl: fullPageUrl(page),
       detectedFrom: `exit rate ${page.exitRate.toFixed(0)}% (>70%) em conteúdo — visitante sai sem continuar jornada`,
       metric: { name: "exitRate", value: page.exitRate, threshold: BENCHMARKS.exitRate.warning, unit: "%" },
       hypothesis: `Conteúdo entrega valor mas não tem ponte pro próximo passo. Adicionar "Conteúdos relacionados" + 1 CTA contextual reduz exit ≥10pp.`,
@@ -407,7 +418,7 @@ const rules: ((ctx: RuleCtx) => CROInsight | null)[] = [
       category: "UX/CTA",
       priority: "Alta",
       page: page.path,
-      pageUrl: page.url || `https://${page.host}${page.path}`,
+      pageUrl: fullPageUrl(page),
       detectedFrom: `engajamento/user ${page.engagementPerUser.toFixed(0)}s (<25s) — visitantes não exploram a home`,
       metric: { name: "engagementPerUser", value: page.engagementPerUser, threshold: BENCHMARKS.engagementPerUser.poor, unit: "s" },
       hypothesis: `Home com <25s de engajamento por usuário sinaliza navegação confusa ou IA visual quebrada. Visitante não acha o que procura e desiste.`,
@@ -445,7 +456,7 @@ const rules: ((ctx: RuleCtx) => CROInsight | null)[] = [
       category: "Mensagem",
       priority: "Média",
       page: page.path,
-      pageUrl: page.url || `https://${page.host}${page.path}`,
+      pageUrl: fullPageUrl(page),
       detectedFrom: `bounce ${page.bounceRate.toFixed(0)}% (saudável) + sessão ${Math.floor(page.avgSessionDuration / 60)}min — página é "winner"`,
       metric: { name: "bounceRate", value: page.bounceRate, threshold: BENCHMARKS.bounceRate.good, unit: "%" },
       hypothesis: `Página já converte/engaja acima da média. Aumentar investimento de mídia direcionando pra ela tem ROI mais previsível que otimizar página problemática.`,
