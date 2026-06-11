@@ -77,6 +77,21 @@ export const GEMINI_FUNCTION_DECLARATIONS = [
       required: [],
     },
   },
+  {
+    name: "explore_data",
+    description:
+      "Exploração genérica do GA4: cruza UMA dimensão com até DUAS métricas. Use quando nenhuma outra ferramenta cobre — ex.: breakdown por dispositivo, país, cidade, navegador, sistema operacional, novo vs recorrente, ou contagem de um evento específico. Dimensões: eventName, sessionDefaultChannelGroup, deviceCategory, country, city, operatingSystem, browser, sessionSource, sessionMedium, sessionCampaignName, pagePath, hostName, newVsReturning. Métricas: eventCount, totalUsers, activeUsers, sessions, engagedSessions, eventValue, averageSessionDuration, bounceRate, screenPageViews, userEngagementDuration.",
+    parameters: {
+      type: "OBJECT",
+      properties: {
+        dimension: { type: "STRING", description: "Uma das dimensões listadas (ex.: deviceCategory)" },
+        metric: { type: "STRING", description: "Métrica principal (ex.: sessions)" },
+        metric2: { type: "STRING", description: "Métrica secundária opcional (ex.: totalUsers)" },
+        eventFilter: { type: "STRING", description: "Substring pra filtrar por nome de evento (ex.: 'purchase')" },
+      },
+      required: ["dimension", "metric"],
+    },
+  },
 ];
 
 // ---------- Helpers ----------
@@ -213,6 +228,36 @@ export async function executeChatTool(
             : { totals: g.totals, campaigns: Array.isArray(g.campaigns) ? (g.campaigns as unknown[]).slice(0, 10) : undefined };
         }
         return out;
+      }
+
+      case "explore_data": {
+        const dimension = String(args.dimension || "eventName");
+        const metric = String(args.metric || "sessions");
+        const qs = new URLSearchParams({
+          propertyId: ctx.propertyId,
+          dimension,
+          metric,
+        });
+        if (args.metric2) qs.set("metric2", String(args.metric2));
+        if (args.eventFilter) qs.set("eventFilter", String(args.eventFilter));
+        if (ctx.startDate && ctx.endDate) {
+          qs.set("startDate", ctx.startDate);
+          qs.set("endDate", ctx.endDate);
+        } else {
+          qs.set("days", String(ctx.days));
+        }
+        const d = (await internalFetch(ctx, `/api/eventos/explorer?${qs.toString()}`)) as {
+          rows?: Array<Record<string, unknown>>;
+          totals?: unknown;
+          error?: string;
+        };
+        if (d.error) return { error: d.error };
+        return {
+          dimension,
+          metric,
+          totals: d.totals,
+          rows: (d.rows || []).slice(0, 25),
+        };
       }
 
       default:

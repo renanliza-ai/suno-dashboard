@@ -3735,12 +3735,36 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const currentLive = liveRef.current;
       const intent = detectIntent(text, currentLive);
 
-      // Caso async: FALLBACK IA (chat híbrido). Pergunta que nenhum intent
-      // regex reconheceu vai pro Gemini com function calling sobre os dados
-      // do painel. Só quando há property selecionada — sem property, deixa
-      // cair no fluxo local (que orienta a selecionar).
+      // Caso async: FALLBACK IA (chat híbrido). Vai pro Gemini com function
+      // calling sobre os dados do painel quando:
+      //  (a) nenhum intent regex reconheceu a pergunta ("unknown"), OU
+      //  (b) o intent reconhecido respondia SÓ MOCK hardcoded — auditoria de
+      //      jun/2026 achou 16 cases com tabelas fake que nunca mudavam
+      //      independente da property (caso real: Renan na Statusinvest
+      //      recebendo canais/LPs/receita da Suno). Dado real via tools
+      //      (incl. explore_data p/ device, país, browser) > mentira bonita.
+      // Só quando há property selecionada — sem property, cai no fluxo local.
       // Spec: docs/superpowers/specs/2026-06-11-chat-gemini-hybrid-design.md
-      if (intent === "unknown" && selectedId) {
+      const GEMINI_ROUTED_INTENTS: Intent[] = [
+        "unknown",
+        "drop_analysis",
+        "upsell",
+        "best_channel",
+        "worst_channel",
+        "revenue",
+        "device_mobile",
+        "device_desktop",
+        "channel_organic",
+        "channel_paid",
+        "pages_top",
+        "events_analysis",
+        "compare",
+        "country_breakdown",
+        "seo_performance",
+        "campaigns_performance",
+        "benchmark",
+      ];
+      if (GEMINI_ROUTED_INTENTS.includes(intent) && selectedId) {
         try {
           appendLog({
             id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
