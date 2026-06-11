@@ -3316,6 +3316,12 @@ function handleIntent(
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<ChatMessage[]>([defaultWelcome]);
+  // Ref espelhando messages — usado pra montar o histórico multi-turno do
+  // Gemini sem stale closure no sendMessage (que não depende de messages).
+  const messagesRef = useRef<ChatMessage[]>([defaultWelcome]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   const [filter, setFilter] = useState<Filter>("all");
   const [highlight, setHighlight] = useState<HighlightTarget>(null);
   const [compareMode, setCompareMode] = useState(false);
@@ -3741,6 +3747,88 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const currentLive = liveRef.current;
       const intent = detectIntent(text, currentLive);
 
+      // Caso async: FALLBACK IA (chat híbrido). Pergunta que nenhum intent
+      // regex reconheceu vai pro Gemini com function calling sobre os dados
+      // do painel. Só quando há property selecionada — sem property, deixa
+      // cair no fluxo local (que orienta a selecionar).
+      // Spec: docs/superpowers/specs/2026-06-11-chat-gemini-hybrid-design.md
+      if (intent === "unknown" && selectedId) {
+        try {
+          appendLog({
+            id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+            text,
+            timestamp: now,
+            userEmail: session?.user?.email || "anon",
+            userName: session?.user?.name || "Anônimo",
+            account: selected?.displayName || "—",
+            page: typeof window !== "undefined" ? window.location.pathname : "/",
+            intent: "gemini_fallback",
+          });
+        } catch {}
+
+        const placeholderTs = Date.now();
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: "🧠 Deixa eu consultar os dados pra te responder... (leva uns segundos)",
+            timestamp: placeholderTs,
+          },
+        ]);
+
+        // Histórico recente (sem o placeholder) pro multi-turno
+        const history = messagesRef.current
+          .slice(-10)
+          .map((m) => ({ role: m.role, content: m.content }));
+
+        fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: text,
+            history,
+            context: {
+              propertyId: selectedId,
+              propertyName: selected?.displayName || "",
+              days: currentLive.days || days,
+            },
+          }),
+        })
+          .then((r) => r.json())
+          .then((d: { reply?: string; friendly?: string }) => {
+            const content =
+              d.reply ||
+              d.friendly ||
+              "⚠ Não consegui processar. Tenta reformular a pergunta.";
+            setMessages((prev) => {
+              const withoutPlaceholder = prev.filter(
+                (m) => !(m.role === "assistant" && m.timestamp === placeholderTs)
+              );
+              return [
+                ...withoutPlaceholder,
+                { role: "assistant", content, timestamp: Date.now() },
+              ];
+            });
+          })
+          .catch(() => {
+            setMessages((prev) => {
+              const withoutPlaceholder = prev.filter(
+                (m) => !(m.role === "assistant" && m.timestamp === placeholderTs)
+              );
+              return [
+                ...withoutPlaceholder,
+                {
+                  role: "assistant",
+                  content:
+                    "⚠ O assistente de IA está indisponível agora. Tenta as perguntas rápidas do menu.",
+                  timestamp: Date.now(),
+                },
+              ];
+            });
+          });
+        return;
+      }
+
       // Caso async: ranking de LPs por leads — fetch dedicado ao GA4,
       // mesmo padrão do WhatsApp widget (placeholder → resposta real).
       if (intent === "lp_leads_ranking") {
@@ -3876,7 +3964,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
       }, 500);
     },
-    [attribution, filter, showToast, session, selected, handleLPLeadsRanking, handleWhatsAppWidget]
+    [attribution, filter, showToast, session, selected, selectedId, days, handleLPLeadsRanking, handleWhatsAppWidget]
   );
 
   const clearHighlight = useCallback(() => setHighlight(null), []);
