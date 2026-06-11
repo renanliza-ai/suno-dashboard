@@ -65,6 +65,10 @@ type Recommendation = {
   testWindow: string;
   rollback: string;
   affectedSegments: string[];
+  // Página real que disparou a rec (quando aplicável) — vai pro link
+  // clicável da task Monday. SEMPRE com https:// (time abre direto).
+  pageRef?: string;
+  pageUrl?: string;
   // Score interno pra ordenação
   _iceScore: number;
 };
@@ -222,6 +226,8 @@ export async function GET(req: NextRequest) {
       testWindow: "A/B 50/50 por 14 dias (mín. 4.000 sessões/variante)",
       rollback: "Reverter se bounceRate piorar 5pp ou conversão cair >3%",
       affectedSegments: [`Visitantes de ${p.path} (todos os canais)`],
+      pageRef: p.path,
+      pageUrl: `https://${p.host}${p.path}`,
       _iceScore: (impactValue || impactPct * 10) / (p.sessions > 1000 ? 1 : 2),
     });
   }
@@ -265,6 +271,8 @@ export async function GET(req: NextRequest) {
       testWindow: "A/B 50/50 por 14 dias",
       rollback: "Remover CTA se tempo médio cair ≥15% ou bounce subir >5pp",
       affectedSegments: [`Leitores de ${longestEngaged.path}`],
+      pageRef: longestEngaged.path,
+      pageUrl: `https://${longestEngaged.host}${longestEngaged.path}`,
       _iceScore: leadsEstimate * 2,
     });
   }
@@ -307,6 +315,8 @@ export async function GET(req: NextRequest) {
       testWindow: "A/B 50/50 por 14 dias",
       rollback: "Reverter se tempo médio não subir >50% ou bounce subir >3pp",
       affectedSegments: [`Tráfego de ${lowTimeHighVol.path}`],
+      pageRef: lowTimeHighVol.path,
+      pageUrl: `https://${lowTimeHighVol.host}${lowTimeHighVol.path}`,
       _iceScore: lowTimeHighVol.sessions * 0.05,
     });
   }

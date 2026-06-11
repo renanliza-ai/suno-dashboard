@@ -941,6 +941,8 @@ export default function CROPage() {
     testWindow: string;
     rollback: string;
     affectedSegments: string[];
+    pageRef?: string;
+    pageUrl?: string;
   };
 
   const [apiRecs, setApiRecs] = useState<ApiRecommendation[] | null>(null);
@@ -1093,6 +1095,9 @@ export default function CROPage() {
         testWindow: r.testWindow,
         rollback: r.rollback,
         affectedSegments: r.affectedSegments,
+        // Link da página real — vai pro Monday e pro painel
+        pageRef: r.pageRef,
+        pageUrl: r.pageUrl,
       }));
     }
 
