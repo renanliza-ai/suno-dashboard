@@ -411,6 +411,7 @@ type Intent =
   | "lp_lookup" // "como está a LP X", "quantas sessões na url Y" — busca métricas de página específica
   | "logged_area_analysis" // "NAI", "área logada", "investidor.suno.com.br" — análise completa do subdomínio investidor.*
   | "whatsapp_widget_pages" // "páginas com widget de WhatsApp + acessos em 90d"
+  | "lp_leads_ranking" // "quais LPs geraram mais leads" — ranking FACTUAL, liberado pra todos (fetch ao vivo)
   | "smalltalk" // "tudo bem?", "oi chat"
   | "unknown";
 
@@ -544,6 +545,16 @@ function detectIntent(text: string, live: LiveData = EMPTY_LIVE): Intent {
     return "peak_hours";
   if (has("retenção", "retencao", "ltv", "lifetime value", "valor vida útil", "valor vida util"))
     return "retention_ltv";
+  // FACTUAL e liberado pra todos: ranking de LPs por leads gerados.
+  // Tem precedência sobre landing_performance (master-only) porque
+  // "quais LPs geraram mais leads" é consulta de número puro, não
+  // recomendação estratégica. Caso real: Ricardo perguntou isso e foi
+  // bloqueado indevidamente pelo gating Master (jun/2026).
+  if (
+    has("lp", "landing", "lead magnet") &&
+    has("lead", "leads", "captou", "capturou", "capturaram", "gerou", "geraram", "captação", "captacao")
+  )
+    return "lp_leads_ranking";
   if (
     has("landing", "lp", "melhor lp", "melhor landing") &&
     !has("criar", "exportar", "baixar")
@@ -3588,6 +3599,140 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [selectedId, selected]
   );
 
+  /**
+   * Handler async pra intent "lp_leads_ranking" — ranking FACTUAL de LPs
+   * por leads gerados (generate_lead). Liberado pra TODOS os perfis
+   * (não é recomendação estratégica, é número puro).
+   *
+   * Usa /api/ga4/landing-pages com hostsIn resolvido pela property:
+   * Suno Research → lp.suno.com.br + lp2.suno.com.br
+   * Statusinvest  → lp.statusinvest.com.br + lp2.statusinvest.com.br
+   *
+   * Agrega variantes com querystring no mesmo path base.
+   */
+  const handleLPLeadsRanking = useCallback(
+    async (text: string): Promise<IntentResult> => {
+      const propId = selectedId;
+      const propName = selected?.displayName || "";
+      const lt = text.toLowerCase();
+
+      // Resolve hosts de LP pela property (mesmo mapa do LP Analyzer)
+      const lower = propName.toLowerCase();
+      let hosts: string[] | null = null;
+      if (lower.includes("suno")) hosts = ["lp.suno.com.br", "lp2.suno.com.br"];
+      else if (lower.includes("status")) hosts = ["lp.statusinvest.com.br", "lp2.statusinvest.com.br"];
+
+      // Janela: "2 meses"=60d, "3 meses"=90d, "30 dias"=30, "6 meses"=180. Default 90.
+      let days = 90;
+      if (lt.match(/30\s*(dias|d)\b/)) days = 30;
+      else if (lt.match(/60\s*(dias|d)\b/) || lt.match(/2\s*m[eê]s/)) days = 60;
+      else if (lt.match(/180\s*(dias|d)\b/) || lt.match(/6\s*m[eê]s/)) days = 180;
+      else if (lt.match(/3\s*m[eê]s/)) days = 90;
+      else if (lt.match(/7\s*(dias|d)\b/) || lt.includes("semana")) days = 7;
+
+      // Top N: "5 lps", "top 10", "10 lps". Default 10, máx 25.
+      let topN = 10;
+      const nMatch = lt.match(/(?:top\s*)?(\d{1,2})\s*(?:lps?|landing|p[áa]ginas)/) || lt.match(/top\s*(\d{1,2})/);
+      if (nMatch) topN = Math.min(25, Math.max(3, parseInt(nMatch[1], 10)));
+
+      if (!propId) {
+        return {
+          reply: "🎭 Selecione uma propriedade GA4 no header pra eu buscar o ranking de LPs por leads.",
+          followUps: ["Como estamos hoje de sessões no site?"],
+        };
+      }
+      if (!hosts) {
+        return {
+          reply: `⚠ A propriedade **${propName}** não tem hostnames de LP mapeados. Hoje suporto Suno Research (lp.suno.com.br) e Statusinvest (lp.statusinvest.com.br).`,
+          followUps: ["Como estamos hoje de sessões no site?"],
+        };
+      }
+
+      try {
+        const qs = new URLSearchParams({
+          propertyId: propId,
+          hostsIn: hosts.join(","),
+          days: String(days),
+          leadEvent: "generate_lead",
+          limit: "500",
+        });
+        const resp = await fetch(`/api/ga4/landing-pages?${qs.toString()}`);
+        const d = (await resp.json()) as {
+          pages?: { host: string; path: string; users: number; sessions: number; engagedSessions: number; leadCount: number }[];
+          error?: string;
+        };
+        if (d.error) {
+          return {
+            reply: `⚠ O GA4 retornou erro ao buscar LPs: ${d.error}.`,
+            followUps: ["Como estamos hoje de sessões no site?"],
+          };
+        }
+
+        // Agrega variantes com querystring no path base
+        const byPath = new Map<string, { users: number; sessions: number; engaged: number; leads: number }>();
+        for (const p of d.pages || []) {
+          const base = p.path.split("?")[0];
+          const cur = byPath.get(base) || { users: 0, sessions: 0, engaged: 0, leads: 0 };
+          cur.users += p.users;
+          cur.sessions += p.sessions;
+          cur.engaged += p.engagedSessions;
+          cur.leads += p.leadCount;
+          byPath.set(base, cur);
+        }
+
+        const ranked = Array.from(byPath.entries())
+          .map(([path, m]) => ({ path, ...m }))
+          .filter((r) => r.leads > 0)
+          .sort((a, b) => b.leads - a.leads)
+          .slice(0, topN);
+
+        if (ranked.length === 0) {
+          return {
+            reply: `🤔 Nenhuma LP de **${hosts.join(" / ")}** disparou \`generate_lead\` nos últimos ${days} dias em **${propName}**. Pode ser período sem campanhas ativas ou problema de tracking nos formulários.`,
+            followUps: ["Quais páginas têm mais acesso?", "Como estão as vendas hoje?"],
+          };
+        }
+
+        const totalLeads = ranked.reduce((a, r) => a + r.leads, 0);
+        return {
+          reply: `🏆 **Top ${ranked.length} LPs por leads gerados** em **${propName}** (últimos ${days} dias · hosts: ${hosts.join(" + ")}). Total no ranking: **${formatCompact(totalLeads)} leads**.`,
+          rich: [
+            {
+              type: "table",
+              columns: ["#", "LP", "Usuários", "Sessões", "Sessões eng.", "Leads", "Tx conv"],
+              rows: ranked.map((r, i) => [
+                `${i + 1}`,
+                r.path,
+                formatCompact(r.users),
+                formatCompact(r.sessions),
+                formatCompact(r.engaged),
+                formatCompact(r.leads),
+                r.sessions > 0 ? `${((r.leads / r.sessions) * 100).toFixed(1)}%` : "—",
+              ]),
+            },
+            {
+              type: "insight",
+              severity: "info",
+              title: "Líder do ranking",
+              body: `${ranked[0].path} gerou ${formatCompact(ranked[0].leads)} leads com taxa de ${ranked[0].sessions > 0 ? ((ranked[0].leads / ranked[0].sessions) * 100).toFixed(1) : "0"}% sobre ${formatCompact(ranked[0].sessions)} sessões.`,
+            },
+          ],
+          followUps: [
+            "Quais as origens dessas LPs?",
+            "Como estão as vendas hoje?",
+            "Quais páginas têm mais acesso?",
+          ],
+        };
+      } catch (e) {
+        return {
+          reply: `⚠ Não consegui consultar o GA4 nesse momento. Erro: ${(e as Error).message}. Tenta de novo em alguns segundos.`,
+          followUps: ["Como estamos hoje de sessões no site?"],
+        };
+      }
+    },
+    [selectedId, selected]
+  );
+
   const sendMessage = useCallback(
     (text: string) => {
       const now = Date.now();
@@ -3595,6 +3740,52 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       const currentLive = liveRef.current;
       const intent = detectIntent(text, currentLive);
+
+      // Caso async: ranking de LPs por leads — fetch dedicado ao GA4,
+      // mesmo padrão do WhatsApp widget (placeholder → resposta real).
+      if (intent === "lp_leads_ranking") {
+        try {
+          appendLog({
+            id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+            text,
+            timestamp: now,
+            userEmail: session?.user?.email || "anon",
+            userName: session?.user?.name || "Anônimo",
+            account: selected?.displayName || "—",
+            page: typeof window !== "undefined" ? window.location.pathname : "/",
+            intent,
+          });
+        } catch {}
+
+        const placeholderTs = Date.now();
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: `🔎 Cruzando LPs com eventos generate_lead no GA4... isso leva 2-4 segundos.`,
+            timestamp: placeholderTs,
+          },
+        ]);
+
+        handleLPLeadsRanking(text).then((result) => {
+          setMessages((prev) => {
+            const withoutPlaceholder = prev.filter(
+              (m) => !(m.role === "assistant" && m.timestamp === placeholderTs)
+            );
+            return [
+              ...withoutPlaceholder,
+              {
+                role: "assistant",
+                content: result.reply,
+                timestamp: Date.now(),
+                rich: result.rich,
+                followUps: result.followUps,
+              },
+            ];
+          });
+        });
+        return;
+      }
 
       // Caso async: WhatsApp widget precisa de fetch dedicado (90d). Resolvemos
       // com placeholder "Buscando..." e depois substituímos pela resposta real.
@@ -3685,7 +3876,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
       }, 500);
     },
-    [attribution, filter, showToast, session, selected]
+    [attribution, filter, showToast, session, selected, handleLPLeadsRanking, handleWhatsAppWidget]
   );
 
   const clearHighlight = useCallback(() => setHighlight(null), []);
