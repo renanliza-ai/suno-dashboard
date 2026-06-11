@@ -2984,29 +2984,16 @@ function handleIntent(
       };
 
     case "landing_performance":
+      // ⚠ MOCK REMOVIDO (jun/2026): este case respondia tabela hardcoded
+      // (/lp/premium-30 etc) pra QUALQUER property — Renan na Statusinvest
+      // recebia LPs fake da Suno. O sendMessage agora intercepta este intent
+      // ANTES de chegar aqui e roteia pro handleLPLeadsRanking (dados reais
+      // do GA4 da property selecionada). Este fallback só dispara se algum
+      // caminho chamar handleIntent diretamente.
       return {
-        reply: "Ranking das LPs — performance das últimas 30 dias:",
-        newHighlight: "pages",
-        rich: [
-          {
-            type: "table",
-            columns: ["LP", "Sessões", "Taxa conv.", "Receita"],
-            rows: [
-              ["/lp/premium-30", "38.4k", "1.93%", "R$ 118k"],
-              ["/lp/carteira-plus", "24.1k", "1.42%", "R$ 58k"],
-              ["/lp/renda-fixa", "18.7k", "0.84%", "R$ 22k"],
-              ["/lp/fiis-mensais", "14.2k", "1.18%", "R$ 28k"],
-              ["/lp/consultoria", "8.9k", "2.14%", "R$ 42k"],
-            ],
-          },
-          {
-            type: "insight",
-            severity: "success",
-            title: "/lp/consultoria tem a melhor taxa (2.14%)",
-            body: "Baixo volume mas alta qualificação. Escalar investimento em paid search + retargeting pode dobrar volume sem perder conversão.",
-          },
-        ],
-        followUps: ["Analisa /lp/premium-30", "Campanhas ROAS", "Baixar top páginas"],
+        reply:
+          "🔎 Pra ranking real de LPs da propriedade selecionada, pergunta: **\"quais LPs geraram mais leads?\"** — eu busco direto no GA4.",
+        followUps: ["Quais LPs geraram mais leads?", "Como estamos hoje de sessões no site?"],
       };
 
     case "seo_performance":
@@ -3674,20 +3661,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           };
         }
 
-        // Agrega variantes com querystring no path base
-        const byPath = new Map<string, { users: number; sessions: number; engaged: number; leads: number }>();
+        // Agrega variantes com querystring no path base — POR HOST, pra LP
+        // homônima em lp e lp2 não se misturar e a URL completa sair certa.
+        const byPath = new Map<string, { host: string; path: string; users: number; sessions: number; engaged: number; leads: number }>();
         for (const p of d.pages || []) {
           const base = p.path.split("?")[0];
-          const cur = byPath.get(base) || { users: 0, sessions: 0, engaged: 0, leads: 0 };
+          const key = `${p.host}${base}`;
+          const cur = byPath.get(key) || { host: p.host, path: base, users: 0, sessions: 0, engaged: 0, leads: 0 };
           cur.users += p.users;
           cur.sessions += p.sessions;
           cur.engaged += p.engagedSessions;
           cur.leads += p.leadCount;
-          byPath.set(base, cur);
+          byPath.set(key, cur);
         }
 
-        const ranked = Array.from(byPath.entries())
-          .map(([path, m]) => ({ path, ...m }))
+        const ranked = Array.from(byPath.values())
           .filter((r) => r.leads > 0)
           .sort((a, b) => b.leads - a.leads)
           .slice(0, topN);
@@ -3705,10 +3693,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           rich: [
             {
               type: "table",
-              columns: ["#", "LP", "Usuários", "Sessões", "Sessões eng.", "Leads", "Tx conv"],
+              columns: ["#", "LP (URL completa)", "Usuários", "Sessões", "Sessões eng.", "Leads", "Tx conv"],
               rows: ranked.map((r, i) => [
                 `${i + 1}`,
-                r.path,
+                `https://${r.host}${r.path}`,
                 formatCompact(r.users),
                 formatCompact(r.sessions),
                 formatCompact(r.engaged),
@@ -3720,7 +3708,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               type: "insight",
               severity: "info",
               title: "Líder do ranking",
-              body: `${ranked[0].path} gerou ${formatCompact(ranked[0].leads)} leads com taxa de ${ranked[0].sessions > 0 ? ((ranked[0].leads / ranked[0].sessions) * 100).toFixed(1) : "0"}% sobre ${formatCompact(ranked[0].sessions)} sessões.`,
+              body: `https://${ranked[0].host}${ranked[0].path} gerou ${formatCompact(ranked[0].leads)} leads com taxa de ${ranked[0].sessions > 0 ? ((ranked[0].leads / ranked[0].sessions) * 100).toFixed(1) : "0"}% sobre ${formatCompact(ranked[0].sessions)} sessões.`,
             },
           ],
           followUps: [
@@ -3831,7 +3819,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       // Caso async: ranking de LPs por leads — fetch dedicado ao GA4,
       // mesmo padrão do WhatsApp widget (placeholder → resposta real).
-      if (intent === "lp_leads_ranking") {
+      // landing_performance TAMBÉM cai aqui: o case síncrono antigo respondia
+      // com tabela MOCK hardcoded (mesmos números pra qualquer property) —
+      // caso real: Renan na property Statusinvest recebeu LPs fake tipo
+      // /lp/premium-30 com "R$ 118k" (jun/2026). Agora ambos usam dados reais.
+      if (intent === "lp_leads_ranking" || intent === "landing_performance") {
         try {
           appendLog({
             id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
