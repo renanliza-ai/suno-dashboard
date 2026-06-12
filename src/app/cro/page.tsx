@@ -53,13 +53,6 @@ type PageScore = {
   diagnosis: string[];
 };
 
-const pageScores: PageScore[] = [
-  { page: "/home", score: 82, lcp: 2.1, cls: 0.08, inp: 180, conversion: 3.4, trend: "up", pageviews: 187450, bounce: 42.5, diagnosis: ["LCP saudável", "CLS ótimo", "Considerar preload do hero"] },
-  { page: "/carteiras", score: 74, lcp: 2.8, cls: 0.12, inp: 240, conversion: 2.1, trend: "up", pageviews: 198420, bounce: 35.8, diagnosis: ["LCP acima de 2.5s", "CTA abaixo do fold em 70% dos desktops", "JS third-party bloqueando render"] },
-  { page: "/asset/fundos/snel11", score: 91, lcp: 1.8, cls: 0.05, inp: 140, conversion: 4.2, trend: "up", pageviews: 142850, bounce: 32.1, diagnosis: ["Core Web Vitals excelentes", "Conversão acima da média"] },
-  { page: "/relatorios", score: 68, lcp: 3.4, cls: 0.18, inp: 320, conversion: 1.2, trend: "down", pageviews: 124820, bounce: 28.4, diagnosis: ["LCP crítico (3.4s)", "CLS acima do ideal", "Imagens hero sem dimensões fixas", "Fontes carregadas sync"] },
-  { page: "/carteiras/dividendos", score: 79, lcp: 2.4, cls: 0.09, inp: 190, conversion: 2.8, trend: "up", pageviews: 156320, bounce: 32.4, diagnosis: ["LCP no limite", "INP saudável"] },
-];
 
 type Insight = {
   icon: typeof AlertTriangle;
@@ -114,136 +107,6 @@ const REJECT_REASONS = [
   "Não é prioridade neste trimestre",
 ];
 
-const insights: Insight[] = [
-  {
-    icon: AlertTriangle, color: "text-red-500 bg-red-50", priority: "Alta",
-    title: "LCP crítico em /relatorios",
-    desc: "Tempo de carregamento de 3.4s está acima do ideal (<2.5s). Isso explica a queda de 12% em conversões nessa página nos últimos 14 dias.",
-    action: "Otimizar imagens hero e carregar fontes async",
-    impact: "+18% conversão estimado",
-    effort: "médio", owner: "Dev frontend",
-    steps: [
-      "Auditar imagens acima do fold com PageSpeed Insights",
-      "Converter hero para AVIF/WebP com fallback",
-      "Adicionar width/height explícitos para evitar CLS",
-      "Mover @font-face para preload + font-display: swap",
-      "Validar LCP <2.5s em 75th percentile via CrUX",
-    ],
-    confidence: "Alta",
-    evidence: "Correlação direta entre LCP >3s e queda de conversão observada nos últimos 14 dias (r=0.72). PageSpeed CrUX confirma p75 LCP em 3.4s na origem.",
-    hypothesis: "Reduzir LCP para <2.5s aumenta a conversão em ≥12%, recuperando o patamar pré-degradação.",
-    costEstimate: "≈ 24h dev (3 dias) + 4h QA. R$ 0 de mídia.",
-    risk: "baixo",
-    riskNotes: "Pode introduzir regressão visual em browsers antigos sem suporte AVIF — mitigado pelo fallback WebP/JPG.",
-    primaryKPI: "Taxa de conversão em /relatorios",
-    secondaryKPIs: ["LCP p75", "Bounce rate", "Tempo até primeira interação"],
-    testWindow: "Deploy direto + monitorar por 7 dias no GA4 Real-Time",
-    rollback: "Reverter PR se LCP não cair ≥800ms em 48h ou se bounce subir >5pp",
-    affectedSegments: ["Todos os visitantes de /relatorios (mobile + desktop)"],
-  },
-  {
-    icon: Lightbulb, color: "text-amber-500 bg-amber-50", priority: "Média",
-    title: "CTA abaixo do fold em /carteiras",
-    desc: "70% dos usuários desktop não rolam até o botão principal de CTA. Reposicionamento pode gerar ganho expressivo.",
-    action: "Mover CTA 'Ver Carteiras' para área visível inicial",
-    impact: "+24% cliques estimado",
-    effort: "baixo", owner: "Design + Dev",
-    steps: [
-      "Rodar heatmap/scrollmap por 7 dias (Hotjar ou Clarity)",
-      "Subir CTA para o primeiro viewport no desktop",
-      "Criar variante A/B no Optimize/Convert",
-      "Rodar teste por 2 semanas com 50/50 de tráfego",
-      "Decidir com base em CTR e taxa de conversão final",
-    ],
-    confidence: "Média",
-    evidence: "Scrollmap (Clarity) mostra que 70% dos desktops param antes do botão. Benchmark interno: páginas com CTA above-the-fold convertem 1.6x mais.",
-    hypothesis: "CTA acima do fold aumenta CTR em ≥15% sem prejudicar a leitura do conteúdo.",
-    costEstimate: "≈ 8h design + 6h dev. R$ 0 de mídia.",
-    risk: "médio",
-    riskNotes: "Pode reduzir tempo de leitura do hero copy. Validar com bounce rate antes de promover.",
-    primaryKPI: "CTR no botão 'Ver Carteiras'",
-    secondaryKPIs: ["Conversão final em /carteiras", "Tempo médio na página", "Bounce rate"],
-    testWindow: "A/B 50/50 por 14 dias (n mínimo: 8.000 sessões/variante)",
-    rollback: "Manter versão B só se CTR ≥+10% e conversão ≥+5% com p<0.05",
-    affectedSegments: ["Desktop (resoluções ≥1280px)", "Tablet portrait"],
-  },
-  {
-    icon: Zap, color: "text-violet-500 bg-violet-50", priority: "Alta",
-    title: "Campanha 'Premium 30' com ROAS 4.2x",
-    desc: "Essa campanha está com a melhor performance mas budget limitado. Ampliar investimento pode gerar retorno rápido.",
-    action: "Aumentar budget diário de R$ 2k → R$ 5k",
-    impact: "+R$ 45k receita mensal",
-    effort: "baixo", owner: "Mídia paga",
-    steps: [
-      "Validar que ROAS se mantém com mais volume (checar marginal ROAS)",
-      "Escalar +50% na primeira semana",
-      "Monitorar CPA e taxa de conversão no GA4",
-      "Se ROAS continuar >3.5x, escalar para R$ 5k",
-    ],
-    confidence: "Média",
-    evidence: "Últimos 21 dias: ROAS estável em 4.2x ± 0.3. Search query report mostra termos com volume residual não explorado.",
-    hypothesis: "Aumentar 150% o budget mantém ROAS ≥3.5x graças a queries ainda não saturadas.",
-    costEstimate: "+R$ 90k/mês em mídia (R$ 3k/dia adicional). Sem custo de tooling.",
-    risk: "médio",
-    riskNotes: "ROAS marginal pode cair em segundo bidding. Escalar gradual (50% por semana) reduz exposição.",
-    primaryKPI: "ROAS rolling de 7 dias",
-    secondaryKPIs: ["CPA", "Volume de conversões", "Taxa de aprovação do checkout"],
-    testWindow: "Escala em 3 etapas (+50% → +100% → +150%) ao longo de 3 semanas",
-    rollback: "Reverter ao budget anterior se ROAS cair abaixo de 3.0x por 3 dias seguidos",
-    affectedSegments: ["Tráfego pago Google Ads (Search + PMax)"],
-  },
-  {
-    icon: MousePointerClick, color: "text-emerald-500 bg-emerald-50", priority: "Média",
-    title: "Abandono no checkout (23%)",
-    desc: "1.750 usuários iniciaram checkout mas não finalizaram. Dados apontam friction no step de pagamento.",
-    action: "Adicionar PIX como opção primária + reduzir campos do form",
-    impact: "+420 compras/mês estimado",
-    effort: "médio", owner: "Produto + Dev",
-    steps: [
-      "Revisar analytics de form fields (onde o usuário desiste)",
-      "Implementar PIX como default nos métodos de pagamento",
-      "Remover campos não essenciais (CPF opcional se já logado)",
-      "Adicionar progress bar visual no checkout",
-      "Rodar A/B test por 14 dias",
-    ],
-    confidence: "Alta",
-    evidence: "Funil GA4: 23% de drop entre add_payment_info e purchase. Hotjar form analytics mostra abandono concentrado no campo CPF + telefone.",
-    hypothesis: "PIX como padrão + CPF opcional reduz drop de 23% para ≤15%, gerando +420 compras/mês.",
-    costEstimate: "≈ 40h dev + 8h QA + integração adquirente PIX (já existente). R$ 0 incremental.",
-    risk: "médio",
-    riskNotes: "Risco fiscal se CPF for removido sem alternativa para nota fiscal — manter opcional, não eliminar.",
-    primaryKPI: "Taxa de finalização do checkout (purchase / begin_checkout)",
-    secondaryKPIs: ["Tempo médio no checkout", "Taxa de erro no form", "Distribuição PIX vs cartão"],
-    testWindow: "A/B 50/50 por 14 dias com lock de variante por usuário",
-    rollback: "Reverter se taxa de aprovação cair ≥3pp ou se receita por checkout cair >5%",
-    affectedSegments: ["Todos os usuários no fluxo de checkout (web + mobile)"],
-  },
-  {
-    icon: Target, color: "text-blue-500 bg-blue-50", priority: "Baixa",
-    title: "Remarketing subutilizado",
-    desc: "183k usuários logados, mas apenas 2% recebem campanhas de retenção. Oportunidade enorme de LTV.",
-    action: "Criar audiência custom no GA4 e ativar no Ads",
-    impact: "+12% retenção estimado",
-    effort: "médio", owner: "CRM + Mídia",
-    steps: [
-      "Criar audiência GA4 'Logados últimos 30d, sem compra'",
-      "Ativar linkagem GA4 ↔ Google Ads",
-      "Criar campanha de remarketing com orçamento de R$ 800/dia",
-      "Segmentar criativos por persona (investidor iniciante vs avançado)",
-    ],
-    confidence: "Baixa",
-    evidence: "Comparativo com cohort de 2025: usuários impactados por remarketing tiveram retenção 12pp maior. Dado é histórico — não há A/B atual.",
-    hypothesis: "Remarketing pago em audiência logada-sem-compra eleva conversão da base inativa em ≥10%.",
-    costEstimate: "≈ R$ 24k/mês em mídia + 16h setup (CRM + Ads). Tooling já contratado.",
-    risk: "alto",
-    riskNotes: "Risco de canibalização — usuários que comprariam de qualquer forma podem ser atribuídos à campanha. Validar com holdout de 10%.",
-    primaryKPI: "Conversão incremental da audiência impactada (vs holdout)",
-    secondaryKPIs: ["CAC", "LTV 90d", "Taxa de unsubscribe"],
-    testWindow: "30 dias com holdout de 10% (sem campanha) para isolar incremental",
-    rollback: "Pausar campanha se ROAS <1.8x ou se taxa de unsubscribe subir >2x",
-    affectedSegments: ["Logados últimos 30d sem compra (~180k usuários)"],
-  },
-];
 
 type DailySuggestion = {
   title: string;
@@ -878,38 +741,31 @@ export default function CROPage() {
     });
   }, [realPagesAvailable, pagesDetail, seed]);
 
-  // Páginas exibidas: reais quando disponíveis, senão mock com escala por propriedade.
-  const displayPageScores: PageScore[] = realPagesAvailable
-    ? realPageScores
-    : pageScores.map((p, i) => {
-        const factor = 0.7 + ((seed + i * 13) % 60) / 100; // 0.7 – 1.3
-        const scoreShift = ((seed + i * 7) % 18) - 9; // -9..+8
-        return {
-          ...p,
-          score: Math.max(40, Math.min(99, p.score + scoreShift)),
-          pageviews: Math.round(p.pageviews * factor),
-          conversion: +(p.conversion * (0.85 + ((seed + i) % 30) / 100)).toFixed(1),
-          bounce: +Math.max(15, Math.min(80, p.bounce + scoreShift / 2)).toFixed(1),
-        };
-      });
+  // Páginas exibidas: SOMENTE reais. O mock com "escala por propriedade"
+  // (hashSeed) foi removido em jun/2026 — fabricava números diferentes por
+  // property, parecendo reagir a dados quando era tudo inventado. Política
+  // do painel: nenhum número que não veio de fonte real.
+  const displayPageScores: PageScore[] = realPagesAvailable ? realPageScores : [];
 
-  // KPIs derivados do conjunto exibido — sempre coerentes com a propriedade.
+  // KPIs derivados do conjunto exibido — "—" quando não há dado real.
   const avgScore = displayPageScores.length
     ? Math.round(displayPageScores.reduce((s, p) => s + p.score, 0) / displayPageScores.length)
-    : 78;
+    : null;
   const avgConv = displayPageScores.length
     ? +(displayPageScores.reduce((s, p) => s + p.conversion, 0) / displayPageScores.length).toFixed(1)
-    : 2.8;
-  const totalViews = displayPageScores.reduce((s, p) => s + p.pageviews, 0);
-  const oppCount = 8 + (seed % 9); // 8–16
-  const impactNum = Math.round(80 + (seed % 90) + (totalViews / 5000)); // R$ k/mês
-  const impactLabel = `R$ ${impactNum}k`;
+    : null;
+  // Oportunidades/Impacto: antes eram FABRICADOS via seed (8+(seed%9) e
+  // "R$ {80+seed%90}k") mesmo com dados reais. Agora: oportunidades = count
+  // real de insights do motor CRO (declarado adiante, então calculamos aqui
+  // direto da mesma fonte); impacto sem base quantificada vira "—".
+  const oppCount = realPagesAvailable ? generateCROInsights(pagesDetail?.pages).length : 0;
+  const impactLabel = "—";
 
   const metrics = [
-    { key: "score", label: "Score Médio", value: String(avgScore), sub: "/100", color: "#10b981", detail: `Média ponderada do Core Web Vitals estimado + conversão das ${displayPageScores.length} páginas principais da propriedade ${propertyName}.` },
-    { key: "conv", label: "Conversão Geral", value: `${avgConv}%`, sub: realPagesAvailable ? "real" : "mock", color: "#7c5cff", detail: `Conversão média das páginas-chave em ${propertyName}. ${realPagesAvailable ? "Calculada a partir dos engajamentos reais do GA4." : "Em modo demo — conecte a propriedade para números exatos."}` },
-    { key: "opp", label: "Oportunidades", value: String(oppCount), sub: "ativas", color: "#f59e0b", detail: `Insights priorizados por impacto em receita para a propriedade ${propertyName}.` },
-    { key: "impact", label: "Impacto Potencial", value: impactLabel, sub: "/mês", color: "#ef4444", detail: `Soma dos impactos estimados se as recomendações da propriedade ${propertyName} forem implementadas.` },
+    { key: "score", label: "Score Médio", value: avgScore !== null ? String(avgScore) : "—", sub: "/100", color: "#10b981", detail: `Média ponderada do Core Web Vitals estimado + conversão das ${displayPageScores.length} páginas principais da propriedade ${propertyName}. ${realPagesAvailable ? "" : "Sem dados reais no momento."}` },
+    { key: "conv", label: "Conversão Geral", value: avgConv !== null ? `${avgConv}%` : "—", sub: realPagesAvailable ? "real" : "sem dados", color: "#7c5cff", detail: `Conversão média das páginas-chave em ${propertyName}. ${realPagesAvailable ? "Calculada a partir dos engajamentos reais do GA4." : "Conecte a propriedade para números reais."}` },
+    { key: "opp", label: "Oportunidades", value: String(oppCount), sub: "ativas", color: "#f59e0b", detail: `Contagem real de insights detectados pelo motor CRO na propriedade ${propertyName}.` },
+    { key: "impact", label: "Impacto Potencial", value: impactLabel, sub: "/mês", color: "#ef4444", detail: `Impacto agregado ainda não quantificado de forma confiável — veja o impacto estimado individual em cada proposta CRO abaixo.` },
   ];
 
   // ============================================================
@@ -1101,16 +957,12 @@ export default function CROPage() {
       }));
     }
 
-    // Fallback: lógica antiga (usado quando endpoint falha ou ainda carregando)
+    // Sem dados reais → lista VAZIA (a UI mostra empty state honesto).
+    // O fallback antigo embaralhava insights MOCK com seed pra "dar
+    // diferença visível" entre properties — removido em jun/2026:
+    // recomendação inventada é pior que nenhuma recomendação.
     if (!realPagesAvailable) {
-      // Embaralha levemente os mocks com base na seed pra dar diferença visível
-      return insights.map((it, i) => ({
-        ...it,
-        title:
-          i === 0
-            ? `${it.title.split(" em ")[0]} em ${displayPageScores[Math.min(i, displayPageScores.length - 1)]?.page || "/relatorios"}`
-            : it.title,
-      }));
+      return [];
     }
     const dyn: Insight[] = [];
     const sortedByBounce = [...pagesDetail!.pages].sort((a, b) => b.bounceRate - a.bounceRate);
@@ -1219,8 +1071,10 @@ export default function CROPage() {
       affectedSegments: [`Assinantes ativos ${propertyName}`, "Lookalike 1% derivado", "Lookalike 3% derivado"],
     };
 
-    // Mantém os insights estratégicos do mock após os dinâmicos + Meta Connector
-    return [...dyn, metaConnectorInsight, ...insights.slice(0, 3)];
+    // SÓ insights derivados de dados reais + Meta Connector (estratégico
+    // fixo mas honesto — descreve uma integração, não inventa métrica).
+    // Antes anexava 3 insights MOCK no fim da lista real — removido jun/2026.
+    return [...dyn, metaConnectorInsight];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [realPagesAvailable, pagesDetail, displayPageScores, propertyName, seed, apiRecs]);
 

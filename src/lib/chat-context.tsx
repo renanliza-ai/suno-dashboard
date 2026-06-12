@@ -236,15 +236,18 @@ function buildWelcome(
         },
       ]
     : [
-        { label: "Usuários Ativos (30d)", value: "470,9k", tone: "positive" as const },
-        { label: "Conversões", value: "3.611", tone: "warning" as const },
-        { label: "Anomalias detectadas", value: "3", tone: "danger" as const },
-        { label: "Receita (30d)", value: "R$ 512k", tone: "positive" as const },
+        // SEM NÚMEROS FAKE: antes mostrava "470,9k usuários / R$ 512k"
+        // inventados + texto "analisei os dados" sem ter analisado nada.
+        // Política do painel: nenhum número que não veio de fonte real.
+        { label: "Usuários Ativos", value: "—", tone: "neutral" as const },
+        { label: "Conversões", value: "—", tone: "neutral" as const },
+        { label: "Anomalias detectadas", value: "—", tone: "neutral" as const },
+        { label: "Receita", value: "—", tone: "neutral" as const },
       ];
 
   const contentPrefix = isReal
     ? `${greet}, ${firstName}! ✨ Sou o **Copiloto Suno** — seu analista 24/7 de **${accountName}**.\n\nLi os dados GA4 dos últimos **${d} dias**. Aqui está o radar em tempo real e alguns atalhos 👇`
-    : `${greet}, ${firstName}! ✨ Sou o **Copiloto Suno** — seu analista 24/7 de ${accountName}.\n\nAnalisei os dados mais recentes. Aqui está o radar do dia e alguns atalhos para você começar 👇`;
+    : `${greet}, ${firstName}! ✨ Sou o **Copiloto Suno**.\n\n⚠ **Nenhuma propriedade GA4 conectada ainda** — selecione uma no header pra eu ler os dados reais. Sem isso, não mostro números.`;
 
   return {
     role: "assistant",
@@ -3763,6 +3766,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         "seo_performance",
         "campaigns_performance",
         "benchmark",
+        // 2ª leva da auditoria (mesma data): mais 5 cases 100% mock —
+        // anomalias com datas inventadas, cohort/LTV/horário-pico fixos e
+        // forecast com "meta do trimestre" que nunca existiu.
+        "anomaly",
+        "cohort",
+        "peak_hours",
+        "retention_ltv",
+        "forecast",
       ];
       if (GEMINI_ROUTED_INTENTS.includes(intent) && selectedId) {
         try {
