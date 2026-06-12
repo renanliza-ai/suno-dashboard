@@ -16,6 +16,7 @@ import { DataStatus } from "@/components/data-status";
 import { generateCROInsights, summarizeInsights, type CROInsight } from "@/lib/cro-engine";
 import { LPAnalyzer } from "@/components/lp-analyzer";
 import { CROProposalsBoard } from "@/components/cro-proposals-board";
+import { CROCycleGuide } from "@/components/cro-cycle-guide";
 
 // Hash determinístico do propertyId — garante que ao trocar a propriedade,
 // os números (mock e derivações) mudem de forma estável (mesma propriedade
@@ -1252,6 +1253,13 @@ export default function CROPage() {
               </>
             )}
           </div>
+        </div>
+
+        {/* Guia educativo do Ciclo de CRO (6 etapas) — colapsável, fechado
+            por padrão. Mapeia onde cada etapa da metodologia vive no painel.
+            Nível 2 futuro: fechar o loop (resultado + aprendizado). */}
+        <div className="mb-4">
+          <CROCycleGuide />
         </div>
 
         {/* CRO Automation — propostas data-driven baseadas em 11 heurísticas.
