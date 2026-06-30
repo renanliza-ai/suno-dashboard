@@ -7,6 +7,7 @@ import { ProposalCard } from "@/components/proposal-card";
 import { ProposalDetailsModal } from "@/components/proposal-details-modal";
 import { SkeletonBlock, DataErrorCard } from "@/components/data-status";
 import type { Proposal, LPData, SourceBreakdownRow } from "@/lib/cro-types";
+import { buildCroBriefHtml } from "@/lib/cro-playbook";
 
 /**
  * CROProposalsBoard — orquestrador da feature CRO Automation.
@@ -167,46 +168,18 @@ export function CROProposalsBoard() {
     setActionType("accept");
     try {
       // 1. Cria task no Monday
-      const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
-      // URL completa da LP com protocolo — o time precisa abrir a página
-      // direto da task pra aplicar o teste. p.lp.url vem do GA4 sem https://.
-      const lpFullUrl = /^https?:\/\//i.test(p.lp.url) ? p.lp.url : `https://${p.lp.url}`;
-      const description = [
-        `## 🔗 Página do teste`,
-        `**[${p.lp.url}](${lpFullUrl})**`,
-        `URL: ${lpFullUrl}`,
-        ``,
-        `**Prioridade:** ${p.priority}`,
-        ``,
-        `### Hipótese`,
-        p.hipotese,
-        ``,
-        `### Ação sugerida`,
-        p.acaoSugerida,
-        ``,
-        `### Sinais detectados`,
-        p.sinaisDetalhados.map((s) => `- ${s}`).join("\n"),
-        ``,
-        `### Benchmarks`,
-        p.benchmarks.map((b) => `- ${b}`).join("\n"),
-        ``,
-        `**Impacto estimado:** ${p.impactoEstimado}`,
-        `**Effort:** ${p.effort}`,
-        ``,
-        `---`,
-        `[Ver no painel](${baseUrl}/cro?lp=${encodeURIComponent(p.lp.url)}#${p.proposal_key})`,
-      ].join("\n");
+      // Corpo da tarefa: briefing senior em HTML (autoexplicativo, com o link da
+      // LP, SEM link de painel - o time nao tem acesso a aba CRO). Postado verbatim
+      // no Monday via rawBody (a rota nao envolve em markdown nem adiciona rodape).
+      const description = buildCroBriefHtml(p);
 
       const mondayRes = await fetch("/api/monday/create-task", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: `[CRO] ${p.lp.path} — ${p.titulo}`,
+          title: `[CRO] ${p.lp.path} - ${p.titulo}`,
           description,
-          priority: p.priority === "critico" ? "Alta" : p.priority === "atencao" ? "Média" : "Baixa",
-          effort: p.effort,
-          impact: p.impactoEstimado,
-          sourceLink: `${baseUrl}/cro?lp=${encodeURIComponent(p.lp.url)}#${p.proposal_key}`,
+          rawBody: true,
         }),
       });
       const mondayData = await mondayRes.json();

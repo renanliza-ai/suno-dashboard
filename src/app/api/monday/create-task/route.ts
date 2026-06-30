@@ -261,6 +261,9 @@ export async function POST(req: NextRequest) {
     sourceLink?: string;
     // Compatibilidade retroativa com chamadas antigas (description simples)
     description?: string;
+    // rawBody=true: `description` já é o corpo final (HTML) e deve ser postado
+    // verbatim, sem envelopar em markdown nem adicionar rodapé de painel.
+    rawBody?: boolean;
     priority?: "Alta" | "Média" | "Baixa";
     effort?: "baixo" | "médio" | "alto";
     impact?: string;
@@ -413,7 +416,9 @@ export async function POST(req: NextRequest) {
   if (body.sourceLink) lines.push(`🔗 **Ver no painel:** ${body.sourceLink}`);
   lines.push(`🕒 **Criado em:** ${new Date().toLocaleString("pt-BR")}`);
 
-  const description = lines.join("\n");
+  // rawBody: corpo já vem pronto (HTML) do chamador (ex.: briefing CRO senior).
+  // Posta verbatim, ignorando o markdown montado acima e o rodapé de painel.
+  const description = body.rawBody && body.description ? body.description : lines.join("\n");
 
   // GraphQL mutation pra criar o item
   // ⚠ Variables tem que ser JSON string conforme a doc do Monday
