@@ -156,6 +156,33 @@ type GA4ReportResponse = {
   totals?: { metricValues?: { value: string }[] }[];
 };
 
+// GA4 Data API so retorna `totals` quando metricAggregations e pedido. Este
+// helper cobre os DOIS formatos: totals (quando presente) OU rows com a
+// dimensao implicita date_range_N (quando ha 2 dateRanges). Foi a causa raiz
+// dos KPIs "vazios" de 30/06: liamos so totals, que parou de vir.
+export function extractRangeTotals(
+  data: GA4ReportResponse | null | undefined
+): { current: number[]; previous: number[] } | null {
+  if (!data) return null;
+  if (data.totals?.[0]?.metricValues) {
+    return {
+      current: data.totals[0].metricValues.map((m) => Number(m.value || 0)),
+      previous: (data.totals[1]?.metricValues || []).map((m) => Number(m.value || 0)),
+    };
+  }
+  const rows = data.rows || [];
+  if (rows.length === 0) return null;
+  const findRange = (key: string) =>
+    rows.find((r) => (r.dimensionValues || []).some((d) => d.value === key));
+  const r0 = findRange("date_range_0") || rows[0];
+  const r1 = findRange("date_range_1");
+  if (!r0?.metricValues) return null;
+  return {
+    current: r0.metricValues.map((m) => Number(m.value || 0)),
+    previous: (r1?.metricValues || []).map((m) => Number(m.value || 0)),
+  };
+}
+
 export async function runReport(propertyId: string, body: RunReportBody) {
   return ga4Fetch<GA4ReportResponse>(
     `${GA4_DATA_BASE}/properties/${propertyId}:runReport`,
@@ -276,6 +303,7 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
   // totals[1] = anterior. Usado pra computar delta % real (vs hardcoded antes).
   const res = await runReport(propertyId, {
     dateRanges: [range.ga4Range, previousRange],
+    metricAggregations: ["TOTAL"],
     metrics: [
       { name: "totalUsers" },
       { name: "sessions" },
@@ -285,9 +313,10 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
       { name: "bounceRate" },
     ],
   });
-  if (!res.error && res.data?.totals?.[0]?.metricValues) {
-    const v = res.data.totals[0].metricValues.map((m) => Number(m.value || 0));
-    const vPrev = (res.data.totals[1]?.metricValues || []).map((m) => Number(m.value || 0));
+  const t1 = extractRangeTotals(res.data);
+  if (!res.error && t1) {
+    const v = t1.current;
+    const vPrev = t1.previous;
     return {
       data: {
         activeUsers: v[0],
@@ -319,6 +348,7 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
   // Tentativa 2: troca keyEvents por conversions (properties mais antigas)
   const fallback = await runReport(propertyId, {
     dateRanges: [range.ga4Range, previousRange],
+    metricAggregations: ["TOTAL"],
     metrics: [
       { name: "totalUsers" },
       { name: "sessions" },
@@ -328,9 +358,10 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
       { name: "bounceRate" },
     ],
   });
-  if (!fallback.error && fallback.data?.totals?.[0]?.metricValues) {
-    const v = fallback.data.totals[0].metricValues.map((m) => Number(m.value || 0));
-    const vPrev = (fallback.data.totals[1]?.metricValues || []).map((m) => Number(m.value || 0));
+  const t2 = extractRangeTotals(fallback.data);
+  if (!fallback.error && t2) {
+    const v = t2.current;
+    const vPrev = t2.previous;
     return {
       data: {
         activeUsers: v[0],
@@ -365,6 +396,7 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
   // ainda retornamos os 4 KPIs core para o chat não quebrar.
   const minimal = await runReport(propertyId, {
     dateRanges: [range.ga4Range, previousRange],
+    metricAggregations: ["TOTAL"],
     metrics: [
       { name: "totalUsers" },
       { name: "sessions" },
@@ -375,13 +407,15 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
   let v: number[] | null = null;
   let vPrev: number[] = [];
   let convLabel: string = "keyEvents";
-  if (!minimal.error && minimal.data?.totals?.[0]?.metricValues) {
-    v = minimal.data.totals[0].metricValues.map((m) => Number(m.value || 0));
-    vPrev = (minimal.data.totals[1]?.metricValues || []).map((m) => Number(m.value || 0));
+  const t3 = extractRangeTotals(minimal.data);
+  if (!minimal.error && t3) {
+    v = t3.current;
+    vPrev = t3.previous;
   } else {
     // Última tentativa: troca keyEvents por conversions
     const minimalAlt = await runReport(propertyId, {
       dateRanges: [range.ga4Range, previousRange],
+      metricAggregations: ["TOTAL"],
       metrics: [
         { name: "totalUsers" },
         { name: "sessions" },
@@ -389,9 +423,10 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
         { name: "conversions" },
       ],
     });
-    if (!minimalAlt.error && minimalAlt.data?.totals?.[0]?.metricValues) {
-      v = minimalAlt.data.totals[0].metricValues.map((m) => Number(m.value || 0));
-      vPrev = (minimalAlt.data.totals[1]?.metricValues || []).map((m) => Number(m.value || 0));
+    const t4 = extractRangeTotals(minimalAlt.data);
+    if (!minimalAlt.error && t4) {
+      v = t4.current;
+      vPrev = t4.previous;
       convLabel = "conversions";
     }
   }
@@ -418,12 +453,13 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
   try {
     const engageRes = await runReport(propertyId, {
       dateRanges: [range.ga4Range],
+      metricAggregations: ["TOTAL"],
       metrics: [{ name: "engagedSessions" }, { name: "bounceRate" }],
     });
-    if (!engageRes.error && engageRes.data?.totals?.[0]?.metricValues) {
-      const ev = engageRes.data.totals[0].metricValues.map((m) => Number(m.value || 0));
-      engagedSessions = ev[0] || 0;
-      bounceRate = Number(((ev[1] || 0) * 100).toFixed(1));
+    const tEng = extractRangeTotals(engageRes.data);
+    if (!engageRes.error && tEng) {
+      engagedSessions = tEng.current[0] || 0;
+      bounceRate = Number(((tEng.current[1] || 0) * 100).toFixed(1));
     }
   } catch {
     // ignora — usa estimativa heurística
@@ -1939,9 +1975,11 @@ export async function getCheckoutFunnel(
       },
     }),
   ]);
-  const purchaseRevenue = Number(revRes.data?.totals?.[0]?.metricValues?.[1]?.value || 0);
-  const totalRevenueOfficial = Number(revRes.data?.totals?.[0]?.metricValues?.[0]?.value || 0);
-  const eventValueSum = Number(eventValueRes.data?.totals?.[0]?.metricValues?.[0]?.value || 0);
+  // extractRangeTotals cobre totals OU rows (GA4 nem sempre envia totals)
+  const revTotals = extractRangeTotals(revRes.data);
+  const purchaseRevenue = Number(revTotals?.current[1] || 0);
+  const totalRevenueOfficial = Number(revTotals?.current[0] || 0);
+  const eventValueSum = Number(extractRangeTotals(eventValueRes.data)?.current[0] || 0);
 
   // Hierarquia: purchaseRevenue > totalRevenue > eventValue (do purchase)
   // Se purchaseRevenue=0 mas eventValue>0 → dataLayer está mandando value sem currency.
@@ -2233,7 +2271,7 @@ export async function getUTMAudit(
     sessions: Number(r.metricValues?.[0]?.value || 0),
   }));
 
-  const totalSessions = Number(totalRes.data?.totals?.[0]?.metricValues?.[0]?.value || 0);
+  const totalSessions = Number(extractRangeTotals(totalRes.data)?.current[0] || 0);
 
   // Calcula % de (direct)/(none)
   const directNoneSessions = sourceMedium
