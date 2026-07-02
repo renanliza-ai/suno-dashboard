@@ -10,34 +10,20 @@ import { PagesChart } from "@/components/pages-chart";
 // análise interativa com dimensões/métricas).
 import { JourneyChart } from "@/components/journey-chart";
 import { DualJourneys } from "@/components/dual-journeys";
-import { AttributionToggle } from "@/components/attribution-toggle";
 import { LifeTimeCycle } from "@/components/life-time-cycle";
-import { getKpis } from "@/lib/data";
 import { useChat } from "@/lib/chat-context";
 import { cn } from "@/lib/utils";
 import { useGA4, useGA4Overview } from "@/lib/ga4-context";
 import { DataStatus, SkeletonBlock, DataErrorCard, PeriodBadge } from "@/components/data-status";
 
 export default function Home() {
-  const { highlight, filter, compareMode, attribution } = useChat();
-  const baseMockKpis = getKpis(attribution);
-  const { useRealData, days } = useGA4();
+  const { highlight, filter, compareMode } = useChat();
+  const { useRealData } = useGA4();
   const { data: overview, meta, error: ga4Error } = useGA4Overview();
 
-  // Mock data scaling: baseline dos dados mock é 30 dias. Quando o usuário muda o
-  // filtro de período, escalamos proporcionalmente para que o filtro de data
-  // pareça coerente mesmo sem GA4 conectado. Quando o GA4 está conectado os
-  // hooks já filtram pelo período real (ver ga4-context.tsx buildDateQS).
-  // Mock kpis: SEM delta. Política da casa — % só aparece com dado real do GA4
-  // (comparação vs período anterior calculada pelo servidor). Mock historicamente
-  // tinha 12.4/8.7/15.2/-2.1 hardcoded, que não reagiam ao filtro e confundiam gestores.
-  const mockKpis = baseMockKpis.map((k) => ({
-    label: k.label,
-    value: Math.round(k.value * (days / 30)),
-    delta: null as number | null,
-    color: k.color,
-  }));
-
+  // POLITICA ZERO MOCK (30/06): este painel nao renderiza numero fabricado em
+  // NENHUM estado. Ou dado real do GA4, ou skeleton, ou erro explicito, ou
+  // estado vazio pedindo conexao. O antigo mockKpis/getKpis foi removido.
   const showRealKpis = useRealData && (meta.status === "success" || meta.status === "partial") && overview?.kpis;
   // Deltas vs período anterior calculados no servidor. Quando indisponíveis (cache
   // antigo, erro parcial, range muito longo etc), passamos null → KpiCard omite o badge.
@@ -69,7 +55,7 @@ export default function Home() {
           color: "#f59e0b",
         },
       ]
-    : mockKpis;
+    : [];
 
   const usingMock = !useRealData;
   // KPIs indisponiveis com real LIGADO: fetch terminou (success/partial) mas veio
@@ -87,8 +73,6 @@ export default function Home() {
   return (
     <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
       <Header />
-
-      <AttributionToggle />
 
       {/* Banner persistente de fonte de dados + período consultado */}
       <div className="mb-4 flex items-center gap-2 flex-wrap">
@@ -131,7 +115,18 @@ export default function Home() {
           highlight === "kpis" && "ring-4 ring-[#7c5cff]/40 ring-offset-4 ring-offset-[color:var(--background)]"
         )}
       >
-        {isLoading || hasError ? (
+        {usingMock ? (
+          // Sem property GA4 conectada: NADA de numero de exemplo. Pedimos conexao.
+          <div className="col-span-4 bg-white rounded-2xl border border-dashed border-[color:var(--border)] p-8 text-center">
+            <div className="text-sm font-semibold text-[color:var(--foreground)]">
+              Sem conexão com o GA4
+            </div>
+            <div className="text-xs text-[color:var(--muted-foreground)] mt-1">
+              Selecione uma property no header para carregar os dados reais. Este painel não
+              exibe dados de exemplo.
+            </div>
+          </div>
+        ) : isLoading || hasError ? (
           // Skeletons durante loading OU erro — nunca mostra zeros ou mocks disfarçados de real
           [0, 1, 2, 3].map((i) => (
             <div key={i} className="bg-white rounded-2xl border border-[color:var(--border)] p-5">

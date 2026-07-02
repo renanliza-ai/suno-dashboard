@@ -1,22 +1,19 @@
 "use client";
 
 import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
-import { getTopPages } from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
-import { useChat } from "@/lib/chat-context";
 import { useGA4, useGA4Overview } from "@/lib/ga4-context";
 import { DataStatus, SkeletonBlock } from "@/components/data-status";
 
 const PAGE_COLORS = ["#7c5cff", "#10b981", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"];
 
 export function PagesChart() {
-  const { attribution } = useChat();
   const { useRealData, days, customRange } = useGA4();
   const { data: overview, meta } = useGA4Overview();
   const periodLabel = customRange
     ? `${customRange.startDate} → ${customRange.endDate}`
     : `Últimos ${days} dias`;
-  const mockPages = getTopPages(attribution);
+  // ZERO MOCK: sem dado real, nada de paginas de exemplo.
   const showReal = useRealData && meta.status === "success" && overview?.pages;
   const topPages = showReal
     ? overview!.pages!.slice(0, 6).map((p, i) => ({
@@ -24,9 +21,7 @@ export function PagesChart() {
         value: p.value,
         color: PAGE_COLORS[i % PAGE_COLORS.length],
       }))
-    : useRealData
-      ? []
-      : mockPages;
+    : [];
   const usingMock = !useRealData;
   const showSkeleton = useRealData && (meta.status === "loading" || meta.status === "error");
   const total = topPages.reduce((s, p) => s + p.value, 0) || 1;
@@ -37,11 +32,6 @@ export function PagesChart() {
         <h3 className="text-base font-semibold flex items-center gap-2 flex-wrap">
           Top Páginas
           <DataStatus meta={meta} usingMock={usingMock} compact />
-          {usingMock && (
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-200">
-              ⚠ dados de exemplo
-            </span>
-          )}
         </h3>
         <p className="text-sm text-[color:var(--muted-foreground)] mt-0.5">{periodLabel}</p>
       </div>
@@ -55,6 +45,11 @@ export function PagesChart() {
             ))}
           </div>
         </>
+      ) : usingMock ? (
+        <div className="h-[260px] flex items-center justify-center rounded-xl border border-dashed border-[color:var(--border)] text-sm text-[color:var(--muted-foreground)] text-center px-6">
+          Sem conexão com o GA4. Selecione uma property no header - este painel não exibe
+          dados de exemplo.
+        </div>
       ) : (
         <>
           <div className="relative">

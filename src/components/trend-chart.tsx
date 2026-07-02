@@ -1,26 +1,23 @@
 "use client";
 
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { getTrendData } from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
-import { useChat } from "@/lib/chat-context";
 import { useGA4, useGA4Overview } from "@/lib/ga4-context";
 import { DataStatus, SkeletonBlock, PeriodBadge } from "@/components/data-status";
 
 export function TrendChart() {
-  const { attribution } = useChat();
   const { useRealData } = useGA4();
   const { data: overview, meta } = useGA4Overview();
   const showReal = useRealData && meta.status === "success" && overview?.trend;
+  // ZERO MOCK: sem dado real, o grafico fica vazio (ou skeleton/aviso) - nunca
+  // serie fabricada.
   const trendData = showReal
     ? overview!.trend!.map((d) => {
         const raw = d.date;
         const label = raw.length === 8 ? `${raw.slice(6, 8)}/${raw.slice(4, 6)}` : raw;
         return { date: label, sessoes: d.sessoes, usuarios: d.usuarios };
       })
-    : useRealData
-      ? []
-      : getTrendData(attribution);
+    : [];
   const usingMock = !useRealData;
   const showSkeleton = useRealData && (meta.status === "loading" || meta.status === "error");
 
@@ -41,6 +38,11 @@ export function TrendChart() {
 
       {showSkeleton ? (
         <SkeletonBlock height={280} />
+      ) : usingMock ? (
+        <div className="h-[280px] flex items-center justify-center rounded-xl border border-dashed border-[color:var(--border)] text-sm text-[color:var(--muted-foreground)] text-center px-6">
+          Sem conexão com o GA4. Selecione uma property no header - este painel não exibe
+          dados de exemplo.
+        </div>
       ) : (
       <ResponsiveContainer width="100%" height={280}>
         <AreaChart data={trendData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>

@@ -2,21 +2,12 @@
 
 import { motion } from "framer-motion";
 import {
-  Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
-} from "recharts";
-import {
-  Target, TrendingUp, TrendingDown, Clock, Route, DollarSign, Percent, Zap,
+  Target, DollarSign,
   ShieldCheck, AlertTriangle, ShoppingCart, Eye, UserPlus, CreditCard, Truck,
-  CheckCircle2, XCircle, RefreshCw,
+  CheckCircle2, XCircle,
 } from "lucide-react";
 import { useState } from "react";
-import {
-  conversionGoals,
-  conversionPaths,
-  timeToConvert,
-  conversionsByEventTrend,
-  abandonedCheckoutRule,
-} from "@/lib/data";
+import { abandonedCheckoutRule } from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
 import { Header } from "@/components/header";
 import { Dialog } from "@/components/dialog";
@@ -26,7 +17,6 @@ import {
   AttributionIllustration,
   TopAssistedCampaigns,
 } from "@/components/attribution-illustration";
-import { AttributionToggle } from "@/components/attribution-toggle";
 import { AssistedTimeToPurchase } from "@/components/assisted-time-to-purchase";
 import { CheckoutMonitor } from "@/components/checkout-monitor";
 
@@ -41,9 +31,28 @@ const eventIcon: Record<string, typeof Target> = {
   abandoned_checkout: XCircle,
 };
 
+// Catalogo dos eventos-meta do funil Suno: SO estrutura (nome + evento GA4).
+// Counts/valores vem SEMPRE do GA4 real. Politica zero mock (30/06).
+type ConversionGoalView = {
+  name: string;
+  event: string;
+  count: number;
+  value: number;
+  avgValue: number;
+};
+const GOAL_CATALOG: { name: string; event: string }[] = [
+  { name: "Visualizou Item (LP)", event: "view_item" },
+  { name: "Lead", event: "generate_lead" },
+  { name: "Conta Criada", event: "sign_up / lead_create_account" },
+  { name: "Início Checkout", event: "begin_checkout" },
+  { name: "Dados de Pagamento", event: "add_shipping_info" },
+  { name: "Compras (total)", event: "purchase" },
+  { name: "Checkout Abandonado", event: "abandoned_checkout" },
+];
+
 export default function ConversoesPage() {
   const [abandonOpen, setAbandonOpen] = useState(false);
-  const [selectedGoal, setSelectedGoal] = useState<(typeof conversionGoals)[number] | null>(null);
+  const [selectedGoal, setSelectedGoal] = useState<ConversionGoalView | null>(null);
 
   // GA4 real data — sem daysOverride para respeitar o calendário do header
   const { useRealData, days, customRange } = useGA4();
@@ -54,23 +63,45 @@ export default function ConversoesPage() {
     : `últimos ${days} dias`;
   const isReal = Boolean(useRealData && meta.status === "success" && ga4Conv?.conversions);
   const usingMock = !useRealData;
-  const isLoading = useRealData && meta.status === "loading";
+  const isLoading = useRealData && (meta.status === "loading" || meta.status === "idle");
   const hasError = useRealData && meta.status === "error";
 
-  // Merge: quando temos dados reais, substituímos count/value do mock
-  const goals = isReal
-    ? conversionGoals.map((g) => {
-        const match = ga4Conv!.conversions!.find((c) => {
+  // ZERO MOCK: sem property conectada, a pagina nao mostra nenhum numero.
+  if (usingMock) {
+    return (
+      <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
+        <Header />
+        <div className="mt-6 bg-white rounded-2xl border border-dashed border-[color:var(--border)] p-10 text-center">
+          <div className="text-sm font-semibold">Sem conexão com o GA4</div>
+          <div className="text-xs text-[color:var(--muted-foreground)] mt-1">
+            Selecione uma property no header para ver as conversões reais. Este painel não
+            exibe dados de exemplo.
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // Goals: catalogo estrutural + valores 100% do GA4 real. Evento sem match no
+  // periodo = 0 (verdade), nunca numero de exemplo.
+  const goals: ConversionGoalView[] = GOAL_CATALOG.map((g) => {
+    const match = isReal
+      ? ga4Conv!.conversions!.find((c) => {
           if (g.event === "sign_up / lead_create_account") {
             return c.event === "sign_up" || c.event === "lead_create_account";
           }
           return c.event === g.event;
-        });
-        return match
-          ? { ...g, count: match.count, value: match.value || g.value }
-          : g;
-      })
-    : conversionGoals;
+        })
+      : undefined;
+    const count = match?.count ?? 0;
+    const value = match?.value ?? 0;
+    return {
+      ...g,
+      count,
+      value,
+      avgValue: count > 0 && value > 0 ? Math.round(value / count) : 0,
+    };
+  });
 
   const purchaseRow = goals.find((g) => g.event === "purchase")!;
   const totalRev = purchaseRow.value;
@@ -105,15 +136,15 @@ export default function ConversoesPage() {
         abandonRate: realAbandonRate ?? 0,
         notes:
           realAbandonRate !== null && realAbandonRate >= 65 && realAbandonRate <= 75
-            ? `Regra valida — taxa de abandono ${realAbandonRate}%, dentro do benchmark do setor (65-75%).`
+            ? `Regra valida - taxa de abandono ${realAbandonRate}%, dentro do benchmark do setor (65-75%).`
             : realAbandonRate !== null && realAbandonRate > 75
-              ? `Taxa de abandono elevada (${realAbandonRate}%, benchmark do setor 65-75%) — vale investigar etapas de checkout.`
+              ? `Taxa de abandono elevada (${realAbandonRate}%, benchmark do setor 65-75%) - vale investigar etapas de checkout.`
               : realAbandonRate !== null
                 ? `Taxa de abandono saudável (${realAbandonRate}%, abaixo do benchmark do setor 65-75%).`
                 : "Validação automática ao vivo.",
         isReal: true,
       }
-    : { ...abandonedCheckoutRule.lastValidation, abandonRate: 68.2, isReal: false };
+    : null; // ZERO MOCK: sem dados reais de validacao, o modal mostra indisponivel
 
   return (
     <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
@@ -138,10 +169,7 @@ export default function ConversoesPage() {
         </div>
       )}
 
-      {/* Toggle + ilustração animada do modelo de atribuição */}
-      <div className="mb-4">
-        <AttributionToggle />
-      </div>
+      {/* Ilustração animada do modelo de atribuição */}
       <div className="mb-6">
         <AttributionIllustration />
       </div>
@@ -177,10 +205,12 @@ export default function ConversoesPage() {
           ))
         ) : (
         [
-          { label: "Compras (total)", value: formatNumber(totalConv), delta: "+2.8%", positive: true, icon: CreditCard },
-          { label: "Receita Gerada", value: `R$ ${formatNumber(totalRev)}`, delta: "+8.2%", positive: true, icon: DollarSign },
-          { label: "Leads", value: formatNumber(leadRow.count), delta: "+8.4%", positive: true, icon: UserPlus },
-          { label: "Checkout Abandonado", value: formatNumber(abandonRow.count), delta: "-6.2%", positive: true, icon: XCircle },
+          // ZERO MOCK: deltas "+2.8%" etc eram hardcoded - removidos. Se quisermos
+          // delta real aqui, plugar comparacao vs periodo anterior do servidor.
+          { label: "Compras (total)", value: formatNumber(totalConv), icon: CreditCard },
+          { label: "Receita Gerada", value: `R$ ${formatNumber(totalRev)}`, icon: DollarSign },
+          { label: "Leads", value: formatNumber(leadRow.count), icon: UserPlus },
+          { label: "Checkout Abandonado", value: formatNumber(abandonRow.count), icon: XCircle },
         ].map((k, i) => {
           const Icon = k.icon;
           return (
@@ -195,10 +225,7 @@ export default function ConversoesPage() {
                 <Icon size={11} /> {k.label}
               </div>
               <div className="text-3xl font-bold mt-2 tabular-nums">{k.value}</div>
-              <div className={`text-xs font-semibold mt-2 flex items-center gap-1 ${k.positive ? "text-emerald-600" : "text-red-600"}`}>
-                {k.positive ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                {k.delta} vs mês anterior
-              </div>
+              <div className="text-[11px] text-[color:var(--muted-foreground)] mt-2">{periodLabel}</div>
             </motion.div>
           );
         })
@@ -259,36 +286,16 @@ export default function ConversoesPage() {
                     />
                   </div>
                 </div>
-                <div className="col-span-1 text-right">
+                <div className="col-span-2 text-right">
                   <div className="text-sm font-bold tabular-nums">{formatNumber(g.count)}</div>
                 </div>
-                <div className="col-span-2 text-right">
+                <div className="col-span-3 text-right">
                   <div className="text-sm font-bold tabular-nums">
                     {g.value > 0 ? `R$ ${formatNumber(g.value)}` : "—"}
                   </div>
                   {g.avgValue > 0 && (
                     <div className="text-[10px] text-[color:var(--muted-foreground)]">avg R$ {g.avgValue}</div>
                   )}
-                </div>
-                <div className="col-span-1 text-right">
-                  <div className="text-xs text-[color:var(--muted-foreground)]">{g.rate}%</div>
-                </div>
-                <div className="col-span-1 text-right">
-                  <span
-                    className={`text-xs font-semibold flex items-center gap-0.5 justify-end ${
-                      isAbandon
-                        ? g.delta <= 0
-                          ? "text-emerald-600"
-                          : "text-red-600"
-                        : g.delta >= 0
-                        ? "text-emerald-600"
-                        : "text-red-600"
-                    }`}
-                  >
-                    {g.delta >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-                    {g.delta >= 0 ? "+" : ""}
-                    {g.delta}%
-                  </span>
                 </div>
               </motion.button>
             );
@@ -306,22 +313,18 @@ export default function ConversoesPage() {
         </div>
         <div className="flex-1">
           <div className="flex items-center gap-2">
-            <h3 className="text-base font-bold text-amber-900">Regra abandoned_checkout — validada</h3>
-            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200 flex items-center gap-1">
-              <ShieldCheck size={10} /> 100% match
-            </span>
+            <h3 className="text-base font-bold text-amber-900">Regra abandoned_checkout</h3>
+            {realMatchRate !== null && (
+              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                <ShieldCheck size={10} /> {realMatchRate}% match
+              </span>
+            )}
           </div>
           <p className="text-sm text-amber-800 mt-1">
             {formatNumber(abandonRow.count)} abandonos detectados
             {realAbandonRate !== null
               ? ` · taxa de abandono ${realAbandonRate}%`
-              : isReal
-                ? " · aguardando volume suficiente para calcular taxa"
-                : " · taxa indisponível (modo demo — conecte GA4)"}
-            {" · "}
-            <span className="opacity-70 text-[11px]">
-              {formatNumber(abandonedCheckoutRule.recovery.recoveredPurchases)} recuperados por email ({abandonedCheckoutRule.recovery.recoveryRate}%) <em>· dados do CRM</em>
-            </span>
+              : " · taxa indisponível no período"}
           </p>
         </div>
         <div className="text-right shrink-0">
@@ -330,110 +333,12 @@ export default function ConversoesPage() {
         </div>
       </button>
 
-      {/* Tendência por evento */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <div className="col-span-2 bg-white rounded-2xl border border-[color:var(--border)] p-6">
-          <h3 className="text-base font-semibold flex items-center gap-2 mb-4">
-            <Zap size={14} className="text-[#7c5cff]" />
-            Eventos de conversão — {periodLabel}
-          </h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={conversionsByEventTrend}>
-              <defs>
-                <linearGradient id="gradPurch" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#7c5cff" stopOpacity={0.4} />
-                  <stop offset="95%" stopColor="#7c5cff" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="gradLead" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="gradAb" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#eceaf4" vertical={false} />
-              <XAxis dataKey="day" tick={{ fontSize: 10, fill: "#6b6b80" }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: "#6b6b80" }} axisLine={false} tickLine={false} tickFormatter={(v) => formatNumber(v)} />
-              <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-              <Area type="monotone" dataKey="generate_lead" stroke="#10b981" fill="url(#gradLead)" strokeWidth={2} name="Leads" />
-              <Area type="monotone" dataKey="abandoned_checkout" stroke="#f59e0b" fill="url(#gradAb)" strokeWidth={2} name="Abandonos" />
-              <Area type="monotone" dataKey="purchase" stroke="#7c5cff" fill="url(#gradPurch)" strokeWidth={2.5} name="Compras" />
-            </AreaChart>
-          </ResponsiveContainer>
-          <div className="flex gap-4 mt-3 text-xs flex-wrap">
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Leads</span>
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-500" /> Abandonos</span>
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-[#7c5cff]" /> Compras</span>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-2xl border border-[color:var(--border)] p-6">
-          <h3 className="text-base font-semibold flex items-center gap-2 mb-4">
-            <Clock size={14} className="text-[#7c5cff]" />
-            Tempo até conversão
-          </h3>
-          <div className="space-y-3">
-            {timeToConvert.map((t, i) => (
-              <motion.div
-                key={t.bucket}
-                initial={{ opacity: 0, x: -8 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: i * 0.05 }}
-              >
-                <div className="flex items-center justify-between mb-1 text-xs">
-                  <span className="font-medium">{t.bucket}</span>
-                  <span className="font-bold tabular-nums">{t.count}</span>
-                </div>
-                <div className="h-2 bg-[color:var(--muted)] rounded-full overflow-hidden">
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${t.pct}%` }}
-                    transition={{ duration: 0.6, delay: i * 0.05 }}
-                    className="h-full bg-gradient-to-r from-[#7c5cff] to-[#b297ff] rounded-full"
-                  />
-                </div>
-                <div className="text-[10px] text-[color:var(--muted-foreground)] mt-0.5">{t.pct}%</div>
-              </motion.div>
-            ))}
-          </div>
-          <div className="mt-4 pt-4 border-t border-[color:var(--border)] text-xs">
-            <div className="text-[10px] uppercase tracking-wider text-[color:var(--muted-foreground)] font-semibold">Mediana</div>
-            <div className="text-xl font-bold text-[#7c5cff] mt-1">1.2 dias</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-2xl border border-[color:var(--border)] p-6 mb-6">
-        <h3 className="text-base font-semibold flex items-center gap-2 mb-4">
-          <Route size={14} className="text-[#7c5cff]" />
-          Top caminhos até conversão
-        </h3>
-        <div className="space-y-2">
-          {conversionPaths.map((p, i) => (
-            <motion.div
-              key={p.path}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.04 }}
-              className="flex items-center gap-3 p-3 rounded-lg border border-[color:var(--border)] hover:bg-[color:var(--muted)]/30 transition"
-            >
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#7c5cff] to-[#b297ff] text-white flex items-center justify-center text-xs font-bold shrink-0">
-                {i + 1}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-mono truncate">{p.path}</div>
-                <div className="text-[10px] text-[color:var(--muted-foreground)] mt-0.5">Duração média: {p.days} dia(s)</div>
-              </div>
-              <div className="text-right shrink-0">
-                <div className="text-sm font-bold">{formatNumber(p.count)}</div>
-                <div className="text-[10px] text-emerald-600 font-semibold">R$ {formatNumber(p.value)}</div>
-              </div>
-            </motion.div>
-          ))}
-        </div>
-      </div>
+      {/* ZERO MOCK (30/06): as secoes "Eventos de conversao (trend)", "Tempo ate
+          conversao" e "Top caminhos ate conversao" foram REMOVIDAS - eram 100%
+          fabricadas (Math.random / valores fixos) e nao existe fonte real
+          equivalente no GA4 Data API hoje. Time-lag e caminhos reais exigem
+          BigQuery (Conversion Paths / Time Lag) - quando plugarmos, as secoes
+          voltam com dado verdadeiro. */}
 
       {/* Dialog: detalhes do evento */}
       <Dialog
@@ -450,20 +355,14 @@ export default function ConversoesPage() {
       >
         {selectedGoal && (
           <div className="space-y-4 text-sm">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               <div className="rounded-xl bg-[color:var(--muted)] p-3">
-                <p className="text-[10px] uppercase font-semibold text-[color:var(--muted-foreground)]">Contagem</p>
+                <p className="text-[10px] uppercase font-semibold text-[color:var(--muted-foreground)]">Contagem no período</p>
                 <p className="text-lg font-bold tabular-nums">{formatNumber(selectedGoal.count)}</p>
               </div>
               <div className="rounded-xl bg-[color:var(--muted)] p-3">
-                <p className="text-[10px] uppercase font-semibold text-[color:var(--muted-foreground)]">Taxa</p>
-                <p className="text-lg font-bold tabular-nums">{selectedGoal.rate}%</p>
-              </div>
-              <div className="rounded-xl bg-[color:var(--muted)] p-3">
-                <p className="text-[10px] uppercase font-semibold text-[color:var(--muted-foreground)]">vs mês ant.</p>
-                <p className={`text-lg font-bold tabular-nums ${selectedGoal.delta >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-                  {selectedGoal.delta >= 0 ? "+" : ""}{selectedGoal.delta}%
-                </p>
+                <p className="text-[10px] uppercase font-semibold text-[color:var(--muted-foreground)]">Evento GA4</p>
+                <p className="text-sm font-mono font-bold mt-1 truncate">{selectedGoal.event}</p>
               </div>
             </div>
             {selectedGoal.value > 0 && (
@@ -475,12 +374,9 @@ export default function ConversoesPage() {
             <div className="rounded-xl bg-[color:var(--muted)] p-3 text-xs">
               <p className="font-semibold mb-1">Onde este evento é capturado</p>
               <p className="text-[color:var(--muted-foreground)]">
-                Disparo via GTM container <code className="bg-white px-1 rounded">GTM-XSN8K3L</code> · coletado no GA4 como conversion event · valida-se contra o dataLayer da página.
+                Disparo via GTM da property selecionada · coletado no GA4 como key event · valida-se contra o dataLayer da página.
               </p>
             </div>
-            <button className="w-full px-4 py-2 rounded-xl bg-[#7c5cff] text-white text-sm font-medium">
-              Abrir DebugView no GA4
-            </button>
           </div>
         )}
       </Dialog>
@@ -521,83 +417,54 @@ export default function ConversoesPage() {
             </ul>
           </div>
 
-          <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4">
-            <div className="flex items-center gap-2 mb-2 flex-wrap">
-              <ShieldCheck size={16} className="text-emerald-700" />
-              <p className="text-sm font-bold text-emerald-900">
-                {validationView.isReal ? "Validação ao vivo" : "Última validação"}: {validationView.timestamp}
-              </p>
-              <span className="text-[10px] font-mono text-emerald-700 bg-white/60 px-1.5 py-0.5 rounded">
-                {periodLabel}
-              </span>
-              <span className="ml-auto px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white">
-                {validationView.matchRate}% match
-              </span>
+          {validationView ? (
+            <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4">
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                <ShieldCheck size={16} className="text-emerald-700" />
+                <p className="text-sm font-bold text-emerald-900">
+                  Validação ao vivo: {validationView.timestamp}
+                </p>
+                <span className="text-[10px] font-mono text-emerald-700 bg-white/60 px-1.5 py-0.5 rounded">
+                  {periodLabel}
+                </span>
+                <span className="ml-auto px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white">
+                  {validationView.matchRate}% match
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
+                <div>
+                  <p className="text-[10px] uppercase text-emerald-700 font-semibold">begin_checkout</p>
+                  <p className="font-bold tabular-nums">
+                    {formatNumber(validationView.beginCheckoutCount)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase text-emerald-700 font-semibold">purchases (24h)</p>
+                  <p className="font-bold tabular-nums">
+                    {formatNumber(validationView.purchaseInWindow)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase text-emerald-700 font-semibold">Abandonos esperados</p>
+                  <p className="font-bold tabular-nums">
+                    {formatNumber(validationView.abandonedExpected)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase text-emerald-700 font-semibold">Capturados</p>
+                  <p className="font-bold tabular-nums">
+                    {formatNumber(validationView.abandonedActual)}
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-emerald-800 mt-3">{validationView.notes}</p>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
-              <div>
-                <p className="text-[10px] uppercase text-emerald-700 font-semibold">begin_checkout</p>
-                <p className="font-bold tabular-nums">
-                  {formatNumber(validationView.beginCheckoutCount)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase text-emerald-700 font-semibold">purchases (24h)</p>
-                <p className="font-bold tabular-nums">
-                  {formatNumber(validationView.purchaseInWindow)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase text-emerald-700 font-semibold">Abandonos esperados</p>
-                <p className="font-bold tabular-nums">
-                  {formatNumber(validationView.abandonedExpected)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase text-emerald-700 font-semibold">Capturados</p>
-                <p className="font-bold tabular-nums">
-                  {formatNumber(validationView.abandonedActual)}
-                </p>
-              </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-[color:var(--border)] p-4 text-xs text-[color:var(--muted-foreground)]">
+              Validação indisponível: sem dados suficientes do funil de checkout nesta
+              property/período. Nenhum número de exemplo é exibido.
             </div>
-            <p className="text-xs text-emerald-800 mt-3">{validationView.notes}</p>
-          </div>
-
-          <div className="rounded-xl border border-[color:var(--border)] p-4">
-            <p className="text-sm font-semibold mb-3 flex items-center gap-2">
-              <RefreshCw size={14} className="text-[#7c5cff]" /> Recuperação por e-mail
-              <span className="ml-auto text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
-                Dados do CRM
-              </span>
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
-              <div>
-                <p className="text-[10px] uppercase text-[color:var(--muted-foreground)]">Abertura</p>
-                <p className="font-bold">{abandonedCheckoutRule.recovery.emailRecoveryOpen}%</p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase text-[color:var(--muted-foreground)]">Clique</p>
-                <p className="font-bold">{abandonedCheckoutRule.recovery.emailRecoveryClick}%</p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase text-[color:var(--muted-foreground)]">Recuperadas</p>
-                <p className="font-bold">{formatNumber(abandonedCheckoutRule.recovery.recoveredPurchases)}</p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase text-[color:var(--muted-foreground)]">Taxa recup.</p>
-                <p className="font-bold text-emerald-600">{abandonedCheckoutRule.recovery.recoveryRate}%</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex gap-2">
-            <button className="flex-1 px-4 py-2 rounded-xl bg-[#7c5cff] text-white text-sm font-medium">
-              Re-validar regra agora
-            </button>
-            <button className="px-4 py-2 rounded-xl border border-[color:var(--border)] text-sm font-medium">
-              Exportar CSV
-            </button>
-          </div>
+          )}
         </div>
       </Dialog>
     </main>

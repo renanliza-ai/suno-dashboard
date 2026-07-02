@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { sunoJourney } from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
 import {
   Globe,
@@ -24,7 +23,27 @@ import { useGA4, useGA4Conversions } from "@/lib/ga4-context";
 import { DataStatus, SkeletonBlock } from "@/components/data-status";
 import { MasterOnly } from "@/components/master-only";
 
-type JourneyStep = (typeof sunoJourney)[number];
+type JourneyStep = {
+  stage: string;
+  event: string;
+  value: number;
+  pct: number;
+  dropPct: number;
+  color: string;
+  phase: string;
+};
+
+// ESTRUTURA das etapas da jornada (nomes, cores, fases) - SEM valores.
+// Os valores vem SEMPRE do funil real do GA4. Politica zero mock (30/06):
+// numero fabricado nao renderiza em nenhum estado.
+const JOURNEY_STAGES: Omit<JourneyStep, "value" | "pct" | "dropPct">[] = [
+  { stage: "Visita ao Site", event: "session_start", color: "#7c5cff", phase: "descoberta" },
+  { stage: "Lead Capturado", event: "generate_lead", color: "#8b5cff", phase: "descoberta" },
+  { stage: "Conta Criada", event: "sign_up", color: "#a78bfa", phase: "ativação" },
+  { stage: "Início Checkout", event: "begin_checkout", color: "#f59e0b", phase: "compra" },
+  { stage: "Dados de Pagamento", event: "add_payment_info", color: "#f97316", phase: "compra" },
+  { stage: "Compra Concluída", event: "purchase", color: "#10b981", phase: "compra" },
+];
 
 const iconMap: Record<string, typeof Globe> = {
   "Visita ao Site": Globe,
@@ -53,98 +72,70 @@ const phaseColors: Record<string, string> = {
   expansão: "bg-pink-50 text-pink-700 border-pink-200",
 };
 
-// Diagnóstico contextual por etapa (o que olhar, onde melhorar)
+// Diagnostico contextual por etapa: O QUE OLHAR e ONDE MELHORAR.
+// Texto orientativo SEM numeros da casa (os numeros reais estao nos cards).
+// Benchmarks sao referencias publicas de mercado, nao dado do painel.
 const stageInsights: Record<string, { diagnosis: string; actions: string[]; benchmark: string }> = {
   "Visita ao Site": {
     diagnosis:
-      "Topo do funil saudável — ~471k sessões/mês. Foco: qualificação do tráfego via canais Suno customizados.",
+      "Topo do funil. O volume real desta property esta no card acima. Foco: qualificacao do trafego via canais Suno customizados.",
     actions: [
-      "Audite canais de baixa conv (TikTok, YouTube orgânico) em /relatorios",
-      "Valide taxonomia UTM em /tracking → aba UTM",
-      "Revise LPs com bounce > 60% em /cro",
+      "Audite canais de baixa conversao em /midia",
+      "Valide taxonomia UTM em /tracking",
+      "Revise LPs com bounce alto em /cro",
     ],
-    benchmark: "Benchmark fintech: 15–25% viram lead em 30d",
+    benchmark: "Benchmark fintech: 15-25% dos visitantes viram lead em 30d",
   },
   "Lead Capturado": {
     diagnosis:
-      "Drop de 80% é o MAIOR gargalo da jornada. Só 1 em 5 visitantes deixa e-mail — geralmente LP com fricção ou oferta genérica.",
+      "Compare a queda real (card acima) com o benchmark. Queda alta costuma indicar LP com friccao ou oferta generica.",
     actions: [
-      "Teste A/B de copy da LP Premium-30 (nossa principal)",
-      "Reduza campos do form (hoje pede CPF + telefone — remover telefone)",
-      "Adicione lead magnet (ebook dividendos, planilha FIIs)",
+      "Teste A/B de copy nas LPs principais",
+      "Reduza campos do formulario (1 mudanca por vez)",
+      "Adicione lead magnet (ebook, planilha)",
     ],
-    benchmark: "Fintech top-quartil: 30–40% visita→lead",
+    benchmark: "Fintech top-quartil: 30-40% visita->lead",
   },
   "Conta Criada": {
     diagnosis:
-      "45% dos leads criam conta — acima da média. Fluxo de ativação está ok, mas 55% de drop ainda é dinheiro na mesa.",
+      "Taxa real de lead->conta no card acima. Friccao aqui costuma ser formulario de signup e falta de ativacao imediata.",
     actions: [
-      "Email de ativação automático em até 30min pós-lead",
-      "Pré-preencher form de signup com dados do lead",
-      "Fluxo de onboarding Suno Free para capturar conta antes da compra",
+      "Email de ativacao automatico logo apos o lead",
+      "Pre-preencher o signup com dados do lead",
+      "Onboarding gratuito para capturar conta antes da compra",
     ],
-    benchmark: "SaaS financeiro: 50–60% lead→conta",
+    benchmark: "SaaS financeiro: 50-60% lead->conta",
   },
   "Início Checkout": {
     diagnosis:
-      "36% das contas novas iniciam checkout em até 7d. Momento-chave: aqui o lead decide se vira cliente.",
+      "Momento-chave: aqui o lead decide se vira cliente. Compare a taxa real (card acima) com o benchmark.",
     actions: [
-      "Retargeting Meta para quem criou conta e não clicou em 'Assinar'",
-      "Email sequence com depoimentos dos 3 primeiros dias",
-      "Oferta limitada (7 dias) com desconto para nova conta",
+      "Retargeting para quem criou conta e nao iniciou checkout",
+      "Sequencia de emails com depoimentos nos primeiros dias",
+      "Oferta com janela limitada para contas novas",
     ],
-    benchmark: "E-commerce SaaS: 25–35% conta→begin_checkout",
+    benchmark: "E-commerce SaaS: 25-35% conta->begin_checkout",
   },
   "Dados de Pagamento": {
     diagnosis:
-      "43% de drop entre begin_checkout e add_payment_info. Ponto de fricção no form de pagamento (CPF, cartão, Pix).",
+      "Friccao classica: formulario de pagamento (CPF, cartao, Pix). Veja a queda real no card acima.",
     actions: [
-      "Oferecer Pix + cartão lado a lado (não em sub-páginas)",
-      "Validar cartão inline antes do submit",
-      "Revisar tempo de carregamento da etapa (LCP > 2.5s?)",
+      "Oferecer Pix + cartao lado a lado (nao em sub-paginas)",
+      "Validar cartao inline antes do submit",
+      "Revisar tempo de carregamento da etapa",
     ],
-    benchmark: "Top-quartil BR: 70–75% avançam para purchase",
+    benchmark: "Top-quartil BR: 70-75% avancam para purchase",
   },
   "Compra Concluída": {
     diagnosis:
-      "59% dos que preencheram dados finalizam. Ainda há espaço para reduzir abandono no pagamento (Pix recusado, 3DS).",
+      "Fim do funil. Abandono aqui costuma ser pagamento recusado (Pix, 3DS) ou inseguranca de ultima hora.",
     actions: [
-      "Revisar taxa de aprovação da adquirente (hoje ~91%)",
-      "Implementar recuperação 1-click de carrinho abandonado",
-      "Mostrar garantia + suporte 24h no step de pagamento",
+      "Revisar taxa de aprovacao da adquirente",
+      "Recuperacao de carrinho abandonado",
+      "Mostrar garantia + suporte no step de pagamento",
     ],
-    benchmark: "Top-quartil: 75–80% shipping→purchase",
+    benchmark: "Top-quartil: 75-80% pagamento->purchase",
   },
-  "Área do Investidor": {
-    diagnosis:
-      "183k logins/mês — retenção sólida. Engajamento pós-compra é o principal sinal de LTV futuro.",
-    actions: [
-      "Segmentar usuários que NÃO logaram em 14d (risco de churn)",
-      "Notificar relatórios novos via app push",
-      "Experimentar dashboard personalizado por tipo de carteira",
-    ],
-    benchmark: "Target Suno: 70%+ dos clientes logam mensalmente",
-  },
-  "Up-sell / Cross-sell": {
-    diagnosis:
-      "1.2k compras recorrentes/30d. Expansão é onde está a maior margem — clientes ativos custam 5x menos para vender.",
-    actions: [
-      "Campanha de upgrade para Premium-Plus com 20% desc",
-      "Cross-sell de carteiras temáticas (dividendos, FIIs, cripto)",
-      "Indicação premiada: R$ 50 de crédito por amigo",
-    ],
-    benchmark: "Top-quartil SaaS: 15–25% ARR expansion",
-  },
-};
-
-// Mapa: stage da jornada → nome do evento GA4 equivalente (para puxar valor real)
-const stageToEvent: Record<string, string> = {
-  "Visita ao Site": "session_start",
-  "Lead Capturado": "generate_lead",
-  "Conta Criada": "sign_up",
-  "Início Checkout": "begin_checkout",
-  "Dados de Pagamento": "add_payment_info",
-  "Compra Concluída": "purchase",
 };
 
 export function JourneyChart() {
@@ -157,22 +148,26 @@ export function JourneyChart() {
     ? `${customRange.startDate} → ${customRange.endDate}`
     : `últimos ${days}d`;
 
-  // Se temos funnel real do GA4, recalcula valores; senão usa mock
   const realFunnel = ga4Conv?.funnel;
 
-  // Com dados reais LIGADOS e sem funil disponivel, NAO renderizamos o mock
-  // ilustrativo (mesmo com banner) - numero fake em contexto real ja causou
-  // confusao (30/06). Mostra skeleton durante o fetch e aviso claro se falhar.
-  if (useRealData && !realFunnel) {
-    const carregando = meta.status === "loading" || meta.status === "idle";
+  // POLITICA ZERO MOCK (30/06): sem funil real, nada de numero ilustrativo.
+  // Estados possiveis: skeleton (carregando), aviso de conexao (!useRealData)
+  // ou aviso de indisponibilidade (fetch terminou sem funil).
+  if (!useRealData || !realFunnel) {
+    const carregando = useRealData && (meta.status === "loading" || meta.status === "idle");
     return (
       <div className="bg-white rounded-2xl border border-[color:var(--border)] p-6">
         <h3 className="text-base font-semibold flex items-center gap-2 flex-wrap mb-4">
           Jornada do Usuário Suno
-          <DataStatus meta={meta} usingMock={false} compact />
+          <DataStatus meta={meta} usingMock={!useRealData} compact />
         </h3>
         {carregando ? (
           <SkeletonBlock height={240} />
+        ) : !useRealData ? (
+          <div className="rounded-xl border border-dashed border-[color:var(--border)] p-6 text-sm text-[color:var(--muted-foreground)] text-center">
+            Sem conexão com o GA4. Selecione uma property no header - este painel não exibe
+            dados de exemplo.
+          </div>
         ) : (
           <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
             Sem dados do funil desta property no período selecionado. Nenhum número
@@ -187,65 +182,42 @@ export function JourneyChart() {
     string,
     { matchedAlias: string | null; aliasesTried: string[]; value: number }
   >();
-  const journey: JourneyStep[] = useRealData && realFunnel
-    ? sunoJourney.map((step) => {
-        const evName = stageToEvent[step.stage];
-        const real = realFunnel.steps.find((s) => s.event === evName);
-        if (!real) return step;
-        stageMatch.set(step.stage, {
-          matchedAlias: real.matchedAlias ?? null,
-          aliasesTried: real.aliasesTried ?? [evName],
-          value: real.value,
-        });
-        return {
-          ...step,
-          value: real.value,
-          pct: real.pct,
-          dropPct: real.dropPct,
-        };
-      })
-    : sunoJourney;
+  // A partir daqui o funil real EXISTE: montamos as etapas com valores 100% do GA4.
+  const journey: JourneyStep[] = JOURNEY_STAGES.map((st) => {
+    const real = realFunnel.steps.find((s) => s.event === st.event);
+    stageMatch.set(st.stage, {
+      matchedAlias: real?.matchedAlias ?? null,
+      aliasesTried: real?.aliasesTried ?? [st.event],
+      value: real?.value ?? 0,
+    });
+    return {
+      ...st,
+      value: real?.value ?? 0,
+      pct: real?.pct ?? 0,
+      dropPct: real?.dropPct ?? 0,
+    };
+  });
 
-  const isReal = Boolean(useRealData && realFunnel);
-  // Stages que esperávamos medir mas vieram zerados (no modo real)
-  const zeroStages = isReal
-    ? sunoJourney
-        .slice(0, 6)
-        .filter((s) => {
-          const m = stageMatch.get(s.stage);
-          return m && m.value === 0;
-        })
-        .map((s) => ({ stage: s.stage, aliases: stageMatch.get(s.stage)!.aliasesTried }))
-    : [];
+  const isReal = true;
+  // Stages que esperávamos medir mas vieram zerados
+  const zeroStages = JOURNEY_STAGES.filter((s) => {
+    const m = stageMatch.get(s.stage);
+    return m && m.value === 0;
+  }).map((s) => ({ stage: s.stage, aliases: stageMatch.get(s.stage)!.aliasesTried }));
   const discoveredEvents = realFunnel?.discoveredEvents || [];
   const selectedIdx = selected ? journey.findIndex((s) => s.stage === selected.stage) : -1;
   const insight = selected ? stageInsights[selected.stage] : null;
 
   return (
     <div className="bg-white rounded-2xl border border-[color:var(--border)] p-6">
-      {/* Banner explicativo quando estamos em modo mock (sem GA4 real conectado) */}
-      {!isReal && (
-        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/60 p-3 flex items-start gap-2">
-          <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
-          <p className="text-xs text-amber-900 leading-relaxed">
-            <strong>Modo demo:</strong> os valores de cada etapa (sessões, leads, compras) são <strong>exemplos
-            ilustrativos</strong> do funil padrão Suno. Conecte uma propriedade GA4 no header pra ver dados reais
-            da jornada de aquisição.
-          </p>
-        </div>
-      )}
       <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
         <div>
           <h3 className="text-base font-semibold flex items-center gap-2 flex-wrap">
             Jornada do Usuário Suno
-            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider ${
-              isReal
-                ? "bg-gradient-to-r from-[#7c5cff] to-[#b297ff] text-white"
-                : "bg-amber-100 text-amber-800 border border-amber-200"
-            }`}>
-              {isReal ? "Mapeamento real" : "Mapeamento ilustrativo"}
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider bg-gradient-to-r from-[#7c5cff] to-[#b297ff] text-white">
+              Mapeamento real
             </span>
-            <DataStatus meta={meta} usingMock={!useRealData} compact />
+            <DataStatus meta={meta} usingMock={false} compact />
           </h3>
           <p className="text-sm text-[color:var(--muted-foreground)] mt-0.5">
             Da primeira visita ao up-sell na área do investidor · <strong>clique em qualquer etapa</strong>
