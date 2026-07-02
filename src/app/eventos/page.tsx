@@ -25,7 +25,6 @@ import {
   PieChart,
   Pie,
 } from "recharts";
-import { allEvents } from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
 import { useGA4, useGA4Overview, useGA4Conversions } from "@/lib/ga4-context";
 import { MasterOnly } from "@/components/master-only";
@@ -125,15 +124,9 @@ export default function EventosPage() {
         };
       });
     }
-    return allEvents.map((e) => {
-      const cat = EVENT_CATEGORIES[e.name] || { label: "Outros", color: "#94a3b8" };
-      return {
-        ...e,
-        status: e.status as "ok" | "warning" | "missing",
-        category: cat.label,
-        color: cat.color,
-      };
-    });
+    // ZERO MOCK (30/06): sem dado real, a lista fica vazia - a taxonomia de
+    // exemplo (allEvents) foi removida do fluxo.
+    return [];
   }, [showReal, overview, conversions]);
 
   const rows = eventRows

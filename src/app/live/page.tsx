@@ -4,13 +4,6 @@ import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Activity, Users, Eye, Zap, TrendingUp, TrendingDown, Minus, AlertTriangle } from "lucide-react";
-import {
-  realtimeActiveByMinute,
-  realtimeTopPages,
-  realtimeByDevice,
-  realtimeBySource,
-  realtimeTopEvents,
-} from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
 import { useGA4, useGA4Realtime } from "@/lib/ga4-context";
 import { DataStatus, SkeletonBlock } from "@/components/data-status";
@@ -37,33 +30,16 @@ export default function LivePage() {
   const { useRealData } = useGA4();
   const { data: rt, meta, error } = useGA4Realtime(30000);
 
-  // Fallback para dados simulados quando não houver GA4 conectado
-  const [activeUsers, setActiveUsers] = useState(347);
+  // ZERO MOCK (30/06): a simulacao por Math.random foi REMOVIDA. A serie comeca
+  // zerada e so recebe valores reais do GA4 Realtime.
+  const [activeUsers, setActiveUsers] = useState(0);
   const [pulse, setPulse] = useState(0);
-  const [series, setSeries] = useState(realtimeActiveByMinute);
-
-  // Tick simulado só quando NÃO temos dados reais
-  useEffect(() => {
-    if (useRealData) return; // dados reais cuidam do refresh via polling
-    const tick = setInterval(() => {
-      setActiveUsers((v) => {
-        const delta = Math.floor(Math.random() * 20 - 10);
-        return Math.max(150, Math.min(600, v + delta));
-      });
-      setPulse((p) => p + 1);
-      setSeries((prev) => {
-        const next = [
-          ...prev.slice(1),
-          { minute: "now", users: Math.floor(activeUsers + Math.random() * 40 - 20) },
-        ];
-        return next.map((d, i) => ({
-          ...d,
-          minute: i === next.length - 1 ? "agora" : `-${next.length - 1 - i}m`,
-        }));
-      });
-    }, 3000);
-    return () => clearInterval(tick);
-  }, [activeUsers, useRealData]);
+  const [series, setSeries] = useState(
+    Array.from({ length: 30 }, (_, i) => ({
+      minute: i === 29 ? "agora" : `-${29 - i}m`,
+      users: 0,
+    }))
+  );
 
   // Quando dados reais chegam, empurra no series e pulsa
   useEffect(() => {
@@ -82,10 +58,10 @@ export default function LivePage() {
   const showingReal = useRealData && meta.status === "success" && rt;
   const isLoadingReal = useRealData && meta.status === "loading" && !rt;
 
-  // Fonte de dados final (real > mock)
+  // Fonte de dados: SO real. Sem GA4 -> listas vazias (nunca simulado).
   const displayPages = showingReal
     ? rt!.pages.map((p) => ({ path: p.path || "(sem path)", users: p.users, trend: "flat" as const }))
-    : realtimeTopPages;
+    : [];
 
   const totalDeviceUsers = showingReal
     ? rt!.devices.reduce((s, d) => s + d.value, 0) || 1
@@ -96,7 +72,7 @@ export default function LivePage() {
         value: Math.round((d.value / totalDeviceUsers) * 100),
         color: deviceColors[d.name] || "#7c5cff",
       }))
-    : realtimeByDevice;
+    : [];
 
   // Top 10 localizações (estado/cidade) — substitui a lista de países por granularidade BR.
   const displayLocations = showingReal && rt!.locations && rt!.locations.length > 0
@@ -107,26 +83,15 @@ export default function LivePage() {
         users: l.users,
         flag: countryFlag[l.country] || "🌎",
       }))
-    : [
-        { country: "Brazil", region: "São Paulo", city: "São Paulo", users: 182, flag: "🇧🇷" },
-        { country: "Brazil", region: "Rio de Janeiro", city: "Rio de Janeiro", users: 96, flag: "🇧🇷" },
-        { country: "Brazil", region: "Minas Gerais", city: "Belo Horizonte", users: 54, flag: "🇧🇷" },
-        { country: "Brazil", region: "Rio Grande do Sul", city: "Porto Alegre", users: 41, flag: "🇧🇷" },
-        { country: "Brazil", region: "Paraná", city: "Curitiba", users: 38, flag: "🇧🇷" },
-        { country: "Brazil", region: "Santa Catarina", city: "Florianópolis", users: 26, flag: "🇧🇷" },
-        { country: "Brazil", region: "Distrito Federal", city: "Brasília", users: 22, flag: "🇧🇷" },
-        { country: "Brazil", region: "Bahia", city: "Salvador", users: 19, flag: "🇧🇷" },
-        { country: "Brazil", region: "Pernambuco", city: "Recife", users: 14, flag: "🇧🇷" },
-        { country: "Brazil", region: "Ceará", city: "Fortaleza", users: 11, flag: "🇧🇷" },
-      ];
+    : [];
 
   const displayEvents = showingReal && rt!.events && rt!.events.length > 0
     ? rt!.events.map((e) => ({ event: e.event, count: e.count }))
-    : realtimeTopEvents;
+    : [];
 
   const displaySources = showingReal && rt!.platforms && rt!.platforms.length > 0
     ? rt!.platforms.map((s) => ({ source: s.source || "(desconhecido)", users: s.users }))
-    : realtimeBySource;
+    : [];
 
   return (
     <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
@@ -141,7 +106,7 @@ export default function LivePage() {
             <div className="absolute inset-0 w-3 h-3 rounded-full bg-red-500 animate-ping" />
           </div>
           <span className="text-xs font-bold text-red-600 uppercase tracking-wider">
-            Ao vivo · Atualiza a cada {showingReal ? "30s" : "3s"}
+            Ao vivo · Atualiza a cada 30s
           </span>
           <DataStatus meta={meta} usingMock={!useRealData} />
           {showingReal && (
@@ -161,20 +126,17 @@ export default function LivePage() {
         </p>
       </motion.div>
 
-      {/* ⚠ Banner explícito quando os números são simulados (sem GA4 conectado).
-          Tick fake de Math.random() a cada 3s parece dashboard real — gerente
-          PRECISA ver claramente que é demo. */}
+      {/* ZERO MOCK (30/06): a simulacao Math.random foi removida. Sem GA4
+          conectado, os numeros ficam zerados e este aviso explica o porque. */}
       {!useRealData && (
         <div className="mb-6 rounded-xl border-2 border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 p-4 flex items-start gap-3">
           <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
             <AlertTriangle size={18} className="text-amber-700" />
           </div>
           <div className="flex-1 text-xs leading-relaxed text-amber-900">
-            <strong className="text-sm">⚠ Modo demo — dados simulados:</strong>{" "}
-            Os números abaixo (usuários ativos, top páginas, devices) são <strong>simulados</strong>{" "}
-            por <code className="bg-white px-1 rounded font-mono">Math.random()</code> que atualiza a cada 3 segundos
-            pra dar a impressão de realtime. <strong>Não são dados reais</strong>. Pra ver realtime do GA4,
-            selecione uma propriedade no header.
+            <strong className="text-sm">Sem conexão com o GA4:</strong>{" "}
+            selecione uma propriedade no header para ver o realtime. Este painel não exibe
+            dados simulados - os valores abaixo permanecem zerados até a conexão.
           </div>
         </div>
       )}

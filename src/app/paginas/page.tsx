@@ -12,7 +12,6 @@ import {
   LogOut,
   X,
 } from "lucide-react";
-import { allPages } from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
 import { useGA4, useGA4Overview, useGA4PagesDetail } from "@/lib/ga4-context";
 import { RecurringCampaigns } from "@/components/recurring-campaigns";
@@ -102,7 +101,8 @@ export default function PaginasPage() {
         entry: 0,
       }));
     }
-    return (allPages as Omit<PageRow, "host">[]).map((p) => ({ ...p, host: "" }));
+    // ZERO MOCK (30/06): sem dado real, tabela vazia - allPages de exemplo removido.
+    return [];
   }, [showReal, pagesDetail, useRealData, meta.status, overview]);
 
   const rows = [...pageRows]

@@ -3,20 +3,6 @@
 import { useState, useMemo } from "react";
 import { motion } from "framer-motion";
 import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-  Legend,
-} from "recharts";
-import {
   ArrowUpDown,
   Download,
   Filter as FilterIcon,
@@ -28,15 +14,7 @@ import {
   Sparkles,
   Info,
 } from "lucide-react";
-import {
-  reportBySunoChannel,
-  reportByChannel,
-  reportByPage,
-  reportByDevice,
-  reportByCampaign,
-  trendDataLastClick,
-  ReportRow,
-} from "@/lib/data";
+import { ReportRow } from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
 import { CampaignPerformance } from "@/components/campaign-performance";
 import { CampaignAttribution } from "@/components/campaign-attribution";
@@ -46,7 +24,6 @@ import { DataStatus, SkeletonBlock, DataErrorCard } from "@/components/data-stat
 
 type Dimension = "sunoChannel" | "channel" | "page" | "device" | "campaign";
 type ViewMode = "table" | "chart";
-type ChartType = "line" | "area" | "bar";
 
 // Ordem das abas: Campanhas primeiro (visão de abertura), resto na sequência.
 const dimensionLabels: Record<Dimension, string> = {
@@ -57,13 +34,8 @@ const dimensionLabels: Record<Dimension, string> = {
   device: "Dispositivo",
 };
 
-const dimensionData: Record<Dimension, ReportRow[]> = {
-  sunoChannel: reportBySunoChannel,
-  channel: reportByChannel,
-  page: reportByPage,
-  device: reportByDevice,
-  campaign: reportByCampaign,
-};
+// ZERO MOCK (30/06): dimensionData de exemplo removido - toda dimensao vem do
+// GA4 real; sem dado, a tabela fica vazia com aviso.
 
 type MetricKey =
   | "users"
@@ -100,7 +72,6 @@ export default function RelatoriosPage() {
   // Campanhas é a visão inicial (mais atrativa como dashboard de abertura).
   const [dimension, setDimension] = useState<Dimension>("campaign");
   const [viewMode, setViewMode] = useState<ViewMode>("table");
-  const [chartType, setChartType] = useState<ChartType>("area");
   const [period, setPeriod] = useState("30D");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<MetricKey>("sessions");
@@ -147,7 +118,7 @@ export default function RelatoriosPage() {
   // Agora QUALQUER dimensão tem dado real (page → pagePath, device →
   // deviceCategory, campaign → sessionCampaignName etc).
   const isRealForDimension = useRealData && realRows !== null;
-  const data = isRealForDimension ? realRows! : dimensionData[dimension];
+  const data: ReportRow[] = isRealForDimension ? realRows! : [];
   // source/medium só faz sentido em canal/campanha (page/device não têm origem)
   const showSourceMedium = dimension === "sunoChannel" || dimension === "channel" || dimension === "campaign";
 
@@ -196,11 +167,9 @@ export default function RelatoriosPage() {
   const engagementRate =
     totals.sessions > 0 ? (totals.engagedSessions / totals.sessions) * 100 : 0;
 
-  const chartData = trendDataLastClick.map((d) => ({
-    ...d,
-    engagedSessions: Math.floor(d.sessoes * (engagementRate / 100)),
-    conversoes: Math.floor(d.sessoes * (totalConvRate / 100)),
-  }));
+  // ZERO MOCK (30/06): o chartData anterior era serie diaria FABRICADA
+  // (trendDataLastClick mock x taxas). Removido - o modo grafico mostra aviso
+  // ate plugarmos serie diaria real por dimensao.
 
   return (
     <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
@@ -497,72 +466,15 @@ export default function RelatoriosPage() {
               <TrendingUp size={14} className="text-[#7c5cff]" />
               Evolução temporal · {dimensionLabels[dimension]}
             </h3>
-            <div className="flex items-center gap-1 bg-[color:var(--muted)] p-1 rounded-lg">
-              {(["line", "area", "bar"] as ChartType[]).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setChartType(t)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition ${
-                    chartType === t ? "bg-white text-[#7c5cff] shadow-sm" : "text-[color:var(--muted-foreground)]"
-                  }`}
-                >
-                  {t === "line" ? "Linha" : t === "area" ? "Área" : "Barra"}
-                </button>
-              ))}
-            </div>
           </div>
 
-          <ResponsiveContainer width="100%" height={360}>
-            {chartType === "line" ? (
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#eceaf4" />
-                <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#6b6b80" }} />
-                <YAxis tick={{ fontSize: 11, fill: "#6b6b80" }} tickFormatter={(v) => formatNumber(v)} />
-                <Tooltip formatter={(v) => formatNumber(Number(v))} />
-                <Legend />
-                <Line type="monotone" dataKey="sessoes" stroke="#7c5cff" strokeWidth={2.5} name="Sessões" />
-                <Line type="monotone" dataKey="usuarios" stroke="#10b981" strokeWidth={2.5} name="Usuários" />
-                <Line type="monotone" dataKey="engagedSessions" stroke="#3b82f6" strokeWidth={2.5} name="Sessões engajadas" />
-                <Line type="monotone" dataKey="conversoes" stroke="#f59e0b" strokeWidth={2.5} name="Conversões" />
-              </LineChart>
-            ) : chartType === "area" ? (
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="rptGradA" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#7c5cff" stopOpacity={0.35} />
-                    <stop offset="95%" stopColor="#7c5cff" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="rptGradB" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="rptGradC" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#eceaf4" />
-                <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#6b6b80" }} />
-                <YAxis tick={{ fontSize: 11, fill: "#6b6b80" }} tickFormatter={(v) => formatNumber(v)} />
-                <Tooltip formatter={(v) => formatNumber(Number(v))} />
-                <Legend />
-                <Area type="monotone" dataKey="sessoes" stroke="#7c5cff" strokeWidth={2.5} fill="url(#rptGradA)" name="Sessões" />
-                <Area type="monotone" dataKey="engagedSessions" stroke="#3b82f6" strokeWidth={2.5} fill="url(#rptGradC)" name="Sessões engajadas" />
-                <Area type="monotone" dataKey="usuarios" stroke="#10b981" strokeWidth={2.5} fill="url(#rptGradB)" name="Usuários" />
-              </AreaChart>
-            ) : (
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#eceaf4" />
-                <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#6b6b80" }} />
-                <YAxis tick={{ fontSize: 11, fill: "#6b6b80" }} tickFormatter={(v) => formatNumber(v)} />
-                <Tooltip formatter={(v) => formatNumber(Number(v))} />
-                <Legend />
-                <Bar dataKey="sessoes" fill="#7c5cff" name="Sessões" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="engagedSessions" fill="#3b82f6" name="Sessões engajadas" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="conversoes" fill="#f59e0b" name="Conversões" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            )}
-          </ResponsiveContainer>
+          {/* ZERO MOCK (30/06): o grafico anterior usava serie diaria FABRICADA.
+              Sera religado quando houver serie diaria real por dimensao. */}
+          <div className="h-[360px] flex items-center justify-center rounded-xl border border-dashed border-[color:var(--border)] text-sm text-[color:var(--muted-foreground)] text-center px-8">
+            Evolução temporal por dimensão ainda não disponível com dados reais. A tabela ao
+            lado usa 100% dados do GA4 - a série diária por canal/campanha será plugada em
+            breve. Nenhum gráfico simulado é exibido.
+          </div>
 
           <div className="mt-4 pt-4 border-t border-[color:var(--border)] grid grid-cols-4 gap-3">
             {filtered.slice(0, 4).map((row) => (
