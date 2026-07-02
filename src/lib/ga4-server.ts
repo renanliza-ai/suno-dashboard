@@ -397,7 +397,18 @@ export async function getKpis(propertyId: string, days = 30, startDate?: string 
   }
 
   if (!v) {
-    return { data: null, error: minimal.error || fallback.error || res.error };
+    // NUNCA retornar data null com error null: esse estado fantasma fazia o front
+    // marcar "success" sem KPIs e cair em mock com badge verde (bug reportado em
+    // 30/06 - numeros iguais pra todas as properties). Se o GA4 respondeu 200 mas
+    // sem totals, devolvemos um erro explicito pro usuario ver o que houve.
+    return {
+      data: null,
+      error:
+        minimal.error ||
+        fallback.error ||
+        res.error ||
+        "GA4 respondeu sem dados (totals vazio) para esta property/periodo. Verifique se a conta conectada tem acesso a esta property e se ha coleta no periodo selecionado.",
+    };
   }
 
   // Tenta puxar engagedSessions e bounceRate em chamada SEPARADA — se falhar, ok,

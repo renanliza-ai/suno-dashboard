@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { Dialog } from "./dialog";
 import { useGA4, useGA4Conversions } from "@/lib/ga4-context";
-import { DataStatus } from "@/components/data-status";
+import { DataStatus, SkeletonBlock } from "@/components/data-status";
 import { MasterOnly } from "@/components/master-only";
 
 type JourneyStep = (typeof sunoJourney)[number];
@@ -159,6 +159,30 @@ export function JourneyChart() {
 
   // Se temos funnel real do GA4, recalcula valores; senão usa mock
   const realFunnel = ga4Conv?.funnel;
+
+  // Com dados reais LIGADOS e sem funil disponivel, NAO renderizamos o mock
+  // ilustrativo (mesmo com banner) - numero fake em contexto real ja causou
+  // confusao (30/06). Mostra skeleton durante o fetch e aviso claro se falhar.
+  if (useRealData && !realFunnel) {
+    const carregando = meta.status === "loading" || meta.status === "idle";
+    return (
+      <div className="bg-white rounded-2xl border border-[color:var(--border)] p-6">
+        <h3 className="text-base font-semibold flex items-center gap-2 flex-wrap mb-4">
+          Jornada do Usuário Suno
+          <DataStatus meta={meta} usingMock={false} compact />
+        </h3>
+        {carregando ? (
+          <SkeletonBlock height={240} />
+        ) : (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            Sem dados do funil desta property no período selecionado. Nenhum número
+            ilustrativo é exibido aqui para não se passar por dado real. Tente trocar o
+            período ou a property no header.
+          </div>
+        )}
+      </div>
+    );
+  }
   const stageMatch = new Map<
     string,
     { matchedAlias: string | null; aliasesTried: string[]; value: number }

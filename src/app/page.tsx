@@ -72,8 +72,17 @@ export default function Home() {
     : mockKpis;
 
   const usingMock = !useRealData;
-  const isLoading = useRealData && meta.status === "loading";
-  const hasError = useRealData && meta.status === "error";
+  // KPIs indisponiveis com real LIGADO: fetch terminou (success/partial) mas veio
+  // sem kpis. Antes esse caso caia silenciosamente no mockKpis com badge verde
+  // (bug 30/06: 470,9k identicos em todas as properties). Agora vira erro visivel.
+  const kpisUnavailable =
+    useRealData && (meta.status === "success" || meta.status === "partial") && !overview?.kpis;
+  const isLoading = useRealData && (meta.status === "loading" || meta.status === "idle");
+  const hasError = useRealData && (meta.status === "error" || kpisUnavailable);
+  const kpisError =
+    ga4Error ||
+    meta.sectionErrors?.kpis ||
+    (kpisUnavailable ? "A resposta do GA4 veio sem os KPIs desta property/periodo." : null);
 
   return (
     <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
@@ -97,7 +106,7 @@ export default function Home() {
 
       {hasError && (
         <div className="mb-4">
-          <DataErrorCard meta={meta} error={ga4Error} onRetry={() => window.location.reload()} />
+          <DataErrorCard meta={meta} error={kpisError} onRetry={() => window.location.reload()} />
         </div>
       )}
 
