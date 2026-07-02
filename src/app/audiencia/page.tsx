@@ -17,41 +17,24 @@ import { Users, MapPin, Heart, Monitor, UserCheck, Clock, Activity, Sparkles, Ta
 import { useState, useMemo } from "react";
 import { IcpModal } from "@/components/icp-modal";
 import { PeriodPicker } from "@/components/period-picker";
-import {
-  audienceByAge,
-  audienceByGender,
-  audienceByState,
-  audienceInterests,
-  audienceCohorts,
-  audienceByTech,
-  activeUsersStats,
-} from "@/lib/data";
+import { audienceInterests, audienceCohorts } from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
 import { useGA4, useGA4Overview, useGA4Audience } from "@/lib/ga4-context";
 import { DataStatus } from "@/components/data-status";
 import { MasterOnly } from "@/components/master-only";
 import { Loader2 } from "lucide-react";
 
-// Seed determinístico — ao trocar a propriedade, valores escalam de forma estável.
-function hashSeed(s: string | null | undefined): number {
-  if (!s) return 0;
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
-}
-
+// ZERO MOCK (30/06): hashSeed/factor que escalavam dados de exemplo por
+// propriedade foram REMOVIDOS. Sem dado real, as secoes ficam vazias.
 export default function AudienciaPage() {
   const [icpOpen, setIcpOpen] = useState(false);
 
   // GA4 — propriedade do header
-  const { selected, selectedId, useRealData } = useGA4();
+  const { selected, useRealData } = useGA4();
   const { data: overview, meta } = useGA4Overview();
   const { data: audienceReal, loading: audienceLoading } = useGA4Audience();
-  const seed = hashSeed(selectedId);
-  const propertyName = selected?.displayName || "Modo demo (sem GA4)";
-  const factor = 0.7 + ((seed % 60) / 100); // 0.70x a 1.30x
+  const propertyName = selected?.displayName || "Sem GA4 conectado";
 
-  // Quando há dados reais GA4, usa eles. Caso contrário, fallback pros mocks.
   // Cores fixas pra gênero (mantém visual estável)
   const genderColors: Record<string, string> = {
     Masculino: "#7c5cff",
@@ -82,35 +65,21 @@ export default function AudienciaPage() {
     ? audienceReal.byOS.map((o) => ({ name: o.name, pct: o.pct }))
     : null;
 
-  // Decide qual fonte usar — real GA4 se disponível, senão fallback estático
-  const ageData = realAge || audienceByAge;
-  const genderData = realGender || audienceByGender;
-  const stateData = realState || audienceByState;
-  const browserData = realBrowser || audienceByTech.browser;
-  const osData = realOS || audienceByTech.os;
+  // ZERO MOCK: so dado real do GA4; sem dado, listas vazias.
+  const ageData = realAge || [];
+  const genderData = realGender || [];
+  const stateData = realState || [];
+  const browserData = realBrowser || [];
+  const osData = realOS || [];
   const isRealAudience = useRealData && !!audienceReal;
 
-  // Quando há dados reais GA4, usamos activeUsers para escalar tudo proporcionalmente.
   const realTotal = useRealData && meta.status === "success" ? overview?.kpis?.activeUsers || 0 : 0;
-  const referenceTotal = realTotal > 0 ? realTotal : Math.round(470000 * factor);
+  const referenceTotal = realTotal;
 
-  // KPIs DAU/WAU/MAU/Stickiness — escalados pela propriedade ou GA4 real.
-  const stats = useMemo(() => {
-    if (realTotal > 0) {
-      // MAU ≈ totalUsers no período. DAU ≈ MAU * stickiness assumido (8%). WAU ≈ MAU * 0.35.
-      const mau = realTotal;
-      const dau = Math.round(mau * 0.08);
-      const wau = Math.round(mau * 0.35);
-      const stickiness = mau > 0 ? Number(((dau / mau) * 100).toFixed(1)) : activeUsersStats.stickiness;
-      return { dau, wau, mau, stickiness };
-    }
-    return {
-      dau: Math.round(activeUsersStats.dau * factor),
-      wau: Math.round(activeUsersStats.wau * factor),
-      mau: Math.round(activeUsersStats.mau * factor),
-      stickiness: Math.max(2, Math.min(15, Number((activeUsersStats.stickiness * (0.8 + (seed % 40) / 100)).toFixed(1)))),
-    };
-  }, [seed, factor, realTotal]);
+  // ZERO MOCK: DAU/WAU eram DERIVADOS por coeficiente inventado (8%/35% do MAU)
+  // mesmo no modo real - removidos. So exibimos o que o GA4 entrega de fato:
+  // usuarios ativos do periodo (MAU quando o range e 30d).
+  const stats = useMemo(() => ({ mau: realTotal }), [realTotal]);
 
   return (
     <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
@@ -177,10 +146,12 @@ export default function AudienciaPage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {[
-          { label: "DAU", value: formatNumber(stats.dau), sub: "Ativos hoje", icon: Activity },
-          { label: "WAU", value: formatNumber(stats.wau), sub: "Últimos 7 dias", icon: Users },
-          { label: "MAU", value: formatNumber(stats.mau), sub: "Últimos 30 dias", icon: Users },
-          { label: "Stickiness", value: `${stats.stickiness}%`, sub: "DAU / MAU", icon: Sparkles },
+          // ZERO MOCK: DAU/WAU/Stickiness exigem series diarias dedicadas - sem
+          // fonte real plugada, mostram indisponivel (nada de coeficiente).
+          { label: "DAU", value: "—", sub: "requer série diária (em breve)", icon: Activity },
+          { label: "WAU", value: "—", sub: "requer série diária (em breve)", icon: Users },
+          { label: "Usuários ativos", value: stats.mau > 0 ? formatNumber(stats.mau) : "—", sub: "no período selecionado", icon: Users },
+          { label: "Stickiness", value: "—", sub: "DAU / MAU (em breve)", icon: Sparkles },
         ].map((k, i) => {
           const Icon = k.icon;
           return (
@@ -272,8 +243,8 @@ export default function AudienciaPage() {
           <h3 className="text-base font-semibold flex items-center gap-2 mb-4">
             <Heart size={14} className="text-[#7c5cff]" />
             Afinidade de Interesses
-            <span className="ml-auto text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
-              Estudo ICP
+            <span className="ml-auto text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 text-slate-600" title="Dados de estudo estático do ICP Suno - não reagem ao período/property selecionados">
+              Estudo estático · não é GA4
             </span>
           </h3>
           <div className="space-y-2">
@@ -389,8 +360,8 @@ export default function AudienciaPage() {
         <h3 className="text-base font-semibold flex items-center gap-2 mb-4">
           <Clock size={14} className="text-[#7c5cff]" />
           Retenção por Coorte
-          <span className="ml-auto text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
-            Estudo Suno
+          <span className="ml-auto text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 text-slate-600" title="Dados de estudo estático - não reagem ao período/property selecionados">
+            Estudo estático · não é GA4
           </span>
         </h3>
         <div className="overflow-x-auto">

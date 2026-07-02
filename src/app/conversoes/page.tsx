@@ -17,7 +17,6 @@ import {
   AttributionIllustration,
   TopAssistedCampaigns,
 } from "@/components/attribution-illustration";
-import { AssistedTimeToPurchase } from "@/components/assisted-time-to-purchase";
 import { CheckoutMonitor } from "@/components/checkout-monitor";
 
 const eventIcon: Record<string, typeof Target> = {
@@ -179,8 +178,8 @@ export default function ConversoesPage() {
         <TopAssistedCampaigns />
       </div>
 
-      {/* Tempo até compra por canal — só aparece no modo assistida */}
-      <AssistedTimeToPurchase />
+      {/* ZERO MOCK (30/06): AssistedTimeToPurchase removido - tempo ate compra
+          por canal era 100% derivado de mock; volta quando houver BigQuery. */}
 
       {/* ============================================================
           MONITOR DE CHECKOUT — adicionado a pedido pra análise de

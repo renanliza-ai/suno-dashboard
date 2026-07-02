@@ -35,11 +35,7 @@ import {
 } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import {
-  trackingPages,
-  utmRows,
   utmStandards,
-  phantomJourneys,
-  crossDeviceStats,
   type TrackingPage,
   type UTMRow,
   type TrackingStatus,
@@ -48,23 +44,13 @@ import { formatNumber } from "@/lib/utils";
 import { useGA4, useGA4PagesDetail } from "@/lib/ga4-context";
 import { DataStatus } from "@/components/data-status";
 
-// Hash determinístico — ao trocar a propriedade, status/contagens mudam de
-// forma estável (mesma propriedade sempre dá os mesmos resultados).
-function hashSeed(s: string | null | undefined): number {
-  if (!s) return 0;
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
-}
+// ZERO MOCK (30/06): hashSeed/statusByMod REMOVIDOS - fabricavam status de
+// GTM/eventos "deterministicos" que pareciam checagem real. Agora o status so
+// vem da verificacao AO VIVO (/api/tracking/gtm-check); sem verificacao,
+// aparece "Ausente" (nao verificado). Abas Jornada Fantasma e Cross-Device
+// (100% fabricadas) tambem foram removidas ate existir fonte real (BigQuery).
 
-const statusByMod = (mod: number): TrackingStatus => {
-  if (mod < 55) return "ok";
-  if (mod < 75) return "warning";
-  if (mod < 90) return "missing";
-  return "error";
-};
-
-type Tab = "pages" | "utm" | "phantom" | "crossdevice" | "stale_lps";
+type Tab = "pages" | "utm" | "stale_lps";
 
 // ⚠ baseAlerts hardcoded REMOVIDO em 12/05/2026.
 // Antes esse array gerava alertas fakes como "/lp/premium-30 sem GTM"
@@ -312,93 +298,44 @@ export default function TrackingPage() {
     detail: string;
     isLiveVerified?: boolean;
   } | null>(null);
-  const [selectedPhantom, setSelectedPhantom] = useState<(typeof phantomJourneys)[number] | null>(null);
-
   // GA4 — propriedade selecionada no header
   const { selected, selectedId, useRealData } = useGA4();
   const { data: pagesDetail, meta: pagesMeta } = useGA4PagesDetail();
-  const seed = hashSeed(selectedId);
-  const propertyName = selected?.displayName || "Modo demo (sem GA4)";
+  const propertyName = selected?.displayName || "Sem GA4 conectado";
   const realPagesAvailable =
     useRealData && pagesMeta.status === "success" && (pagesDetail?.pages?.length || 0) > 0;
 
-  // displayPages: usa páginas reais quando disponível, senão aplica transformação
-  // determinística (seed) sobre o mock para que os números mudem ao trocar de propriedade.
+  // ZERO MOCK (30/06): paginas 100% reais do GA4 (host/path/pageviews). Os
+  // status de GTM/eventos comecam como "missing" (NAO VERIFICADO) e so mudam
+  // quando a verificacao AO VIVO (/api/tracking/gtm-check) roda e sobrescreve.
+  // leads/compras por pagina nao vem do pagesDetail: exibimos 0 = sem medicao
+  // aqui (nada de coeficiente inventado). Sem GA4 -> lista vazia.
   const displayPages: TrackingPage[] = useMemo(() => {
     if (realPagesAvailable && pagesDetail) {
-      // Constrói TrackingPage a partir das páginas reais GA4 + status seedado.
-      return pagesDetail.pages.slice(0, Math.max(10, trackingPages.length)).map((rp, i) => {
-        const base = trackingPages[i] || trackingPages[0];
-        const gtmMod = (seed + i * 17) % 100;
-        const eventsMod = (seed + i * 23) % 100;
-        const leadMod = (seed + i * 31) % 100;
-        const purchaseMod = (seed + i * 37) % 100;
-        const gtm = statusByMod(gtmMod);
-        const events = statusByMod(eventsMod);
-        const lead = statusByMod(leadMod);
-        const purchase = statusByMod(purchaseMod);
-        const status: TrackingStatus =
-          gtmMod >= 90 || eventsMod >= 90
-            ? "error"
-            : gtmMod >= 75 || eventsMod >= 75
-            ? "warning"
-            : "ok";
-        // rp.url = "host/path" (sem protocolo). Garantimos https:// para clicabilidade.
+      return pagesDetail.pages.slice(0, 30).map((rp) => {
         const fullUrl = rp.url
           ? rp.url.startsWith("http")
             ? rp.url
             : `https://${rp.url}`
           : `https://${rp.host || "(sem-host)"}${rp.path || "/"}`;
         return {
-          ...base,
           url: fullUrl,
-          shortPath: rp.path || base.shortPath,
+          shortPath: rp.path || fullUrl,
           pageviews30d: Math.round(rp.views || 0),
-          // leads/compras não existem no GA4 Data API — derivamos de users com coeficiente.
-          leadCount30d: Math.round((rp.users || 0) * 0.04),
-          purchaseCount30d: Math.round((rp.users || 0) * 0.008),
-          gtm,
-          events,
-          lead,
-          purchase,
-          status,
-          lastCheck: `${((seed + i) % 30) + 1}min`,
-          // GTM container para o detalhe — varia por host real
-          gtmContainer: rp.host ? `GTM-${rp.host.split(".")[0].toUpperCase().slice(0, 6)}` : base.gtmContainer,
-        };
+          leadCount30d: 0,
+          purchaseCount30d: 0,
+          gtm: "missing" as TrackingStatus,
+          events: "missing" as TrackingStatus,
+          lead: "missing" as TrackingStatus,
+          purchase: "missing" as TrackingStatus,
+          status: "missing" as TrackingStatus,
+          lastCheck: "não verificado",
+          gtmContainer: "",
+        } as TrackingPage;
       });
     }
-    // Mock seedado por propriedade.
-    return trackingPages.map((p, i) => {
-      const factor = 0.7 + ((seed + i * 13) % 60) / 100;
-      const gtmMod = (seed + i * 17) % 100;
-      const eventsMod = (seed + i * 23) % 100;
-      const leadMod = (seed + i * 31) % 100;
-      const purchaseMod = (seed + i * 37) % 100;
-      const gtm = statusByMod(gtmMod);
-      const events = statusByMod(eventsMod);
-      const lead = statusByMod(leadMod);
-      const purchase = statusByMod(purchaseMod);
-      const status: TrackingStatus =
-        gtmMod >= 90 || eventsMod >= 90
-          ? "error"
-          : gtmMod >= 75 || eventsMod >= 75
-          ? "warning"
-          : "ok";
-      return {
-        ...p,
-        pageviews30d: Math.round(p.pageviews30d * factor),
-        leadCount30d: Math.round(p.leadCount30d * factor),
-        purchaseCount30d: Math.round(p.purchaseCount30d * factor),
-        gtm,
-        events,
-        lead,
-        purchase,
-        status,
-        lastCheck: `${((seed + i) % 30) + 1}min`,
-      };
-    });
-  }, [seed, realPagesAvailable, pagesDetail]);
+    return [];
+  }, [realPagesAvailable, pagesDetail]);
 
   // ============================================================
   // ⚠ VERIFICAÇÃO REAL DE GTM/Pixels — substitui o mock anterior
@@ -693,15 +630,12 @@ export default function TrackingPage() {
       }));
   }, [utmApiData]);
 
-  // Decide qual conjunto usar — real quando disponível, mock como fallback
-  const displayUtmRows: UTMRow[] = realUtmRows.length > 0 ? realUtmRows : utmRows;
+  // ZERO MOCK: so UTMs reais; sem dado, lista vazia.
+  const displayUtmRows: UTMRow[] = realUtmRows;
   const utmIssuesCount = displayUtmRows.filter((r) => r.issues.length > 0).length;
-  const utmBaseHealth = displayUtmRows.length > 0
+  const utmHealthPct = displayUtmRows.length > 0
     ? Math.round(((displayUtmRows.length - utmIssuesCount) / displayUtmRows.length) * 100)
     : 100;
-  const utmHealthPct = realUtmRows.length > 0
-    ? utmBaseHealth
-    : Math.max(40, Math.min(99, utmBaseHealth - 8 + (seed % 16))); // só usa seed pra mock fallback
 
   // ====================================================================
   // CAPI / Server-Side Tracking — saúde REAL via /api/capi/test que pinga
@@ -793,34 +727,20 @@ export default function TrackingPage() {
     else if (capiLive && capiLive.checks?.["3_meta_api_reachable"] && !capiLive.ok) status = "partial";
     else status = "inactive";
 
-    // Eventos client-side derivados da página (real ou seedado)
-    const clientEvents = pagesDetail?.pages?.reduce((s, p) => s + (p.views || 0), 0) || (180000 + (seed % 90000));
-    const lossRate = 0.32 + ((seed % 18) / 100);
-    const lostEvents = Math.round(clientEvents * lossRate);
-
-    // Quando CAPI está confirmadamente ativo, mostramos a recuperação esperada (78-89%)
-    let serverEvents = 0;
-    let recoveryRate = 0;
-    if (status === "active") {
-      recoveryRate = 0.78 + ((seed % 12) / 100);
-      serverEvents = Math.round(lostEvents * recoveryRate);
-    } else if (status === "partial") {
-      recoveryRate = 0.30 + ((seed % 25) / 100);
-      serverEvents = Math.round(lostEvents * recoveryRate);
-    }
-
-    // Match rate ainda é estimado — Meta só calcula na UI deles após 24-48h
-    const matchRate = status === "active" ? 78 + (seed % 18) : status === "partial" ? 45 + (seed % 25) : 0;
-
-    const criticalEvents = [
-      { name: "Purchase", clientCount: Math.round(clientEvents * 0.018), capiCount: status === "active" ? Math.round(clientEvents * 0.022) : 0 },
-      { name: "Lead", clientCount: Math.round(clientEvents * 0.058), capiCount: status === "active" ? Math.round(clientEvents * 0.071) : 0 },
-      { name: "AddPaymentInfo", clientCount: Math.round(clientEvents * 0.024), capiCount: status === "active" ? Math.round(clientEvents * 0.030) : 0 },
-      { name: "InitiateCheckout", clientCount: Math.round(clientEvents * 0.041), capiCount: status === "active" ? Math.round(clientEvents * 0.052) : 0 },
-    ];
+    // ZERO MOCK (30/06): o STATUS do CAPI e real (ping na Meta Graph API).
+    // Mas perda/recuperacao/match/eventos criticos eram FABRICADOS por seed e
+    // coeficientes - removidos. Sem fonte real (Meta Events Manager API), os
+    // campos ficam zerados e o render mostra indisponivel.
+    const clientEvents = pagesDetail?.pages?.reduce((s, p) => s + (p.views || 0), 0) || 0;
+    const lossRate = 0;
+    const lostEvents = 0;
+    const serverEvents = 0;
+    const recoveryRate = 0;
+    const matchRate = 0;
+    const criticalEvents: { name: string; clientCount: number; capiCount: number }[] = [];
 
     return { status, clientEvents, lostEvents, serverEvents, recoveryRate, matchRate, lossRate, criticalEvents };
-  }, [capiLive, capiLoading, seed, pagesDetail]);
+  }, [capiLive, capiLoading, pagesDetail]);
 
   return (
     <MasterGuard>
@@ -860,28 +780,18 @@ export default function TrackingPage() {
           {useRealData && <DataStatus meta={pagesMeta} />}
         </div>
 
-        {/* ⚠ Banner explicativo da natureza dos dados desta página */}
-        <div className="mb-6 rounded-xl border-2 border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 p-4 flex items-start gap-3">
-          <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
-            <AlertTriangle size={18} className="text-amber-700" />
+        {/* Banner explicativo da natureza dos dados desta página */}
+        <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
+            <ShieldCheck size={18} className="text-emerald-700" />
           </div>
-          <div className="flex-1 text-xs leading-relaxed text-amber-900">
-            <strong className="text-sm">Atenção — natureza dos dados desta página:</strong>
+          <div className="flex-1 text-xs leading-relaxed text-emerald-900">
+            <strong className="text-sm">Natureza dos dados desta página (100% real):</strong>
             <ul className="mt-1.5 space-y-1 list-disc list-inside">
-              <li>
-                <strong>CAPI Status</strong> (abaixo): validação REAL via Meta Graph API ✓
-              </li>
-              <li>
-                <strong>Listas de páginas/UTMs/Jornadas Fantasma/Cross-Device</strong>: usam{" "}
-                <code className="bg-white px-1 rounded font-mono">hashSeed(propertyId)</code> pra gerar
-                statuses determinísticos a partir do nome da propriedade — <strong>não são checagens
-                ao vivo</strong> de cada página. Servem como amostra do que essa página seria
-                quando integrarmos verificação ao vivo de GTM/dataLayer página-por-página.
-              </li>
-              <li>
-                <strong>Pageviews/usuários</strong> de cada linha (quando aparecem): vêm do GA4 real
-                quando há propriedade conectada.
-              </li>
+              <li><strong>CAPI Status:</strong> validação ao vivo via Meta Graph API</li>
+              <li><strong>Páginas:</strong> lista e pageviews do GA4; o status GTM vem da verificação ao vivo (gtm-check). "Ausente" = ainda não verificado</li>
+              <li><strong>UTMs:</strong> direto do GA4 com detecção automática de inconsistência de taxonomia</li>
+              <li>Nenhum status ou número desta página é simulado</li>
             </ul>
           </div>
         </div>
@@ -970,8 +880,7 @@ export default function TrackingPage() {
                 {capiData.status === "loading" && "Pinging Meta Graph API para validar token + pixel..."}
                 {capiData.status === "active" && (
                   <>
-                    ✅ Meta aceitou o evento de teste (events_received:{capiLive?.metaResponse?.events_received}). Estimativa: recuperando ~
-                    {(capiData.recoveryRate * 100).toFixed(0)}% dos eventos perdidos por bloqueador/iOS 14.5.
+                    ✅ Meta aceitou o evento de teste (events_received:{capiLive?.metaResponse?.events_received}). Integração server-side ativa e respondendo.
                   </>
                 )}
                 {capiData.status === "partial" &&
@@ -1040,11 +949,9 @@ export default function TrackingPage() {
             </div>
             <div>
               <p className="text-[10px] uppercase font-bold text-red-600 tracking-wider">Perdidos</p>
-              <p className="text-lg font-bold mt-0.5 tabular-nums text-red-700">
-                {formatNumber(capiData.lostEvents)}
-              </p>
+              <p className="text-lg font-bold mt-0.5 tabular-nums text-red-700">—</p>
               <p className="text-[10px] text-[color:var(--muted-foreground)]">
-                {(capiData.lossRate * 100).toFixed(0)}% por bloqueio/ITP
+                requer Meta Events Manager
               </p>
             </div>
             <div>
@@ -1110,8 +1017,6 @@ export default function TrackingPage() {
           {([
             { id: "pages", label: "Status das Páginas", icon: Eye },
             { id: "utm", label: "UTM Audit", icon: Tag },
-            { id: "phantom", label: "Jornada Fantasma", icon: Ghost },
-            { id: "crossdevice", label: "Cross-Device", icon: Layers },
             { id: "stale_lps", label: "LPs antigas / Redirects pendentes", icon: AlertTriangle },
           ] as { id: Tab; label: string; icon: typeof Eye }[]).map((t) => {
             const Icon = t.icon;
@@ -1473,197 +1378,6 @@ export default function TrackingPage() {
                   })}
                 </tbody>
               </table>
-            </div>
-          </div>
-        )}
-
-        {/* TAB: Jornada Fantasma */}
-        {tab === "phantom" && (
-          <div className="space-y-4">
-            <div className="rounded-2xl bg-gradient-to-br from-indigo-900 via-purple-900 to-fuchsia-900 text-white p-6">
-              <div className="flex items-start gap-4">
-                <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center shrink-0">
-                  <Ghost size={22} />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold">O que é Jornada Fantasma?</h3>
-                  <p className="text-sm text-white/80 mt-1 leading-relaxed">
-                    Usuários que interagiram com sua marca mas o GA4 não conseguiu costurar a jornada inteira —
-                    seja por cookies bloqueados, navegação anônima, mudança de dispositivo sem login ou janela de
-                    atribuição expirada. São as <strong>conversões órfãs</strong>: acontecem, mas você não vê quem
-                    originou.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
-                <p className="text-xs text-[color:var(--muted-foreground)]">Jornadas fantasma detectadas (30d)</p>
-                <p className="text-2xl font-bold mt-1">{formatNumber(phantomJourneys.length * 842)}</p>
-                <p className="text-[11px] text-amber-600 font-semibold mt-1">
-                  ~12% do tráfego total
-                </p>
-              </div>
-              <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
-                <p className="text-xs text-[color:var(--muted-foreground)]">Conversões órfãs</p>
-                <p className="text-2xl font-bold mt-1">{formatNumber(482)}</p>
-                <p className="text-[11px] text-red-600 font-semibold mt-1">
-                  R$ 68k sem atribuição clara
-                </p>
-              </div>
-              <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
-                <p className="text-xs text-[color:var(--muted-foreground)]">Gap médio entre touches</p>
-                <p className="text-2xl font-bold mt-1">10.6 dias</p>
-                <p className="text-[11px] text-[color:var(--muted-foreground)] mt-1">janela cookie: 90 dias</p>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-2xl border border-[color:var(--border)] overflow-hidden">
-              <div className="p-5 border-b border-[color:var(--border)]">
-                <h3 className="text-base font-semibold">Amostras de jornadas com inconsistência</h3>
-                <p className="text-sm text-[color:var(--muted-foreground)] mt-0.5">
-                  Clique para ver o diagnóstico completo.
-                </p>
-              </div>
-              <div className="divide-y divide-[color:var(--border)]">
-                {phantomJourneys.map((j) => (
-                  <button
-                    key={j.userId}
-                    onClick={() => setSelectedPhantom(j)}
-                    className="w-full text-left p-4 hover:bg-[#ede9fe]/40 transition flex items-center gap-4"
-                  >
-                    <div
-                      className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                        j.converted ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"
-                      }`}
-                    >
-                      <Ghost size={16} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold font-mono">{j.userId}</p>
-                      <p className="text-xs text-[color:var(--muted-foreground)] mt-0.5 truncate">
-                        {j.firstTouch} → ... → {j.lastTouch}
-                      </p>
-                      <p className="text-[11px] text-amber-700 mt-1 line-clamp-1">⚠ {j.reason}</p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-xs font-semibold">
-                        {j.sessions} sessões · {j.devices.length} device(s)
-                      </p>
-                      <p className="text-[11px] text-[color:var(--muted-foreground)]">gap {j.gapDays}d</p>
-                      {j.converted && j.revenue && (
-                        <p className="text-xs font-bold text-emerald-600 mt-0.5">
-                          R$ {formatNumber(j.revenue)}
-                        </p>
-                      )}
-                    </div>
-                    <ChevronRight size={14} className="text-[color:var(--muted-foreground)]" />
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 flex items-start gap-3">
-              <AlertTriangle size={18} className="text-amber-600 mt-0.5 shrink-0" />
-              <div className="text-sm text-amber-900">
-                <p className="font-semibold">Como melhorar?</p>
-                <ul className="list-disc list-inside mt-1 space-y-0.5 text-xs">
-                  <li>Implemente <strong>User-ID</strong> em todos os fluxos logados (SPA + mobile)</li>
-                  <li>Ative <strong>Google Signals</strong> na property GA4 para reconciliação cross-device</li>
-                  <li>Use <strong>Consent Mode v2</strong> para capturar conversões modeladas mesmo sem cookies</li>
-                  <li>Amplie a janela de atribuição para 90 dias onde o ciclo de compra é longo</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TAB: Cross-Device */}
-        {tab === "crossdevice" && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
-                <Users size={14} className="text-[#7c5cff]" />
-                <p className="text-xs text-[color:var(--muted-foreground)] mt-2">Usuários totais</p>
-                <p className="text-xl font-bold mt-0.5 tabular-nums">
-                  {formatNumber(crossDeviceStats.totalUsers)}
-                </p>
-              </div>
-              <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
-                <Layers size={14} className="text-emerald-600" />
-                <p className="text-xs text-[color:var(--muted-foreground)] mt-2">Cross-device</p>
-                <p className="text-xl font-bold mt-0.5 tabular-nums">
-                  {formatNumber(crossDeviceStats.crossDeviceUsers)}
-                </p>
-                <p className="text-[11px] text-emerald-600 font-semibold">
-                  {crossDeviceStats.crossDeviceRate}% do total
-                </p>
-              </div>
-              <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
-                <Smartphone size={14} className="text-amber-600" />
-                <p className="text-xs text-[color:var(--muted-foreground)] mt-2">Devices/usuário</p>
-                <p className="text-xl font-bold mt-0.5 tabular-nums">
-                  {crossDeviceStats.avgDevicesPerUser}
-                </p>
-              </div>
-              <div className="bg-white rounded-xl border border-[color:var(--border)] p-4">
-                <ShieldCheck size={14} className="text-[#7c5cff]" />
-                <p className="text-xs text-[color:var(--muted-foreground)] mt-2">Identificados via User-ID</p>
-                <p className="text-xl font-bold mt-0.5 tabular-nums">
-                  {crossDeviceStats.identifiedRate}%
-                </p>
-                <p className="text-[11px] text-[color:var(--muted-foreground)]">
-                  {formatNumber(crossDeviceStats.identifiedViaUserId)} usuários
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="bg-white rounded-2xl border border-[color:var(--border)] p-5">
-                <h3 className="text-base font-semibold mb-4 flex items-center gap-2">
-                  <TrendingUp size={14} className="text-[#7c5cff]" />
-                  Principais caminhos cross-device
-                </h3>
-                <div className="space-y-2">
-                  {crossDeviceStats.mainPaths.map((p, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center gap-3 p-3 rounded-xl border border-[color:var(--border)] hover:bg-[color:var(--muted)]/40 transition"
-                    >
-                      <div className="flex items-center gap-1 text-xs font-semibold">
-                        {p.from.includes("Mobile") ? <Smartphone size={14} /> : <Monitor size={14} />}
-                        <span>{p.from}</span>
-                        <ChevronRight size={12} className="text-[color:var(--muted-foreground)]" />
-                        {p.to.includes("Mobile") ? <Smartphone size={14} /> : <Monitor size={14} />}
-                        <span>{p.to}</span>
-                      </div>
-                      <div className="flex-1" />
-                      <div className="text-right">
-                        <p className="text-sm font-bold tabular-nums">{formatNumber(p.users)}</p>
-                        <p className="text-[11px] text-emerald-600 font-semibold">{p.convRate}% conv.</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="bg-gradient-to-br from-[#7c5cff] to-[#5b3dd4] rounded-2xl p-5 text-white">
-                <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center mb-3">
-                  <Lightbulb />
-                </div>
-                <h3 className="text-lg font-bold mb-3">Recomendações para melhorar</h3>
-                <ul className="space-y-2.5 text-sm">
-                  {crossDeviceStats.recommendations.map((r, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <span className="w-5 h-5 rounded-full bg-white/15 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">
-                        {i + 1}
-                      </span>
-                      <span className="leading-relaxed">{r}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
             </div>
           </div>
         )}
@@ -2042,11 +1756,9 @@ export default function TrackingPage() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
             <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3">
               <p className="text-[10px] uppercase font-bold text-emerald-600">Conversões recuperadas</p>
-              <p className="text-lg font-bold mt-1 text-emerald-800">
-                {capiData.status === "active" ? `+${formatNumber(capiData.serverEvents)}` : `+${formatNumber(Math.round(capiData.lostEvents * 0.78))}`}
-              </p>
+              <p className="text-lg font-bold mt-1 text-emerald-800">—</p>
               <p className="text-[10px] text-[color:var(--muted-foreground)]">
-                {capiData.status === "active" ? "no último mês" : "potencial no 1º mês"}
+                requer Meta Events Manager (sem estimativa fabricada)
               </p>
             </div>
             <div className="rounded-xl bg-blue-50 border border-blue-200 p-3">
@@ -2114,73 +1826,6 @@ export default function TrackingPage() {
         </div>
       </Dialog>
 
-      <Dialog
-        open={!!selectedPhantom}
-        onClose={() => setSelectedPhantom(null)}
-        title={`Jornada ${selectedPhantom?.userId}`}
-        subtitle={selectedPhantom?.converted ? "Convertido com anomalia" : "Sem conversão"}
-        maxWidth="max-w-2xl"
-        icon={
-          <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-600 flex items-center justify-center">
-            <Ghost size={18} />
-          </div>
-        }
-      >
-        {selectedPhantom && (
-          <div className="space-y-4 text-sm">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <div className="rounded-xl bg-[color:var(--muted)] p-3">
-                <p className="text-[10px] uppercase font-semibold text-[color:var(--muted-foreground)]">
-                  First Touch
-                </p>
-                <p className="text-sm font-semibold mt-1">{selectedPhantom.firstTouch}</p>
-              </div>
-              <div className="rounded-xl bg-[color:var(--muted)] p-3">
-                <p className="text-[10px] uppercase font-semibold text-[color:var(--muted-foreground)]">
-                  Last Touch
-                </p>
-                <p className="text-sm font-semibold mt-1">{selectedPhantom.lastTouch}</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-              <div className="rounded-xl border border-[color:var(--border)] p-3 text-center">
-                <p className="text-xs text-[color:var(--muted-foreground)]">Sessões</p>
-                <p className="text-xl font-bold">{selectedPhantom.sessions}</p>
-              </div>
-              <div className="rounded-xl border border-[color:var(--border)] p-3 text-center">
-                <p className="text-xs text-[color:var(--muted-foreground)]">Gap (dias)</p>
-                <p className="text-xl font-bold">{selectedPhantom.gapDays}</p>
-              </div>
-              <div className="rounded-xl border border-[color:var(--border)] p-3 text-center">
-                <p className="text-xs text-[color:var(--muted-foreground)]">Devices</p>
-                <p className="text-xl font-bold">{selectedPhantom.devices.length}</p>
-              </div>
-            </div>
-            <div>
-              <p className="text-xs text-[color:var(--muted-foreground)] font-semibold uppercase mb-2">
-                Dispositivos usados
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {selectedPhantom.devices.map((d) => (
-                  <span key={d} className="px-3 py-1 rounded-full bg-[#ede9fe] text-[#7c5cff] text-xs font-medium">
-                    {d}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900">
-              <p className="font-semibold mb-1">Diagnóstico</p>
-              <p>{selectedPhantom.reason}</p>
-            </div>
-            {selectedPhantom.converted && selectedPhantom.revenue && (
-              <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-900 flex items-center justify-between">
-                <span className="font-semibold">Receita gerada</span>
-                <span className="font-bold">R$ {formatNumber(selectedPhantom.revenue)}</span>
-              </div>
-            )}
-          </div>
-        )}
-      </Dialog>
     </MasterGuard>
   );
 }

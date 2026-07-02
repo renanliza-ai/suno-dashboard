@@ -5,7 +5,6 @@ import { motion } from "framer-motion";
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ArrowUpDown, Megaphone, Target, TrendingUp, Wallet, Eye, MousePointerClick, Pause, Play, AlertCircle, Loader2 } from "lucide-react";
 import { platformColors, CampaignMediaRow } from "@/lib/data";
-import { getCampaignsForProperty } from "@/lib/property-campaigns";
 import { formatNumber } from "@/lib/utils";
 import { useGA4 } from "@/lib/ga4-context";
 
@@ -145,14 +144,15 @@ export function CampaignPerformance() {
     return () => ctrl.abort();
   }, [selected?.displayName, customRange?.startDate, customRange?.endDate, days]);
 
-  // Decide fonte: real (quando ok com campanhas) > mock (fallback)
+  // ZERO MOCK (30/06): so campanhas reais das APIs Meta/Google. Sem dado,
+  // tabela vazia (o fallback fabricado getCampaignsForProperty foi removido).
   const hasRealCampaigns = realData?.ok && (realData?.campaigns?.length || 0) > 0;
   const propertyCampaigns: CampaignMediaRow[] = useMemo(() => {
     if (hasRealCampaigns && realData) {
       return realData.campaigns.map(mapRealToMediaRow);
     }
-    return getCampaignsForProperty(selected?.displayName, selectedId);
-  }, [hasRealCampaigns, realData, selected?.displayName, selectedId]);
+    return [];
+  }, [hasRealCampaigns, realData]);
 
   const platforms = Array.from(new Set(propertyCampaigns.map((c) => c.platform)));
 

@@ -1168,7 +1168,7 @@ function handleIntent(
     case "top_campaigns_7d": {
       // Top campanhas — REAGE à propriedade selecionada. Naming, mix de
       // plataformas e ROAS variam conforme o produto Suno (Research/Statusinvest/etc).
-      const propertyCampaigns = getCampaignsForProperty(live.propertyName, live.propertyId);
+      const propertyCampaigns = ([] as ReturnType<typeof getCampaignsForProperty>) // ZERO MOCK 30/06: campanhas fabricadas removidas; usar dado real via Gemini/APIs;
       const rows = [...propertyCampaigns]
         .filter((c) => c.status === "ativa")
         .sort((a, b) => b.roas - a.roas)
@@ -1255,21 +1255,15 @@ function handleIntent(
         }
       }
 
-      // Fallback: mock determinístico (varia por seed da propriedade quando disponível)
+      // ZERO MOCK (30/06): sem dado real, reportamos zero honesto (nada de
+      // fabricar leads por seed).
       if (!isRealLeads) {
-        const seed = (live.propertyId || "demo")
-          .split("")
-          .reduce((s, c) => (s * 31 + c.charCodeAt(0)) | 0, 0);
-        const baseLeads = 240 + (Math.abs(seed) % 180); // 240-420
-        leadsByEvent = [
-          { event: "generate_lead", value: Math.round(baseLeads * 0.62) },
-          { event: "lead_create_account", value: Math.round(baseLeads * 0.38) },
-        ];
-        leadsTotal = leadsByEvent.reduce((s, e) => s + e.value, 0);
+        leadsByEvent = [];
+        leadsTotal = 0;
       }
 
       // Top campanhas que trouxeram esses leads — usa campanhas DA PROPRIEDADE
-      const leadPropertyCampaigns = getCampaignsForProperty(live.propertyName, live.propertyId);
+      const leadPropertyCampaigns = ([] as ReturnType<typeof getCampaignsForProperty>) // ZERO MOCK 30/06: campanhas fabricadas removidas; usar dado real via Gemini/APIs;
       const leadCampaigns = [...leadPropertyCampaigns]
         .filter((c) => c.status === "ativa")
         .sort((a, b) => b.conversions - a.conversions)
@@ -1397,21 +1391,12 @@ function handleIntent(
         salesRevenue = purchaseEvent.value;
         avgTicket = salesCount > 0 ? salesRevenue / salesCount : 0;
         eventName = purchaseEvent.event;
-      } else {
-        const seed = (live.propertyId || "demo")
-          .split("")
-          .reduce((s, c) => (s * 31 + c.charCodeAt(0)) | 0, 0);
-        if (wantsToday) {
-          salesCount = 28 + (Math.abs(seed) % 22); // 28-50 vendas/dia
-        } else {
-          salesCount = Math.round((28 + (Math.abs(seed) % 22)) * (live.days || 30));
-        }
-        avgTicket = 287 + (Math.abs(seed) % 180); // R$ 287-467 ticket médio
-        salesRevenue = salesCount * avgTicket;
       }
+      // ZERO MOCK (30/06): fallback que fabricava vendas/ticket por seed foi
+      // removido - sem evento purchase real, reportamos zero honesto.
 
       // Top campanhas que mais converteram em VENDAS — DA PROPRIEDADE selecionada
-      const salesPropertyCampaigns = getCampaignsForProperty(live.propertyName, live.propertyId);
+      const salesPropertyCampaigns = ([] as ReturnType<typeof getCampaignsForProperty>) // ZERO MOCK 30/06: campanhas fabricadas removidas; usar dado real via Gemini/APIs;
       const salesByCampaign = [...salesPropertyCampaigns]
         .filter((c) => c.status === "ativa" && c.revenue > 0)
         .sort((a, b) => b.revenue - a.revenue)
@@ -2638,49 +2623,32 @@ function handleIntent(
             title: "Atribuição Assistida",
             body: "Distribui crédito entre todos os touchpoints. Revela o valor real de canais de topo de funil (social, display, blog) que influenciam mas raramente são o último clique.",
           },
-          {
-            type: "metrics",
-            items: [
-              { label: "Last-click conv.", value: "3.611" },
-              { label: "Assistida conv.", value: "8.247", delta: "+128%", positive: true },
-            ],
-          },
         ],
         followUps: ["Ativa Last Click", "Ativa Assistida"],
       };
 
     case "journey":
+      // ZERO MOCK (30/06): intent roteada pro Gemini (dados reais). Este case
+      // local so dispara SEM property selecionada - responde sem numeros.
       return {
-        reply: "A jornada completa Suno está destacada. Cada etapa com seu evento e drop:",
+        reply:
+          "Pra eu trazer a jornada real (visita → lead → conta → checkout → compra), selecione uma propriedade GA4 no header. Não mostro números de exemplo.",
         newHighlight: "journey",
-        rich: [
-          { type: "journey-step", stage: "Visita", event: "page_view", value: 470860, issue: "80% saem sem virar lead" },
-          { type: "journey-step", stage: "Lead", event: "generate_lead", value: 94172 },
-          { type: "journey-step", stage: "Conta Criada", event: "sign_up", value: 42378 },
-          { type: "journey-step", stage: "Checkout", event: "begin_checkout", value: 15298, issue: "76% abandonam" },
-          { type: "journey-step", stage: "Pagamento", event: "add_payment_info", value: 8742 },
-          { type: "journey-step", stage: "Compra", event: "purchase", value: 3611 },
-          { type: "journey-step", stage: "Login recorrente", event: "user_login", value: 183225 },
-          { type: "journey-step", stage: "Up-sell", event: "purchase recorr.", value: 1247 },
-        ],
-        followUps: ["Maior gargalo?", "Analisa checkout", "Baixar diagnóstico do funil em PDF"],
+        followUps: ["Maior gargalo?", "Analisa checkout"],
       };
 
     case "compare":
+      // ZERO MOCK (30/06): sem property, sem numeros de exemplo.
       return {
-        reply: "Modo de comparação com mês anterior ativado 📊",
+        reply:
+          "Modo de comparação ativado 📊. Selecione uma propriedade GA4 no header pra eu comparar os números reais com o período anterior.",
         newCompare: true,
         newHighlight: "kpis",
         toast: "Modo comparação ativo",
         rich: [
           {
             type: "metrics",
-            items: [
-              { label: "Usuários", value: "470k", delta: "+12.4%", positive: true },
-              { label: "Sessões", value: "825k", delta: "+8.7%", positive: true },
-              { label: "Conversões", value: "3.6k", delta: "-2.1%", positive: false },
-              { label: "Receita", value: "R$ 512k", delta: "+5.8%", positive: true },
-            ],
+            items: [] as { label: string; value: string; delta?: string; positive?: boolean }[],
           },
           {
             type: "insight",
@@ -3109,28 +3077,10 @@ function handleIntent(
             pageviews: Math.round((mk[2]?.value || 0) / days),
             conversions: Math.round((mk[3]?.value || 0) / days),
           };
-      // D-2 simulado a partir de -6% a +8% de variação controlada
-      const seed = (y.users + y.sessions) % 100;
-      const varPct = ((seed % 14) - 6) / 100; // -6% a +7%
-      const d2 = {
-        users: Math.round(y.users * (1 - varPct)),
-        sessions: Math.round(y.sessions * (1 - varPct * 0.9)),
-        pageviews: Math.round(y.pageviews * (1 - varPct * 1.1)),
-        conversions: Math.round(y.conversions * (1 - varPct * 1.2)),
-      };
-      const deltaPct = (a: number, b: number) =>
-        b === 0 ? 0 : ((a - b) / b) * 100;
-      const du = deltaPct(y.users, d2.users);
-      const ds = deltaPct(y.sessions, d2.sessions);
-      const dp = deltaPct(y.pageviews, d2.pageviews);
-      const dc = deltaPct(y.conversions, d2.conversions);
-      const fmtDelta = (d: number) => `${d >= 0 ? "+" : ""}${d.toFixed(1)}%`;
+      // ZERO MOCK (30/06): o "D-2 simulado" com variacao fabricada foi removido.
+      // Sem serie diaria real, nao inventamos comparacao vs anteontem.
       const narrative =
-        dc > 5
-          ? `Dia positivo: conversões cresceram ${fmtDelta(dc)} vs anteontem. Vale dobrar o que funcionou — provavelmente mídia paga ou email.`
-          : dc < -5
-          ? `Atenção: conversões caíram ${fmtDelta(dc)} vs anteontem. Revisar ontem: criativos, checkout, latência de página e se houve queda de tráfego pago.`
-          : `Dia dentro da média: conversões ${fmtDelta(dc)} vs anteontem. Estabilidade — momento bom pra testar novos criativos sem ruído.`;
+        "Estimativa pela média diária do período selecionado. Pra comparação real dia a dia, use a Tendência de Tráfego na home.";
       return {
         reply:
           (isReal
@@ -3141,52 +3091,17 @@ function handleIntent(
           {
             type: "metrics",
             items: [
-              {
-                label: "Usuários ontem",
-                value: formatCompact(y.users),
-                delta: fmtDelta(du),
-                positive: du >= 0,
-              },
-              {
-                label: "Sessões ontem",
-                value: formatCompact(y.sessions),
-                delta: fmtDelta(ds),
-                positive: ds >= 0,
-              },
-              {
-                label: "Pageviews ontem",
-                value: formatCompact(y.pageviews),
-                delta: fmtDelta(dp),
-                positive: dp >= 0,
-              },
-              {
-                label: "Conversões ontem",
-                value: formatCompact(y.conversions),
-                delta: fmtDelta(dc),
-                positive: dc >= 0,
-              },
+              { label: "Usuários ontem", value: formatCompact(y.users) },
+              { label: "Sessões ontem", value: formatCompact(y.sessions) },
+              { label: "Pageviews ontem", value: formatCompact(y.pageviews) },
+              { label: "Conversões ontem", value: formatCompact(y.conversions) },
             ],
           },
           {
             type: "insight",
-            severity: dc < -5 ? "warning" : dc > 5 ? "success" : "info",
-            title:
-              dc < -5
-                ? "Queda relevante em conversões"
-                : dc > 5
-                ? "Pico de conversões"
-                : "Dia estável",
+            severity: "info",
+            title: "Estimativa por média do período",
             body: narrative,
-          },
-          {
-            type: "table",
-            columns: ["Métrica", "Ontem (D-1)", "Anteontem (D-2)", "Δ"],
-            rows: [
-              ["Usuários", formatCompact(y.users), formatCompact(d2.users), fmtDelta(du)],
-              ["Sessões", formatCompact(y.sessions), formatCompact(d2.sessions), fmtDelta(ds)],
-              ["Pageviews", formatCompact(y.pageviews), formatCompact(d2.pageviews), fmtDelta(dp)],
-              ["Conversões", formatCompact(y.conversions), formatCompact(d2.conversions), fmtDelta(dc)],
-            ],
           },
         ],
         followUps: [
@@ -3774,6 +3689,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         "peak_hours",
         "retention_ltv",
         "forecast",
+        // 3ª leva (30/06): journey local tinha funil inteiro com numeros fixos
+        "journey",
       ];
       if (GEMINI_ROUTED_INTENTS.includes(intent) && selectedId) {
         try {
