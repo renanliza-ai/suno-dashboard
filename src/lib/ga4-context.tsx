@@ -884,6 +884,7 @@ export type LPChannelsResult = {
   avgBounceRate: number;
   totalConversions: number; // keyEvents
   totalLeads: number; // generate_lead
+  totalMqls: number; // LeadQualificadoConsultoria (MQL Consultoria)
   totalPurchases: number; // purchase
   byChannel: {
     label: string;
@@ -893,6 +894,7 @@ export type LPChannelsResult = {
     bounceRate: number;
     conversions: number;
     leads: number;
+    mqls: number;
     purchases: number;
   }[];
 };

@@ -556,6 +556,7 @@ export type LPBreakdownRow = {
   bounceRate: number; // %
   conversions: number; // keyEvents (mantido por compat)
   leads: number; // count de generate_lead nesse breakdown
+  mqls: number; // count de LeadQualificadoConsultoria (MQL) nesse breakdown
   purchases: number; // count de purchase nesse breakdown
 };
 export type LPChannelResult = {
@@ -567,6 +568,7 @@ export type LPChannelResult = {
   avgBounceRate: number; // % ponderada por sessões
   totalConversions: number; // keyEvents total
   totalLeads: number; // soma generate_lead total
+  totalMqls: number; // soma LeadQualificadoConsultoria (MQL Consultoria)
   totalPurchases: number; // soma purchase total
   byChannel: LPBreakdownRow[]; // mantido `byChannel` por compat retroativa, mas é "byBreakdown"
 };
@@ -683,7 +685,12 @@ export async function getLPChannels(
   const eventNameFilter = {
     filter: {
       fieldName: "eventName",
-      inListFilter: { values: ["generate_lead", "purchase", "purchase_success"] },
+      // LeadQualificadoConsultoria = MQL do funil da Suno Consultoria (dispara
+      // na property da Research, host lp.suno.com.br/consultoria/*). Pedido do
+      // Renan 01/07: Consultoria mede performance por Lead -> MQL.
+      inListFilter: {
+        values: ["generate_lead", "purchase", "purchase_success", "LeadQualificadoConsultoria"],
+      },
     },
   };
   // Combina o dimensionFilter principal com o filter de eventName pra query de eventos
@@ -772,6 +779,7 @@ export async function getLPChannels(
       avgBounceRate: 0,
       totalConversions: 0,
       totalLeads: 0,
+      totalMqls: 0,
       totalPurchases: 0,
       byChannel: [],
     }));
@@ -793,6 +801,7 @@ export async function getLPChannels(
     bounceRate: number; // 0..1 do GA4
     conversions: number;
     leads: number; // generate_lead count
+    mqls: number; // LeadQualificadoConsultoria count (MQL Consultoria)
     purchases: number; // purchase count
   };
   const breakdownDimCount = Array.isArray(dimMap) ? dimMap.length : 1;
@@ -844,13 +853,14 @@ export async function getLPChannels(
       bounceRate: Number(r.metricValues?.[3]?.value || 0),
       conversions: Number(r.metricValues?.[4]?.value || 0),
       leads: 0, // preenchido abaixo via eventsRes
+      mqls: 0, // preenchido abaixo via eventsRes
       purchases: 0, // preenchido abaixo via eventsRes
     };
   });
 
   // Cruza eventsRes (que tem split lead vs purchase) com rows
   // Key = `${host}|${path}|${label}|${utmSource}|${utmMedium}|${utmCampaign}`
-  type EventCounts = { leads: number; purchases: number };
+  type EventCounts = { leads: number; mqls: number; purchases: number };
   const eventsByKey = new Map<string, EventCounts>();
   // No eventsRes a dimensão eventName é a ÚLTIMA. Outras seguem a mesma ordem
   // que res principal (host, path, ...breakdownDims, ...utmDims).
@@ -874,9 +884,11 @@ export async function getLPChannels(
     const eventName = r.dimensionValues?.[eventNameIdx]?.value || "";
     const count = Number(r.metricValues?.[0]?.value || 0);
     const key = `${host}|${path}|${label}|${utmSource}|${utmMedium}|${utmCampaign}`;
-    const existing = eventsByKey.get(key) || { leads: 0, purchases: 0 };
+    const existing = eventsByKey.get(key) || { leads: 0, mqls: 0, purchases: 0 };
     if (eventName === "generate_lead") {
       existing.leads += count;
+    } else if (eventName === "LeadQualificadoConsultoria") {
+      existing.mqls += count;
     } else if (eventName === "purchase" || eventName === "purchase_success") {
       existing.purchases += count;
     }
@@ -889,6 +901,7 @@ export async function getLPChannels(
     const ev = eventsByKey.get(key);
     if (ev) {
       r.leads = ev.leads;
+      r.mqls = ev.mqls;
       r.purchases = ev.purchases;
     }
   }
@@ -918,6 +931,7 @@ export async function getLPChannels(
         bounceRate: 0,
         conversions: 0,
         leads: 0,
+        mqls: 0,
         purchases: 0,
       };
       cur.users += m.users;
@@ -926,6 +940,7 @@ export async function getLPChannels(
       cur.bounceRate += m.bounceRate * m.sessions;
       cur.conversions += m.conversions;
       cur.leads += m.leads;
+      cur.mqls += m.mqls;
       cur.purchases += m.purchases;
       byChannelMap.set(m.label, cur);
     }
@@ -942,6 +957,7 @@ export async function getLPChannels(
     const totalEngagedSessions = byChannel.reduce((s, c) => s + c.engagedSessions, 0);
     const totalConversions = byChannel.reduce((s, c) => s + c.conversions, 0);
     const totalLeads = byChannel.reduce((s, c) => s + c.leads, 0);
+    const totalMqls = byChannel.reduce((s, c) => s + c.mqls, 0);
     const totalPurchases = byChannel.reduce((s, c) => s + c.purchases, 0);
     const totalBounceWeighted = byChannel.reduce((s, c) => s + (c.bounceRate / 100) * c.sessions, 0);
     const avgBounceRate = totalSessions > 0
@@ -957,6 +973,7 @@ export async function getLPChannels(
       avgBounceRate,
       totalConversions,
       totalLeads,
+      totalMqls,
       totalPurchases,
       byChannel,
     };

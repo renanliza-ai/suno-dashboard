@@ -916,6 +916,9 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
                   <th className="text-right px-3 py-2 font-medium" title="Eventos generate_lead">
                     <Target size={11} className="inline mr-1" /> Leads
                   </th>
+                  <th className="text-right px-3 py-2 font-medium" title="LeadQualificadoConsultoria (MQL) - funil da Suno Consultoria">
+                    MQL
+                  </th>
                   <th className="text-right px-3 py-2 font-medium" title="Eventos purchase / purchase_success">
                     <Target size={11} className="inline mr-1" /> Vendas
                   </th>
@@ -971,6 +974,9 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
                     <td className="px-3 py-3 text-right tabular-nums font-semibold text-emerald-700">
                       {formatNumber(r.totalLeads)}
                     </td>
+                    <td className="px-3 py-3 text-right tabular-nums font-semibold text-sky-700">
+                      {r.totalMqls > 0 ? formatNumber(r.totalMqls) : "—"}
+                    </td>
                     <td className="px-3 py-3 text-right tabular-nums font-semibold text-violet-700">
                       {formatNumber(r.totalPurchases)}
                     </td>
@@ -996,7 +1002,7 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
                     }
                   })()}
                 </p>
-                <div className="grid grid-cols-4 gap-2 mb-3">
+                <div className={`grid gap-2 mb-3 ${r.totalMqls > 0 ? "grid-cols-5" : "grid-cols-4"}`}>
                   <div>
                     <p className="text-[10px] uppercase text-[color:var(--muted-foreground)]">
                       Users
@@ -1021,6 +1027,26 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
                       {formatNumber(r.totalLeads)}
                     </p>
                   </div>
+                  {/* MQL (LeadQualificadoConsultoria) — funil da Suno Consultoria.
+                      So aparece quando o evento disparou na LP (nao polui as demais). */}
+                  {r.totalMqls > 0 && (
+                    <div>
+                      <p
+                        className="text-[10px] uppercase text-[color:var(--muted-foreground)]"
+                        title="LeadQualificadoConsultoria - lead que passou na qualificacao (patrimonio/aporte). Taxa de qualificacao = MQL / Leads."
+                      >
+                        MQL
+                      </p>
+                      <p className="text-sm font-bold tabular-nums text-sky-700">
+                        {formatNumber(r.totalMqls)}
+                        {r.totalLeads > 0 && (
+                          <span className="ml-1 text-[9px] font-semibold text-sky-600">
+                            ({((r.totalMqls / r.totalLeads) * 100).toFixed(0)}%)
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  )}
                   <div>
                     <p className="text-[10px] uppercase text-[color:var(--muted-foreground)]">
                       Vendas
@@ -1092,6 +1118,14 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
                             <span className="text-emerald-700 font-semibold">
                               Leads: {formatNumber(c.leads)}
                             </span>
+                            {c.mqls > 0 && (
+                              <>
+                                <span>·</span>
+                                <span className="text-sky-700 font-semibold" title="LeadQualificadoConsultoria (MQL)">
+                                  MQL: {formatNumber(c.mqls)}
+                                </span>
+                              </>
+                            )}
                             <span>·</span>
                             <span className="text-violet-700 font-semibold">
                               Vendas: {formatNumber(c.purchases)}
