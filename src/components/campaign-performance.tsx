@@ -259,8 +259,14 @@ export function CampaignPerformance() {
             )}
             {(!realData.platforms.meta.ok || !realData.platforms.google.ok) && (
               <span className="text-amber-700 text-[11px] ml-2">
-                {!realData.platforms.meta.ok && "· Meta Ads não configurado "}
-                {!realData.platforms.google.ok && "· Google Ads não configurado"}
+                {!realData.platforms.meta.ok &&
+                  (realData.platforms.meta.error === "not_configured"
+                    ? "· Meta Ads não configurado "
+                    : "· Meta Ads com erro na API ")}
+                {!realData.platforms.google.ok &&
+                  (realData.platforms.google.error === "not_configured"
+                    ? "· Google Ads não configurado"
+                    : "· Google Ads com erro na API (diagnóstico em andamento)")}
               </span>
             )}
             {adsFetchedAt && (

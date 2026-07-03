@@ -651,6 +651,8 @@ export default function TrackingPage() {
     pixelId?: string;
     pixelIdMasked?: string;
     tokenLastFour?: string;
+    pixelStats?: { event: string; count: number }[] | null;
+    pixelStatsError?: string | null;
     httpStatus?: number;
     networkError?: string | null;
     checks?: Record<string, boolean>;
@@ -948,10 +950,18 @@ export default function TrackingPage() {
               <p className="text-[10px] text-[color:var(--muted-foreground)]">via GA4 (browser)</p>
             </div>
             <div>
-              <p className="text-[10px] uppercase font-bold text-red-600 tracking-wider">Perdidos</p>
-              <p className="text-lg font-bold mt-0.5 tabular-nums text-red-700">—</p>
+              <p className="text-[10px] uppercase font-bold text-emerald-700 tracking-wider">
+                Recebidos pela Meta
+              </p>
+              <p className="text-lg font-bold mt-0.5 tabular-nums text-emerald-700">
+                {capiLive?.pixelStats && capiLive.pixelStats.length > 0
+                  ? formatNumber(capiLive.pixelStats.reduce((s, e) => s + e.count, 0))
+                  : "—"}
+              </p>
               <p className="text-[10px] text-[color:var(--muted-foreground)]">
-                requer Meta Events Manager
+                {capiLive?.pixelStats && capiLive.pixelStats.length > 0
+                  ? "agregado do pixel (Graph API, dado real)"
+                  : "indisponível via Graph API"}
               </p>
             </div>
             <div>

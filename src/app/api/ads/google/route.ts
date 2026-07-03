@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// Versao do Google Ads API que funcionou por ultimo (cache do processo).
+// Alimenta a cascata anti-sunset: v20 foi DESLIGADA em jun/2026 e derrubou a
+// integracao silenciosamente - nunca mais fixar versao unica.
+let __gadsWorkingVersion: string | null = null;
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -219,10 +224,23 @@ export async function GET(req: NextRequest) {
     };
   };
 
-  // ⚠ Versão da API atualizada periodicamente. Google deprecia versões antigas
-  // após ~14 meses. Em 2026 a versão atual é v20 (v17 e anteriores retornam HTML 404).
-  // Verificar releases em: https://developers.google.com/google-ads/api/docs/release-notes
-  const url = `https://googleads.googleapis.com/v20/customers/${creds.customerId}/googleAds:searchStream`;
+  // ⚠ O Google DESLIGA cada versao da API ~12 meses apos o lancamento (a v20
+  // morreu em jun/2026 com UNSUPPORTED_VERSION e derrubou a integracao). Fix
+  // definitivo: CASCATA de versoes - tenta da mais nova pra mais antiga e
+  // memoriza a que funcionou (modulo-level, dura o processo). Override manual
+  // via env GOOGLE_ADS_API_VERSION se preciso.
+  const versionCandidates = Array.from(
+    new Set(
+      [
+        __gadsWorkingVersion,
+        process.env.GOOGLE_ADS_API_VERSION,
+        "v23",
+        "v22",
+        "v21",
+        "v20",
+      ].filter(Boolean) as string[]
+    )
+  );
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     "developer-token": creds.developerToken,
@@ -232,39 +250,58 @@ export async function GET(req: NextRequest) {
     headers["login-customer-id"] = creds.loginCustomerId;
   }
 
-  let resp: Response;
-  try {
-    resp = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ query }),
-      cache: "no-store",
-    });
-  } catch (e) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "network_error",
-        message: `Falha ao conectar com Google Ads API: ${(e as Error).message}`,
-      },
-      { status: 200 }
-    );
+  let resp: Response | null = null;
+  let usedVersion = versionCandidates[0] || "v21";
+  let lastErr: { status: number; text: string; version: string } | null = null;
+  for (const ver of versionCandidates) {
+    const url = `https://googleads.googleapis.com/${ver}/customers/${creds.customerId}/googleAds:searchStream`;
+    let r: Response;
+    try {
+      r = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ query }),
+        cache: "no-store",
+      });
+    } catch (e) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "network_error",
+          message: `Falha ao conectar com Google Ads API: ${(e as Error).message}`,
+        },
+        { status: 200 }
+      );
+    }
+    if (r.ok) {
+      resp = r;
+      usedVersion = ver;
+      __gadsWorkingVersion = ver;
+      break;
+    }
+    const text = await r.text();
+    lastErr = { status: r.status, text, version: ver };
+    // Erro de VERSAO (sunset/inexistente): tenta a proxima da cascata.
+    const versionProblem =
+      text.includes("UNSUPPORTED_VERSION") || (r.status === 404 && text.trim().startsWith("<"));
+    if (!versionProblem) break; // erro real (auth/permissao/GAQL) - nao adianta trocar versao
   }
 
-  if (!resp.ok) {
-    const errorText = await resp.text();
+  if (!resp) {
+    const errorText = lastErr?.text || "";
+    const status = lastErr?.status || 0;
     const isHtmlResponse = errorText.trim().startsWith("<");
 
     let hint: string | null = null;
-    if (resp.status === 401) {
+    if (errorText.includes("UNSUPPORTED_VERSION")) {
+      hint = `Todas as versoes testadas (${versionCandidates.join(", ")}) foram recusadas. Adicione a versao vigente em GOOGLE_ADS_API_VERSION no Vercel (ver https://developers.google.com/google-ads/api/docs/release-notes).`;
+    } else if (status === 401) {
       hint = "Access token inválido — refresh token expirou ou foi revogado.";
-    } else if (resp.status === 403) {
+    } else if (status === 403) {
       hint = "Token sem permissão — verifique se Developer Token está aprovado (Basic Access) e se a conta OAuth tem acesso ao MCC. Test tokens só leem contas de teste.";
-    } else if (resp.status === 404 && isHtmlResponse) {
-      hint = "Endpoint da API não encontrado — provavelmente versão da API foi atualizada. Verifique se v20 ainda é válida em https://developers.google.com/google-ads/api/docs/release-notes";
-    } else if (resp.status === 404) {
+    } else if (status === 404) {
       hint = `Customer ID '${creds.customerId}' não acessível. Possíveis causas: (1) ID errado, (2) MCC ${creds.loginCustomerId || "(não setado)"} não gerencia esse customer, (3) Developer Token sem permissão pra essa conta, (4) Conta OAuth do refresh_token não tem acesso ao MCC.`;
-    } else if (resp.status === 400) {
+    } else if (status === 400) {
       hint = "Requisição mal formada — geralmente GAQL inválido ou Customer ID com formato errado (sem traços, só números).";
     }
 
@@ -272,16 +309,16 @@ export async function GET(req: NextRequest) {
       {
         ok: false,
         error: "google_ads_api_error",
-        httpStatus: resp.status,
-        message: `Google Ads API retornou erro ${resp.status}`,
+        httpStatus: status,
+        message: `Google Ads API retornou erro ${status}`,
         responseIsHtml: isHtmlResponse,
         details: errorText.slice(0, 500),
         hint,
         diagnostics: {
           customerId: creds.customerId,
           loginCustomerId: creds.loginCustomerId,
-          apiVersion: "v20",
-          endpoint: url,
+          apiVersion: lastErr?.version || usedVersion,
+          versionsTried: versionCandidates,
         },
       },
       { status: 200 }

@@ -204,6 +204,45 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // 7. Stats REAIS do pixel (best-effort): contagem agregada de eventos que a
+  // Meta recebeu, via GET /{pixel}/stats. Substitui os numeros que antes eram
+  // FABRICADOS no /tracking. Parse defensivo: se o shape/permissao nao ajudar,
+  // devolve null e a UI mostra indisponivel (nunca inventa).
+  let pixelStats: { event: string; count: number }[] | null = null;
+  let pixelStatsError: string | null = null;
+  try {
+    const statsResp = await fetch(
+      `https://graph.facebook.com/v19.0/${pixelId}/stats?aggregation=event&access_token=${accessToken}`,
+      { cache: "no-store" }
+    );
+    const statsJson = (await statsResp.json()) as {
+      data?: { value?: { value?: string; count?: number }[] | number; start_time?: string }[];
+      error?: { message?: string };
+    };
+    if (statsResp.ok && Array.isArray(statsJson.data)) {
+      const agg = new Map<string, number>();
+      for (const bucket of statsJson.data) {
+        if (Array.isArray(bucket.value)) {
+          for (const v of bucket.value) {
+            if (v && typeof v.value === "string") {
+              agg.set(v.value, (agg.get(v.value) || 0) + Number(v.count || 0));
+            }
+          }
+        }
+      }
+      if (agg.size > 0) {
+        pixelStats = Array.from(agg.entries())
+          .map(([event, count]) => ({ event, count }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 15);
+      }
+    } else if (statsJson.error?.message) {
+      pixelStatsError = statsJson.error.message.slice(0, 200);
+    }
+  } catch (e) {
+    pixelStatsError = (e as Error).message.slice(0, 200);
+  }
+
   return NextResponse.json({
     ok: isOk,
     capiConfigured: true,
@@ -211,6 +250,8 @@ export async function GET(req: NextRequest) {
     propertyRequested: propertyName,
     fromFallback,
     pixelId,
+    pixelStats,
+    pixelStatsError,
     pixelIdMasked: `${pixelId.slice(0, 4)}****${pixelId.slice(-4)}`,
     tokenLastFour: accessToken.slice(-4),
     httpStatus,
