@@ -193,7 +193,7 @@ export function CampaignPerformance() {
   // plataformas. Motivo: as contas de Ads nao passam valor de conversao
   // (revenue de plataforma ~0), entao a receita confiavel esta no GA4.
   // ====================================================================
-  const { data: channelRows } = useGA4Reports(undefined, "channel");
+  const { rows: channelRows } = useGA4Reports(undefined, "channel");
   const PAID_CHANNELS = new Set([
     "Paid Search",
     "Paid Social",
