@@ -6,7 +6,7 @@ import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer,
 import { ArrowUpDown, Megaphone, Target, TrendingUp, Wallet, Eye, MousePointerClick, Pause, Play, AlertCircle, Loader2 } from "lucide-react";
 import { platformColors, CampaignMediaRow } from "@/lib/data";
 import { formatNumber } from "@/lib/utils";
-import { useGA4 } from "@/lib/ga4-context";
+import { useGA4, useGA4Reports } from "@/lib/ga4-context";
 
 // Tipo retornado pelo endpoint /api/ads/campaigns
 type RealCampaign = {
@@ -187,15 +187,27 @@ export function CampaignPerformance() {
   const totalRoas = totals.spend > 0 ? totals.revenue / totals.spend : 0;
 
   // ====================================================================
-  // ROAS via CAPI (server-side) — recupera 30-50% das conversões perdidas
-  // por bloqueador/iOS 14.5/ITP. Quando CAPI estiver ativo, esse é o
-  // ROAS REAL. Hoje é mock — quando integrarmos, vem do Meta Conversions API.
+  // ZERO MOCK (02/07): o antigo "ROAS via CAPI" era FABRICADO (+38% fixo).
+  // Substituido por ROAS via GA4, 100% real: receita de purchase atribuida
+  // aos CANAIS PAGOS no GA4 dividida pelo investimento reportado pelas
+  // plataformas. Motivo: as contas de Ads nao passam valor de conversao
+  // (revenue de plataforma ~0), entao a receita confiavel esta no GA4.
   // ====================================================================
-  const capiRecoveryRate = 0.38; // 38% de conversões perdidas recuperadas
-  const totalRevenueCapi = totals.revenue * (1 + capiRecoveryRate);
-  const totalRoasCapi = totals.spend > 0 ? totalRevenueCapi / totals.spend : 0;
-  const roasDelta = totalRoasCapi - totalRoas;
-  const roasDeltaPct = totalRoas > 0 ? ((totalRoasCapi - totalRoas) / totalRoas) * 100 : 0;
+  const { data: channelRows } = useGA4Reports(undefined, "channel");
+  const PAID_CHANNELS = new Set([
+    "Paid Search",
+    "Paid Social",
+    "Paid Video",
+    "Paid Shopping",
+    "Paid Other",
+    "Display",
+    "Cross-network",
+  ]);
+  const paidRevenueGA4 = (channelRows || [])
+    .filter((r) => PAID_CHANNELS.has(r.dimension))
+    .reduce((s, r) => s + (r.revenue || 0), 0);
+  const totalRoasGA4 = totals.spend > 0 ? paidRevenueGA4 / totals.spend : 0;
+  const roasDelta = totalRoasGA4 - totalRoas;
 
   const spendByPlatform = platforms.map((p) => ({
     name: p,
@@ -382,34 +394,40 @@ export function CampaignPerformance() {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
-                  <h4 className="text-sm font-bold">ROAS GA4 vs ROAS real (CAPI)</h4>
+                  <h4 className="text-sm font-bold">ROAS: plataforma vs GA4</h4>
                   <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-gradient-to-r from-blue-500 to-indigo-600 text-white">
-                    Meta AI Connector
+                    100% dado real
                   </span>
                 </div>
                 <p className="text-xs text-[color:var(--muted-foreground)]">
-                  Browsers bloqueiam 30-50% dos eventos client-side. Server-side (CAPI) recupera essa parte e mostra o ROAS real.
+                  As contas de Ads não reportam valor de conversão (receita de plataforma ≈ 0). O
+                  ROAS confiável usa a <strong>receita de purchase dos canais pagos no GA4</strong>{" "}
+                  ÷ investimento reportado pelas plataformas.
                 </p>
               </div>
               <div className="grid grid-cols-3 gap-3 items-center">
                 <div className="text-center">
                   <p className="text-[10px] uppercase font-bold text-[color:var(--muted-foreground)] tracking-wider">
-                    GA4 (client)
+                    Plataformas
                   </p>
                   <p className="text-2xl font-bold tabular-nums text-slate-700">{totalRoas.toFixed(2)}x</p>
-                  <p className="text-[10px] text-[color:var(--muted-foreground)]">subestimado</p>
+                  <p className="text-[10px] text-[color:var(--muted-foreground)]">sem valor de conversão</p>
                 </div>
                 <div className="text-center px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200">
                   <p className="text-[10px] uppercase font-bold text-emerald-600 tracking-wider">
-                    CAPI (server)
+                    Via GA4 (pagos)
                   </p>
-                  <p className="text-2xl font-bold tabular-nums text-emerald-700">{totalRoasCapi.toFixed(2)}x</p>
-                  <p className="text-[10px] text-emerald-700 font-semibold">ROAS real</p>
+                  <p className="text-2xl font-bold tabular-nums text-emerald-700">{totalRoasGA4.toFixed(2)}x</p>
+                  <p className="text-[10px] text-emerald-700 font-semibold">
+                    R$ {formatNumber(Math.round(paidRevenueGA4))} de receita GA4
+                  </p>
                 </div>
                 <div className="text-center">
                   <p className="text-[10px] uppercase font-bold text-violet-600 tracking-wider">Delta</p>
-                  <p className="text-2xl font-bold tabular-nums text-violet-700">+{roasDelta.toFixed(2)}x</p>
-                  <p className="text-[10px] text-violet-700 font-semibold">+{roasDeltaPct.toFixed(0)}% recuperado</p>
+                  <p className="text-2xl font-bold tabular-nums text-violet-700">
+                    {roasDelta >= 0 ? "+" : ""}{roasDelta.toFixed(2)}x
+                  </p>
+                  <p className="text-[10px] text-violet-700 font-semibold">GA4 vs plataformas</p>
                 </div>
               </div>
             </div>
