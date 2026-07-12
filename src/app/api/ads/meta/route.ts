@@ -41,6 +41,17 @@ function normalizeName(s: string): string {
     .trim();
 }
 
+// Slug agressivo: tira acento, espaço e TODA pontuação. Faz "Status Invest - Web",
+// "Statusinvest – Web" e "statusinvest_web" casarem entre si. Evita not_configured
+// por diferença boba de como o nome foi digitado na env vs displayName do GA4.
+function slugName(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
 function resolveMetaCredentials(propertyName: string | null): {
   adAccountId: string;
   accessToken: string;
@@ -49,11 +60,13 @@ function resolveMetaCredentials(propertyName: string | null): {
 } | null {
   if (propertyName) {
     const target = normalizeName(propertyName);
+    const targetSlug = slugName(propertyName);
     for (let i = 1; i <= 20; i++) {
       const name = process.env[`META_ADS_PROPERTY_${i}_NAME`];
       const account = process.env[`META_ADS_PROPERTY_${i}_AD_ACCOUNT_ID`];
       const token = process.env[`META_ADS_PROPERTY_${i}_TOKEN`];
-      if (name && account && token && normalizeName(name) === target) {
+      // Match por nome normalizado OU por slug (tolera espaço/acento/pontuação).
+      if (name && account && token && (normalizeName(name) === target || slugName(name) === targetSlug)) {
         return {
           adAccountId: account.startsWith("act_") ? account : `act_${account}`,
           accessToken: token,
@@ -81,7 +94,7 @@ function resolveMetaCredentials(propertyName: string | null): {
     const capiToken = process.env[`META_CAPI_PROPERTY_${i}_TOKEN`];
     const capiName = process.env[`META_CAPI_PROPERTY_${i}_NAME`];
     const adAccount = process.env[`META_CAPI_PROPERTY_${i}_AD_ACCOUNT_ID`];
-    if (capiToken && capiName && adAccount && propertyName && normalizeName(capiName) === normalizeName(propertyName)) {
+    if (capiToken && capiName && adAccount && propertyName && (normalizeName(capiName) === normalizeName(propertyName) || slugName(capiName) === slugName(propertyName))) {
       return {
         adAccountId: adAccount.startsWith("act_") ? adAccount : `act_${adAccount}`,
         accessToken: capiToken,
@@ -126,14 +139,37 @@ export async function GET(req: NextRequest) {
 
   const credentials = resolveMetaCredentials(propertyName);
   if (!credentials) {
+    // Diagnóstico: lista os NOMES de property configurados (só nomes, sem token)
+    // e sinaliza se algum tem AD_ACCOUNT/TOKEN faltando. Ajuda a ver se é
+    // mismatch de nome ou credencial incompleta - sem expor segredo.
+    const configured: { slot: number; name: string; hasAccount: boolean; hasToken: boolean; slugMatchesRequest: boolean }[] = [];
+    const reqSlug = slugName(propertyName);
+    for (let i = 1; i <= 20; i++) {
+      const name = process.env[`META_ADS_PROPERTY_${i}_NAME`];
+      if (!name) continue;
+      configured.push({
+        slot: i,
+        name,
+        hasAccount: Boolean(process.env[`META_ADS_PROPERTY_${i}_AD_ACCOUNT_ID`]),
+        hasToken: Boolean(process.env[`META_ADS_PROPERTY_${i}_TOKEN`]),
+        slugMatchesRequest: slugName(name) === reqSlug,
+      });
+    }
     return NextResponse.json(
       {
         ok: false,
         error: "not_configured",
-        message: `Meta Ads não configurado pra "${propertyName}". Adicione META_ADS_PROPERTY_N_* em .env.local na Vercel.`,
+        message: `Meta Ads não resolveu credencial pra "${propertyName}".`,
+        requestedSlug: reqSlug,
+        configuredMetaProperties: configured,
+        diagnostic:
+          configured.some((c) => c.slugMatchesRequest && (!c.hasAccount || !c.hasToken))
+            ? "Existe uma entrada com nome equivalente, mas falta AD_ACCOUNT_ID ou TOKEN nela."
+            : configured.length === 0
+              ? "Nenhuma META_ADS_PROPERTY_N configurada no ambiente."
+              : "Nenhuma entrada bate (nem por slug) com o nome desta property. Confira o valor de META_ADS_PROPERTY_N_NAME vs o displayName do GA4.",
         instructions: {
           required: ["META_ADS_PROPERTY_N_NAME", "META_ADS_PROPERTY_N_AD_ACCOUNT_ID", "META_ADS_PROPERTY_N_TOKEN"],
-          docs: "https://developers.facebook.com/docs/marketing-api/insights",
         },
       },
       { status: 200 }
