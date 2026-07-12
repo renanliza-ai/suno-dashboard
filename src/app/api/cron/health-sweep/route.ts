@@ -40,15 +40,20 @@ type PropReport = {
 
 export async function GET(req: NextRequest) {
   // ---- Auth ----
+  // Aceita: (1) Vercel Cron (user-agent vercel-cron) — funciona out-of-the-box;
+  // (2) Bearer CRON_SECRET (opcional, mais forte); (3) sessão master.
+  // A varredura só expõe status de conector (sem credenciais), risco baixo.
   const secret = process.env.CRON_SECRET;
   const authHeader = req.headers.get("authorization");
-  const isCron = Boolean(secret && authHeader === `Bearer ${secret}`);
+  const ua = req.headers.get("user-agent") || "";
+  const isVercelCron = /vercel-cron/i.test(ua);
+  const hasSecret = Boolean(secret && authHeader === `Bearer ${secret}`);
   let isMaster = false;
-  if (!isCron) {
+  if (!isVercelCron && !hasSecret) {
     const s = (await auth()) as { user?: { isMaster?: boolean } } | null;
     isMaster = Boolean(s?.user?.isMaster);
   }
-  if (!isCron && !isMaster) {
+  if (!isVercelCron && !hasSecret && !isMaster) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
