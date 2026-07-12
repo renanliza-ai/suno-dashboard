@@ -14,7 +14,7 @@ import {
   YAxis,
 } from "recharts";
 import { Users, MapPin, Heart, Monitor, UserCheck, Clock, Activity, Sparkles, Target } from "lucide-react";
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { IcpModal } from "@/components/icp-modal";
 import { PeriodPicker } from "@/components/period-picker";
 import { audienceInterests, audienceCohorts } from "@/lib/data";
@@ -75,11 +75,6 @@ export default function AudienciaPage() {
 
   const realTotal = useRealData && meta.status === "success" ? overview?.kpis?.activeUsers || 0 : 0;
   const referenceTotal = realTotal;
-
-  // ZERO MOCK: DAU/WAU eram DERIVADOS por coeficiente inventado (8%/35% do MAU)
-  // mesmo no modo real - removidos. So exibimos o que o GA4 entrega de fato:
-  // usuarios ativos do periodo (MAU quando o range e 30d).
-  const stats = useMemo(() => ({ mau: realTotal }), [realTotal]);
 
   return (
     <main className="ml-0 md:ml-20 p-4 md:p-8 max-w-[1600px]">
@@ -145,14 +140,17 @@ export default function AudienciaPage() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        {[
-          // ZERO MOCK: DAU/WAU/Stickiness exigem series diarias dedicadas - sem
-          // fonte real plugada, mostram indisponivel (nada de coeficiente).
-          { label: "DAU", value: "—", sub: "requer série diária (em breve)", icon: Activity },
-          { label: "WAU", value: "—", sub: "requer série diária (em breve)", icon: Users },
-          { label: "Usuários ativos", value: stats.mau > 0 ? formatNumber(stats.mau) : "—", sub: "no período selecionado", icon: Users },
-          { label: "Stickiness", value: "—", sub: "DAU / MAU (em breve)", icon: Sparkles },
-        ].map((k, i) => {
+        {(() => {
+          // DAU/WAU/MAU reais do GA4 (active1/7/28DayUsers). Sem dado -> "—".
+          const au = audienceReal?.activeUsers;
+          const ok = au?.available;
+          return [
+            { label: "DAU", value: ok ? formatNumber(au!.dau) : "—", sub: ok ? "ativos em 1 dia (GA4)" : "requer GA4 conectado", icon: Activity },
+            { label: "WAU", value: ok ? formatNumber(au!.wau) : "—", sub: ok ? "ativos em 7 dias (GA4)" : "requer GA4 conectado", icon: Users },
+            { label: "MAU", value: ok ? formatNumber(au!.mau) : "—", sub: ok ? "ativos em 28 dias (GA4)" : "requer GA4 conectado", icon: Users },
+            { label: "Stickiness", value: ok ? `${au!.stickiness}%` : "—", sub: "DAU / MAU", icon: Sparkles },
+          ];
+        })().map((k, i) => {
           const Icon = k.icon;
           return (
             <motion.div

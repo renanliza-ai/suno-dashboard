@@ -107,7 +107,7 @@ export async function GET(req: NextRequest) {
   // ============================================================
   // 6 queries paralelas
   // ============================================================
-  const [pagesRes, campaignsRes, anomaliesResult, checkoutResult, journeyResult, revenueRes] = await Promise.all([
+  const [pagesRes, campaignsRes, anomaliesResult, checkoutResult, journeyResult, revenueRes, mqlRes] = await Promise.all([
     // 1. Top páginas com métricas de engajamento
     runReport(propertyId, {
       dateRanges: [dateRange],
@@ -148,6 +148,29 @@ export async function GET(req: NextRequest) {
       metrics: [{ name: "totalRevenue" }, { name: "transactions" }, { name: "purchaseRevenue" }],
       metricAggregations: ["TOTAL"],
     }),
+    // 7. Funil de qualificacao Consultoria: generate_lead vs LeadQualificadoConsultoria
+    //    por pagina, filtrado aos hosts/paths de Consultoria.
+    runReport(propertyId, {
+      dateRanges: [dateRange],
+      dimensions: [{ name: "pagePath" }, { name: "eventName" }],
+      metrics: [{ name: "eventCount" }],
+      dimensionFilter: {
+        andGroup: {
+          expressions: [
+            { filter: { fieldName: "eventName", inListFilter: { values: ["generate_lead", "LeadQualificadoConsultoria"] } } },
+            {
+              orGroup: {
+                expressions: [
+                  { filter: { fieldName: "hostName", stringFilter: { matchType: "CONTAINS", value: "sunoconsultoria" } } },
+                  { filter: { fieldName: "pagePath", stringFilter: { matchType: "CONTAINS", value: "consultoria" } } },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      limit: 200,
+    }).catch((e) => ({ data: null, error: (e as Error).message })),
   ]);
 
   const recs: Recommendation[] = [];
@@ -570,6 +593,66 @@ export async function GET(req: NextRequest) {
   }
 
   // ============================================================
+  // 9. CONSULTORIA — qualificacao de lead (Lead -> MQL)
+  //    Regra exclusiva do funil Consultoria: LP que gera lead mas com baixa
+  //    taxa de qualificacao (LeadQualificadoConsultoria / generate_lead) esta
+  //    atraindo publico fora do ICP (patrimonio/aporte). Sucesso = MQL, nao lead.
+  // ============================================================
+  const mqlByPage = new Map<string, { leads: number; mqls: number }>();
+  for (const r of mqlRes.data?.rows || []) {
+    const path = r.dimensionValues?.[0]?.value || "/";
+    const ev = r.dimensionValues?.[1]?.value || "";
+    const count = Number(r.metricValues?.[0]?.value || 0);
+    const cur = mqlByPage.get(path) || { leads: 0, mqls: 0 };
+    if (ev === "generate_lead") cur.leads += count;
+    else if (ev === "LeadQualificadoConsultoria") cur.mqls += count;
+    mqlByPage.set(path, cur);
+  }
+  const mqlCandidates = Array.from(mqlByPage.entries())
+    .map(([path, v]) => ({ path, leads: v.leads, mqls: v.mqls, qualRate: v.leads > 0 ? (v.mqls / v.leads) * 100 : 0 }))
+    .filter((p) => p.leads >= 15) // volume minimo pra ser acionavel
+    .sort((a, b) => b.leads - a.leads);
+
+  // Pior LP: mais leads com pior taxa de qualificacao (< 30% = ICP desalinhado)
+  const worstQual = mqlCandidates.filter((p) => p.qualRate < 30).sort((a, b) => b.leads * (30 - b.qualRate) - a.leads * (30 - a.qualRate))[0];
+  if (worstQual) {
+    recs.push({
+      id: `mql-consultoria-${worstQual.path}`,
+      iconName: "Target",
+      colorClass: "text-sky-500 bg-sky-50",
+      priority: "Alta",
+      category: "Funil",
+      title: `Consultoria: só ${worstQual.qualRate.toFixed(0)}% dos leads de ${worstQual.path} qualificam`,
+      desc: `${formatNum(worstQual.leads)} leads geraram apenas ${formatNum(worstQual.mqls)} MQLs (LeadQualificadoConsultoria) em ${days}d. Taxa de qualificação de ${worstQual.qualRate.toFixed(0)}% indica público fora do ICP (patrimônio/aporte) chegando ao form. Pra Consultoria, o sucesso é MQL, não lead.`,
+      action: "Ajustar oferta/copy e segmentação da mídia pra atrair patrimônio/aporte no ICP",
+      impact: `Elevar qualificação pra 40% geraria +${formatNum(Math.max(0, worstQual.leads * 0.4 - worstQual.mqls))} MQLs/mês sem gastar mais mídia`,
+      effort: "médio",
+      owner: "Marketing + CRO",
+      steps: [
+        "Cruzar a origem (UTM/campanha) dos leads que NÃO qualificam vs os que qualificam",
+        "Ajustar copy da LP pra pré-qualificar (deixar claro perfil de patrimônio/aporte atendido)",
+        "Adicionar campo de patrimônio/aporte cedo no form pra filtrar antes",
+        "Refinar segmentação da mídia (excluir públicos de baixo ticket)",
+        "Rodar 14 dias e medir taxa de qualificação, não volume de lead",
+      ],
+      confidence: worstQual.leads > 100 ? "Alta" : "Média",
+      evidence: `Dado real GA4: ${formatNum(worstQual.leads)} generate_lead x ${formatNum(worstQual.mqls)} LeadQualificadoConsultoria em ${worstQual.path} (${days}d). Qualificação ${worstQual.qualRate.toFixed(1)}%.`,
+      hypothesis: "Copy pré-qualificadora + segmentação de mídia elevam a taxa de qualificação em pelo menos 10pp sem reduzir volume de MQL absoluto.",
+      costEstimate: "≈ 8h copy + 6h dev de form + ajuste de mídia",
+      risk: "baixo",
+      riskNotes: "Pré-qualificar reduz volume bruto de lead (esperado e desejável) — medir MQL, não lead total.",
+      primaryKPI: "Taxa de qualificação (MQL / lead)",
+      secondaryKPIs: ["Volume de MQL", "CPL qualificado", "Conversão MQL → cliente"],
+      testWindow: "A/B 50/50 por 14 dias",
+      rollback: "Reverter se volume absoluto de MQL cair >10%",
+      affectedSegments: [`Leads de ${worstQual.path} (Consultoria)`],
+      pageRef: worstQual.path,
+      pageUrl: worstQual.path.startsWith("http") ? worstQual.path : `https://lp.suno.com.br${worstQual.path}`,
+      _iceScore: worstQual.leads * (30 - worstQual.qualRate) * 0.5,
+    });
+  }
+
+  // ============================================================
   // Ordena por ICE score e retorna top 10
   // ============================================================
   recs.sort((a, b) => b._iceScore - a._iceScore);
@@ -606,6 +689,7 @@ export async function GET(req: NextRequest) {
           anomaliesAvailable: !!anomaliesResult.data,
           checkoutFunnelAvailable: !!checkoutResult.data,
           journeyFunnelAvailable: !!journeyResult.data,
+          consultoriaMqlPages: mqlCandidates.length,
         },
       },
     },

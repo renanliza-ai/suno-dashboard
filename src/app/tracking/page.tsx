@@ -43,6 +43,7 @@ import {
 import { formatNumber } from "@/lib/utils";
 import { useGA4, useGA4PagesDetail } from "@/lib/ga4-context";
 import { DataStatus } from "@/components/data-status";
+import { TrackingQaAlerts } from "@/components/tracking-qa-alerts";
 
 // ZERO MOCK (30/06): hashSeed/statusByMod REMOVIDOS - fabricavam status de
 // GTM/eventos "deterministicos" que pareciam checagem real. Agora o status so
@@ -797,6 +798,9 @@ export default function TrackingPage() {
             </ul>
           </div>
         </div>
+
+        {/* Alertas de qualidade de coleta — auto, a partir dos eventos reais do GA4 */}
+        <TrackingQaAlerts />
 
         {/* CAPI Status — saúde REAL do tracking server-side via Meta Graph API */}
         <motion.div

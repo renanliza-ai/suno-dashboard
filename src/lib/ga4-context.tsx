@@ -1146,6 +1146,13 @@ export function useGA4Realtime(pollMs = 30000) {
 // ao filtro de data. Agora muda quando o usuário troca o período.
 // =============================================================
 export type GA4Audience = {
+  activeUsers?: {
+    dau: number;
+    wau: number;
+    mau: number;
+    stickiness: number;
+    available: boolean;
+  };
   byAge: { name: string; users: number; pct: number }[];
   byGender: { name: string; users: number; pct: number }[];
   byState: { name: string; users: number; pct: number }[];

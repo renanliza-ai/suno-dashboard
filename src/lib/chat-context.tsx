@@ -6,7 +6,20 @@ import { useGA4, useGA4Overview, useGA4Conversions, useGA4PagesDetail } from "./
 import type { GA4PageDetail } from "./ga4-context";
 import type { ReportTemplateId } from "./report-templates";
 import { getKpis } from "./data";
-import { getCampaignsForProperty } from "./property-campaigns";
+// ZERO MOCK: campanhas fabricadas removidas. Tipo local mantido so pra os
+// arrays vazios legados (dados reais de campanha vem das APIs/Gemini).
+type ChatCampaignRow = {
+  campaign: string;
+  platform: string;
+  status: string;
+  conversions: number;
+  revenue: number;
+  spend: number;
+  roas: number;
+  leads: number;
+  users: number;
+  sessions: number;
+};
 
 // Dados "ao vivo" injetados no handler de intents
 type LiveData = {
@@ -1168,7 +1181,7 @@ function handleIntent(
     case "top_campaigns_7d": {
       // Top campanhas — REAGE à propriedade selecionada. Naming, mix de
       // plataformas e ROAS variam conforme o produto Suno (Research/Statusinvest/etc).
-      const propertyCampaigns = ([] as ReturnType<typeof getCampaignsForProperty>) // ZERO MOCK 30/06: campanhas fabricadas removidas; usar dado real via Gemini/APIs;
+      const propertyCampaigns = ([] as ChatCampaignRow[]) // ZERO MOCK 30/06: campanhas fabricadas removidas; usar dado real via Gemini/APIs;
       const rows = [...propertyCampaigns]
         .filter((c) => c.status === "ativa")
         .sort((a, b) => b.roas - a.roas)
@@ -1263,7 +1276,7 @@ function handleIntent(
       }
 
       // Top campanhas que trouxeram esses leads — usa campanhas DA PROPRIEDADE
-      const leadPropertyCampaigns = ([] as ReturnType<typeof getCampaignsForProperty>) // ZERO MOCK 30/06: campanhas fabricadas removidas; usar dado real via Gemini/APIs;
+      const leadPropertyCampaigns = ([] as ChatCampaignRow[]) // ZERO MOCK 30/06: campanhas fabricadas removidas; usar dado real via Gemini/APIs;
       const leadCampaigns = [...leadPropertyCampaigns]
         .filter((c) => c.status === "ativa")
         .sort((a, b) => b.conversions - a.conversions)
@@ -1285,6 +1298,12 @@ function handleIntent(
         ?.range;
       const rangeNote = range ? ` _(janela: ${range.startDate} → ${range.endDate})_` : "";
 
+      // Consultoria mede o funil por MQL (LeadQualificadoConsultoria), nao so lead.
+      const isConsultoria = /consultoria|advisory/i.test(live.propertyName || "");
+      const mqlNote = isConsultoria
+        ? " 💡 Como é Consultoria, o que importa não é o volume de lead e sim o **MQL** (LeadQualificadoConsultoria). Me pergunta \"qualificação de leads da consultoria\" que eu trago lead → MQL por LP."
+        : "";
+
       return {
         reply: `🎣 Nas **últimas 24 horas** em ${propertyDisplay}, capturei **${formatCompact(leadsTotal)} leads** (${eventBreakdown}).${rangeNote} ${
           isRealLeads
@@ -1292,7 +1311,7 @@ function handleIntent(
             : live.propertyName
               ? "📡 Sem eventos `generate_lead` ou `lead_create_account` disparados nas últimas 24h nessa propriedade — estimativa de fallback abaixo."
               : "🎭 Modo demo — selecione uma propriedade no header pra eu trazer o número exato."
-        }`,
+        }${mqlNote}`,
         newHighlight: "events",
         rich: [
           {
@@ -1396,7 +1415,7 @@ function handleIntent(
       // removido - sem evento purchase real, reportamos zero honesto.
 
       // Top campanhas que mais converteram em VENDAS — DA PROPRIEDADE selecionada
-      const salesPropertyCampaigns = ([] as ReturnType<typeof getCampaignsForProperty>) // ZERO MOCK 30/06: campanhas fabricadas removidas; usar dado real via Gemini/APIs;
+      const salesPropertyCampaigns = ([] as ChatCampaignRow[]) // ZERO MOCK 30/06: campanhas fabricadas removidas; usar dado real via Gemini/APIs;
       const salesByCampaign = [...salesPropertyCampaigns]
         .filter((c) => c.status === "ativa" && c.revenue > 0)
         .sort((a, b) => b.revenue - a.revenue)

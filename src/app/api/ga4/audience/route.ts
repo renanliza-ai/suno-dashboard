@@ -1,4 +1,4 @@
-import { runReport } from "@/lib/ga4-server";
+import { runReport, extractRangeTotals } from "@/lib/ga4-server";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -29,8 +29,8 @@ export async function GET(req: NextRequest) {
       ? { startDate: startDateParam, endDate: endDateParam }
       : { startDate: `${days}daysAgo`, endDate: "today" };
 
-  // 6 queries em paralelo — uma round-trip pra cobrir o dashboard inteiro
-  const [ageRes, genderRes, stateRes, browserRes, osRes, deviceRes] = await Promise.all([
+  // 7 queries em paralelo — uma round-trip pra cobrir o dashboard inteiro
+  const [ageRes, genderRes, stateRes, browserRes, osRes, deviceRes, activeRes] = await Promise.all([
     runReport(propertyId, {
       dateRanges: [dateRange],
       dimensions: [{ name: "userAgeBracket" }],
@@ -78,7 +78,33 @@ export async function GET(req: NextRequest) {
       orderBys: [{ metric: { metricName: "totalUsers" }, desc: true }],
       limit: 5,
     }),
+    // DAU / WAU / MAU reais — metricas nativas do GA4 (janela movel ao fim do range).
+    // Substitui os coeficientes fabricados removidos no zero-mock.
+    runReport(propertyId, {
+      dateRanges: [dateRange],
+      metricAggregations: ["TOTAL"],
+      metrics: [
+        { name: "active1DayUsers" },
+        { name: "active7DayUsers" },
+        { name: "active28DayUsers" },
+      ],
+    }),
   ]);
+
+  // Usuarios ativos (DAU/WAU/MAU) — le totals OU rows (GA4 varia o formato)
+  const activeVals =
+    extractRangeTotals(activeRes.data)?.current ||
+    (activeRes.data?.rows?.[0]?.metricValues || []).map((m) => Number(m.value || 0));
+  const dau = Number(activeVals?.[0] || 0);
+  const wau = Number(activeVals?.[1] || 0);
+  const mau = Number(activeVals?.[2] || 0);
+  const activeUsers = {
+    dau,
+    wau,
+    mau,
+    stickiness: mau > 0 ? Number(((dau / mau) * 100).toFixed(1)) : 0,
+    available: mau > 0 && !activeRes.error,
+  };
 
   // Helper: extrai linhas e calcula percentuais
   function rowsToList(
@@ -139,6 +165,7 @@ export async function GET(req: NextRequest) {
     {
       propertyId,
       query: { dateRange, days },
+      activeUsers,
       byAge,
       byGender,
       byState,
