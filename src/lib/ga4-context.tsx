@@ -776,6 +776,10 @@ export type GA4PageDetail = {
   bounceRate: number; // %
   exitRate: number; // % (aprox)
   entries: number;
+  engagedSessions: number;
+  leads: number; // generate_lead + lead_create_account nessa página
+  connectRate: number; // % leads / sessões (taxa de captação da LP)
+  engagementRate: number; // % engagedSessions / sessões
   engagementPerUser: number; // seg por usuário
 };
 

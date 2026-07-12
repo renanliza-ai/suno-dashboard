@@ -61,6 +61,7 @@ export async function GET(req: NextRequest) {
       { name: "averageSessionDuration" },
       { name: "bounceRate" },
       { name: "userEngagementDuration" },
+      { name: "engagedSessions" },
     ],
     orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }],
     limit,
@@ -73,13 +74,34 @@ export async function GET(req: NextRequest) {
   // 2) Entrances: GA4 expõe "sessions" agregado por landingPage. Buscamos em paralelo
   //    pra compor "entradas por página" — quando uma pagePath == landingPage, a qtd
   //    de sessões é o número de entradas daquela página.
-  const entrancesRes = await runReport(propertyId, {
-    dateRanges: [dateRange],
-    dimensions: [{ name: "hostName" }, { name: "landingPagePlusQueryString" }],
-    metrics: [{ name: "sessions" }],
-    orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
-    limit: 500,
-  });
+  // Entrances + leads (generate_lead por página) em paralelo.
+  const [entrancesRes, leadsRes] = await Promise.all([
+    runReport(propertyId, {
+      dateRanges: [dateRange],
+      dimensions: [{ name: "hostName" }, { name: "landingPagePlusQueryString" }],
+      metrics: [{ name: "sessions" }],
+      orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+      limit: 500,
+    }),
+    runReport(propertyId, {
+      dateRanges: [dateRange],
+      dimensions: [{ name: "hostName" }, { name: "pagePath" }],
+      metrics: [{ name: "eventCount" }],
+      dimensionFilter: {
+        filter: { fieldName: "eventName", inListFilter: { values: ["generate_lead", "lead_create_account"] } },
+      },
+      orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
+      limit: 500,
+    }),
+  ]);
+
+  // Leads (generate_lead + lead_create_account) por host|path
+  const leadsMap = new Map<string, number>();
+  for (const r of leadsRes.data?.rows || []) {
+    const host = r.dimensionValues?.[0]?.value || "";
+    const path = r.dimensionValues?.[1]?.value || "/";
+    leadsMap.set(`${host}|${path}`, (leadsMap.get(`${host}|${path}`) || 0) + Number(r.metricValues?.[0]?.value || 0));
+  }
 
   const entrancesMap = new Map<string, number>();
   for (const r of entrancesRes.data?.rows || []) {
@@ -100,7 +122,9 @@ export async function GET(req: NextRequest) {
     const avgSessionDuration = Number(r.metricValues?.[3]?.value || 0);
     const bounceRate = Number(r.metricValues?.[4]?.value || 0); // decimal 0..1
     const userEngagementDuration = Number(r.metricValues?.[5]?.value || 0);
+    const engagedSessions = Number(r.metricValues?.[6]?.value || 0);
     const entries = entrancesMap.get(`${host}|${path}`) || 0;
+    const leads = leadsMap.get(`${host}|${path}`) || 0;
     // Exit rate = aproximação: (sessions - (views-sessions))/sessions... preferimos
     // usar o ratio (1 - engagementRate) como aproximação de saída quando engagement
     // não estiver disponível. Se bounceRate == 1 (só rejeição), exitRate == 100%.
@@ -118,6 +142,11 @@ export async function GET(req: NextRequest) {
       bounceRate: Number((bounceRate * 100).toFixed(1)), // %
       exitRate: Number((bounceRate * 100).toFixed(1)), // aprox — GA4 Data API não expõe exit direto
       entries,
+      engagedSessions,
+      leads,
+      // Connect Rate = leads / sessões (%) — a taxa de captação da LP.
+      connectRate: sessions > 0 ? Number(((leads / sessions) * 100).toFixed(2)) : 0,
+      engagementRate: sessions > 0 ? Number(((engagedSessions / sessions) * 100).toFixed(1)) : 0,
       engagementPerUser: users > 0 ? Math.round(userEngagementDuration / users) : 0,
     };
   });

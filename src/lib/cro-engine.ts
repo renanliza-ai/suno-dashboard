@@ -75,7 +75,30 @@ export type CROInsight = {
 
   // Estimativa de impacto (calculada, não hardcoded)
   estimatedImpact: string;  // ex: "+R$ 12k/mês recuperados" ou "+~120 leads/mês"
+
+  // Métricas ATUAIS da página (contexto do card) — preenchidas centralmente.
+  metrics?: {
+    users: number;
+    sessions: number;
+    engagedSessions: number;
+    engagementRate: number; // %
+    bounceRate: number; // %
+    leads: number; // generate_lead + lead_create_account
+    connectRate: number; // % leads / sessões (só relevante em LP de captação)
+    isCapture: boolean; // LP de captação (mostra Connect Rate + Leads)
+  };
+  // Dimensionamento do experimento (calculado do tráfego real)
+  sampleSizePerVariant?: number;
+  estimatedTestDays?: number;
 };
+
+// Tamanho de amostra por variante (teste de proporção, ~80% poder, 95% conf).
+function sampleSizePerVariant(baselineRate: number, relMde = 0.15): number {
+  const p = Math.min(0.95, Math.max(0.003, baselineRate));
+  const mde = p * relMde;
+  if (mde <= 0) return 0;
+  return Math.ceil((15.7 * p * (1 - p)) / (mde * mde));
+}
 
 // ============================================================
 // Benchmarks Suno (calibrados pra mercado financeiro BR)
@@ -480,6 +503,49 @@ const rules: ((ctx: RuleCtx) => CROInsight | null)[] = [
       estimatedImpact: estimateImpact(page.views, 1.0, 200),
     };
   },
+
+  // ------------------------------------------------------------
+  // R9: LP de CAPTAÇÃO com CONNECT RATE baixo (o KPI real da LP de lead)
+  // Avalia a LP pelo que ela existe pra fazer: converter sessão em lead.
+  // ------------------------------------------------------------
+  ({ page }) => {
+    const isCapture = classifyPage(page.path) === "lp" || (page.leads || 0) > 0;
+    if (!isCapture) return null;
+    if (page.sessions < 300) return null; // amostra mínima
+    const cr = page.connectRate || 0;
+    // Benchmark Suno: LP de captação saudável conecta >= 3% (lead/sessão).
+    if (cr >= 3) return null;
+    const potentialLeads = Math.round(page.sessions * ((3 - cr) / 100)); // leads a recuperar até 3%
+    return {
+      id: `lp-connect-rate-${page.path}`,
+      title: `Connect Rate baixo (${cr.toFixed(2)}%) em ${page.path}`,
+      category: "Funil",
+      priority: cr < 1.5 ? "Alta" : "Média",
+      page: page.path,
+      pageUrl: fullPageUrl(page),
+      detectedFrom: `connect rate ${cr.toFixed(2)}% (${(page.leads || 0).toLocaleString("pt-BR")} leads / ${page.sessions.toLocaleString("pt-BR")} sessões) — benchmark LP de lead Suno: ≥3%`,
+      metric: { name: "connectRate", value: cr, threshold: 3, unit: "%" },
+      hypothesis: `LP de captação convertendo ${cr.toFixed(2)}% (abaixo dos 3% de referência). As alavancas de maior efeito em LP de lead, em ordem: (1) reduzir campos do formulário ao mínimo viável, (2) prova social above-the-fold, (3) match de mensagem com o canal de maior volume, (4) form na primeira dobra. Atacar 1+2 primeiro (maior efeito por esforço).`,
+      diagnosis: "LIFT — Distraction (campos demais) + Anxiety (sem prova social) reduzindo a conversão. São as duas alavancas de maior elasticidade em LP de lead.",
+      framework: "LIFT",
+      frameworkNote: "Connect Rate é o KPI-fim da LP de captação. Avaliar por ele (não por bounce/tempo) é o corte sênior.",
+      action: "Enxugar formulário + prova social above-the-fold + message match do canal",
+      steps: [
+        `Baseline: connect rate ${cr.toFixed(2)}% (${(page.leads || 0).toLocaleString("pt-BR")} leads / ${page.sessions.toLocaleString("pt-BR")} sessões)`,
+        `Variante B: form reduzido ao mínimo (nome, email, telefone) + barra de prova social (logos de imprensa) na primeira dobra`,
+        `Métrica primária: connect rate (lead/sessão) · guardrails: qualidade do lead (MQL/lead) e CPL`,
+        `Segmentar por canal de origem: aplicar o message match do canal de maior volume`,
+        `Meta: connect rate ≥ 3% (recuperaria ≈ ${potentialLeads.toLocaleString("pt-BR")} leads no período com o tráfego atual)`,
+      ],
+      testDesign: "A/B 50/50, lock por usuário",
+      ice: ice(9, 8, 7),
+      pxl: pxl({ aboveFold: true, addsValue: false, runsOnHighTraffic: page.sessions > 3000, isPainPoint: true, isQuickWin: true }),
+      primaryKPI: `Connect Rate (lead/sessão) em ${page.path}`,
+      secondaryKPIs: ["Leads absolutos", "Qualidade do lead (MQL/lead)", "Form starts vs completes", "CPL"],
+      rollbackCriteria: "Reverter se a qualidade do lead (MQL/lead) cair, mesmo com connect rate subindo",
+      estimatedImpact: `≈ ${potentialLeads.toLocaleString("pt-BR")} leads adicionais no período se atingir 3% de connect rate`,
+    };
+  },
 ];
 
 // ============================================================
@@ -496,21 +562,52 @@ export function generateCROInsights(pages: GA4PageDetail[] | undefined | null): 
   const topPages = [...pages].sort((a, b) => b.views - a.views).slice(0, 30);
   const insights: CROInsight[] = [];
 
+  // Janela do pagesDetail é 30d por padrão — usamos pra estimar dias de teste.
+  const PERIOD_DAYS = 30;
+
   topPages.forEach((page, rank) => {
     const ctx: RuleCtx = { page, totalViews, rank };
     for (const rule of rules) {
       const insight = rule(ctx);
-      if (insight) insights.push(insight);
+      if (!insight) continue;
+
+      // Métricas atuais da página no card
+      const isCapture = classifyPage(page.path) === "lp" || (page.leads || 0) > 0;
+      insight.metrics = {
+        users: page.users,
+        sessions: page.sessions,
+        engagedSessions: page.engagedSessions || 0,
+        engagementRate: page.engagementRate || 0,
+        bounceRate: page.bounceRate,
+        leads: page.leads || 0,
+        connectRate: page.connectRate || 0,
+        isCapture,
+      };
+
+      // Dimensionamento do experimento a partir do tráfego real
+      const baseline = isCapture
+        ? Math.max(0.005, (page.connectRate || 1) / 100)
+        : Math.max(0.02, (page.engagementRate || 10) / 100);
+      const nPer = sampleSizePerVariant(baseline);
+      const dailySessions = Math.max(1, page.sessions / PERIOD_DAYS);
+      const estDays = Math.max(7, Math.ceil((2 * nPer) / dailySessions));
+      insight.sampleSizePerVariant = nPer;
+      insight.estimatedTestDays = estDays;
+      insight.testDesign = `${insight.testDesign} · amostra ~${nPer.toLocaleString("pt-BR")} sessões/variante (MDE 15% relativo) → ≈ ${estDays} dias com ${Math.round(dailySessions).toLocaleString("pt-BR")} sessões/dia`;
+
+      insights.push(insight);
     }
   });
 
-  // Dedup por id + ranking por ICE Total (decrescente)
-  const seen = new Set<string>();
-  const deduped = insights.filter((i) => {
-    if (seen.has(i.id)) return false;
-    seen.add(i.id);
-    return true;
-  });
+  // DEDUP POR PÁGINA — 1 card por página (o de maior ICE). Antes o dedup era
+  // só por id, então bounce + tempo + LP-conversion na MESMA página viravam
+  // 3 cards. Agora escolhemos o problema dominante de cada página.
+  const byPage = new Map<string, CROInsight>();
+  for (const i of insights) {
+    const ex = byPage.get(i.page);
+    if (!ex || i.ice.total > ex.ice.total) byPage.set(i.page, i);
+  }
+  const deduped = Array.from(byPage.values());
 
   return deduped.sort((a, b) => b.ice.total - a.ice.total).slice(0, 10);
 }

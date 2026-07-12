@@ -90,6 +90,19 @@ type Insight = {
   // Página real referenciada pela hipótese — clicável no card e modal
   pageRef?: string; // path (ex: "/carteiras")
   pageUrl?: string; // URL completa (ex: "https://www.suno.com.br/carteiras")
+  // Métricas ATUAIS da página (do CRO Engine) — mostradas no card
+  metrics?: {
+    users: number;
+    sessions: number;
+    engagedSessions: number;
+    engagementRate: number;
+    bounceRate: number;
+    leads: number;
+    connectRate: number;
+    isCapture: boolean;
+  };
+  sampleSizePerVariant?: number;
+  estimatedTestDays?: number;
 };
 
 type Decision = "pending" | "accepted" | "rejected";
@@ -642,6 +655,9 @@ export default function CROPage() {
             pageRef: it.pageRef,
             pageUrl: it.pageUrl,
             framework: it.framework,
+            metrics: it.metrics,
+            sampleSizePerVariant: it.sampleSizePerVariant,
+            estimatedTestDays: it.estimatedTestDays,
           },
           sourceLink: typeof window !== "undefined" ? `${window.location.origin}/cro` : undefined,
         }),
@@ -918,6 +934,9 @@ export default function CROPage() {
       diagnosis: ci.diagnosis,
       pageRef: ci.page,
       pageUrl: ci.pageUrl,
+      metrics: ci.metrics,
+      sampleSizePerVariant: ci.sampleSizePerVariant,
+      estimatedTestDays: ci.estimatedTestDays,
     };
   }
 
@@ -1634,6 +1653,32 @@ export default function CROPage() {
                         </a>
                       )}
                       <p className="text-sm text-[color:var(--muted-foreground)] mb-2">{insight.desc}</p>
+                      {/* Métricas ATUAIS da página — contexto real do card.
+                          Connect Rate + Leads só aparecem em LP de captação. */}
+                      {insight.metrics && (
+                        <div className="flex flex-wrap gap-1.5 mb-2">
+                          {[
+                            { l: "Usuários", v: insight.metrics.users.toLocaleString("pt-BR"), hi: false },
+                            { l: "Sessões", v: insight.metrics.sessions.toLocaleString("pt-BR"), hi: false },
+                            { l: "Sess. engajadas", v: `${insight.metrics.engagedSessions.toLocaleString("pt-BR")} · ${insight.metrics.engagementRate.toFixed(0)}%`, hi: false },
+                            { l: "Rejeição", v: `${insight.metrics.bounceRate.toFixed(0)}%`, hi: false },
+                            ...(insight.metrics.isCapture
+                              ? [
+                                  { l: "Connect Rate", v: `${insight.metrics.connectRate.toFixed(2)}%`, hi: true },
+                                  { l: "Leads", v: insight.metrics.leads.toLocaleString("pt-BR"), hi: true },
+                                ]
+                              : []),
+                          ].map((m) => (
+                            <span
+                              key={m.l}
+                              className={`text-[10px] rounded-md px-2 py-1 border ${m.hi ? "bg-sky-50 border-sky-200 text-sky-800" : "bg-white border-[color:var(--border)]"}`}
+                            >
+                              <span className="text-[color:var(--muted-foreground)] uppercase tracking-wide mr-1">{m.l}</span>
+                              <strong className="tabular-nums">{m.v}</strong>
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       {/* Mini-grid de evidência rápida */}
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
                         <div className="text-[10px] bg-[color:var(--muted)]/50 rounded-md px-2 py-1.5">

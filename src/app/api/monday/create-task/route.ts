@@ -253,6 +253,12 @@ export async function POST(req: NextRequest) {
     pageRef?: string;
     pageUrl?: string;
     framework?: string;
+    metrics?: {
+      users: number; sessions: number; engagedSessions: number; engagementRate: number;
+      bounceRate: number; leads: number; connectRate: number; isCapture: boolean;
+    };
+    sampleSizePerVariant?: number;
+    estimatedTestDays?: number;
   };
 
   let body: {
@@ -323,6 +329,21 @@ export async function POST(req: NextRequest) {
   if (ins.description) {
     lines.push("## 📋 Resumo");
     lines.push(ins.description);
+    lines.push("");
+  }
+
+  // Métricas atuais da página (contexto pro time executar)
+  if (ins.metrics) {
+    const m = ins.metrics;
+    lines.push("## 📊 Métricas atuais da página");
+    lines.push(`- **Usuários:** ${m.users.toLocaleString("pt-BR")}`);
+    lines.push(`- **Sessões:** ${m.sessions.toLocaleString("pt-BR")}`);
+    lines.push(`- **Sessões engajadas:** ${m.engagedSessions.toLocaleString("pt-BR")} (${m.engagementRate.toFixed(0)}%)`);
+    lines.push(`- **Taxa de rejeição:** ${m.bounceRate.toFixed(0)}%`);
+    if (m.isCapture) {
+      lines.push(`- **Connect Rate:** ${m.connectRate.toFixed(2)}% _(leads / sessões)_`);
+      lines.push(`- **Leads:** ${m.leads.toLocaleString("pt-BR")}`);
+    }
     lines.push("");
   }
 
