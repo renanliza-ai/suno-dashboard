@@ -305,13 +305,49 @@ export function CampaignPerformance() {
         </div>
       )}
 
+      {/* Card prominente por PLATAFORMA não configurada — some a "desconfiança":
+          o time vê exatamente qual plataforma falta e como ligar, por property.
+          Aparece mesmo quando a outra plataforma carregou (ex.: Google ok, Meta não). */}
+      {!adsLoading && realData && hasRealCampaigns &&
+        (realData.platforms.meta.error === "not_configured" || realData.platforms.google.error === "not_configured") && (
+        <div className="mb-3 rounded-xl border border-amber-300 bg-amber-50 p-3 flex items-start gap-3">
+          <AlertCircle size={16} className="text-amber-700 shrink-0 mt-0.5" />
+          <div className="flex-1 text-xs leading-relaxed text-amber-900">
+            <strong className="text-[13px]">
+              {realData.platforms.meta.error === "not_configured" && realData.platforms.google.error === "not_configured"
+                ? "Meta e Google Ads não configurados para esta property"
+                : realData.platforms.meta.error === "not_configured"
+                ? "Meta Ads não configurado para esta property"
+                : "Google Ads não configurado para esta property"}
+            </strong>
+            <p className="mt-1">
+              As campanhas não aparecem porque falta a <strong>credencial desta operação</strong> (não é bug de coleta).
+              {realData.platforms.meta.error === "not_configured" && (
+                <> Meta hoje só está ligado na Suno Research.</>
+              )}
+            </p>
+            <p className="mt-1.5 text-[11px]">
+              Para ativar, adicione no Vercel (Environment Variables) e faça redeploy:
+            </p>
+            <ul className="mt-1 list-disc list-inside text-[11px] font-mono">
+              {realData.platforms.meta.error === "not_configured" && (
+                <li>META_ADS_PROPERTY_N_NAME (= nome exato da property) · _AD_ACCOUNT_ID · _TOKEN (ads_read)</li>
+              )}
+              {realData.platforms.google.error === "not_configured" && (
+                <li>GOOGLE_ADS_PROPERTY_N_CUSTOMER_ID (+ credenciais globais Google Ads)</li>
+              )}
+            </ul>
+          </div>
+        </div>
+      )}
+
       {!adsLoading && realData && !hasRealCampaigns && (
         <div className="mb-3 rounded-xl border-2 border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 p-4 flex items-start gap-3">
           <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
             <AlertCircle size={18} className="text-amber-700" />
           </div>
           <div className="flex-1 text-xs leading-relaxed text-amber-900">
-            <strong className="text-sm">APIs de Ads não configuradas — exibindo dados de demonstração</strong>
+            <strong className="text-sm">APIs de Ads não configuradas para esta property — sem campanhas a exibir</strong>
             <p className="mt-1">
               {realData.platforms.meta.error === "not_configured" && (
                 <>
@@ -326,7 +362,7 @@ export function CampaignPerformance() {
               )}
             </p>
             <p className="mt-2">
-              Os números abaixo escalam pela propriedade mas <strong>são mockup</strong>. Pra ativar dados reais,
+              Este painel <strong>não exibe dados de exemplo</strong>. Pra carregar campanhas reais desta property,
               configure as env vars na Vercel:
             </p>
             <ul className="mt-1 list-disc list-inside text-[11px] font-mono">
