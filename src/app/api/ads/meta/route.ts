@@ -171,53 +171,78 @@ export async function GET(req: NextRequest) {
     "action_values",
   ].join(",");
 
-  const url =
-    `https://graph.facebook.com/v19.0/${credentials.adAccountId}/insights` +
-    `?level=campaign` +
-    `&fields=${fields}` +
-    `&time_range=${encodeURIComponent(JSON.stringify(timeRange))}` +
-    `&limit=500` +
-    `&access_token=${credentials.accessToken}`;
-
-  let metaData: { data?: MetaInsightRow[]; error?: { message: string; code: number; type: string } };
-  let httpStatus = 0;
-  try {
-    const resp = await fetch(url, { cache: "no-store" });
-    httpStatus = resp.status;
-    metaData = await resp.json();
-  } catch (e) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "network_error",
-        message: `Falha ao conectar com Meta API: ${(e as Error).message}`,
-        propertyName,
-      },
-      { status: 200 }
-    );
+  // Busca as insights de campanha pra uma janela. Retorna rows OU um erro.
+  async function fetchInsights(range: { since: string; until: string }): Promise<{
+    rows: MetaInsightRow[] | null;
+    error: { message: string; code: number; type: string } | null;
+    httpStatus: number;
+  }> {
+    const url =
+      `https://graph.facebook.com/v19.0/${credentials!.adAccountId}/insights` +
+      `?level=campaign` +
+      `&fields=${fields}` +
+      `&time_range=${encodeURIComponent(JSON.stringify(range))}` +
+      `&limit=500` +
+      `&access_token=${credentials!.accessToken}`;
+    try {
+      const resp = await fetch(url, { cache: "no-store" });
+      const j = (await resp.json()) as {
+        data?: MetaInsightRow[];
+        error?: { message: string; code: number; type: string };
+      };
+      if (j.error) return { rows: null, error: j.error, httpStatus: resp.status };
+      return { rows: j.data || [], error: null, httpStatus: resp.status };
+    } catch (e) {
+      return { rows: null, error: { message: (e as Error).message, code: -1, type: "network" }, httpStatus: 0 };
+    }
   }
 
-  if (metaData.error) {
+  const spendOf = (rows: MetaInsightRow[]) => rows.reduce((s, r) => s + Number(r.spend || 0), 0);
+
+  // 1ª tentativa: janela pedida
+  const first = await fetchInsights(timeRange);
+  if (first.error) {
     return NextResponse.json(
       {
         ok: false,
         error: "meta_api_error",
-        message: metaData.error.message,
-        code: metaData.error.code,
-        type: metaData.error.type,
+        message: first.error.message,
+        code: first.error.code,
+        type: first.error.type,
         propertyName,
         adAccountId: credentials.adAccountId,
-        httpStatus,
+        httpStatus: first.httpStatus,
         hint:
-          metaData.error.code === 190
+          first.error.code === 190
             ? "Token expirado ou sem permissão. Gere um System User Token novo em Business Settings."
-            : metaData.error.code === 100
+            : first.error.code === 100
               ? "Ad Account ID inválido ou inacessível com esse token."
               : null,
       },
       { status: 200 }
     );
   }
+
+  // FALLBACK "sempre carregar": se a janela pedida nao tem investimento Meta,
+  // busca os ultimos 90 dias (que costumam ter dados) e sinaliza a troca.
+  // Motivo: no inicio do mes / com atraso de reporte, a janela corrente pode
+  // vir vazia mesmo com Meta sendo 70% do budget.
+  let rows = first.rows || [];
+  let windowFallback: { applied: boolean; requestedRange: typeof timeRange; effectiveRange: typeof timeRange } | null = null;
+  if (spendOf(rows) === 0) {
+    const end = new Date();
+    const start = new Date();
+    start.setUTCDate(end.getUTCDate() - 90);
+    const wide = { since: isoDate(start), until: isoDate(end) };
+    const fb = await fetchInsights(wide);
+    if (!fb.error && fb.rows && spendOf(fb.rows) > 0) {
+      rows = fb.rows;
+      windowFallback = { applied: true, requestedRange: timeRange, effectiveRange: wide };
+      timeRange = wide;
+    }
+  }
+
+  const metaData: { data?: MetaInsightRow[] } = { data: rows };
 
   // Processa as linhas — extrai conversões e receita dos arrays actions/action_values
   type Campaign = {
@@ -295,6 +320,7 @@ export async function GET(req: NextRequest) {
       fromFallback: credentials.fromFallback,
       adAccountId: credentials.adAccountId,
       timeRange,
+      windowFallback,
       campaigns,
       totals: {
         ...totals,

@@ -50,6 +50,11 @@ type PlatformResponse = {
   };
   error?: string;
   message?: string;
+  windowFallback?: {
+    applied: boolean;
+    requestedRange: { since: string; until: string };
+    effectiveRange: { since: string; until: string };
+  } | null;
 };
 
 export async function GET(req: NextRequest) {
@@ -128,6 +133,7 @@ export async function GET(req: NextRequest) {
           totals: meta.totals,
           error: meta.error,
           message: meta.message,
+          windowFallback: meta.windowFallback || null,
         },
         google: {
           ok: google.ok,

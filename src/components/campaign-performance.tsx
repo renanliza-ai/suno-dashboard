@@ -40,7 +40,17 @@ type AdsApiResponse = {
     ctr: number;
   };
   platforms: {
-    meta: { ok: boolean; error?: string; message?: string; campaignsCount: number };
+    meta: {
+      ok: boolean;
+      error?: string;
+      message?: string;
+      campaignsCount: number;
+      windowFallback?: {
+        applied: boolean;
+        requestedRange: { since: string; until: string };
+        effectiveRange: { since: string; until: string };
+      } | null;
+    };
     google: { ok: boolean; error?: string; message?: string; campaignsCount: number };
   };
 };
@@ -285,6 +295,11 @@ export function CampaignPerformance() {
               <span className="opacity-70 text-[10px] ml-2">
                 · {adsFetchedAt.toLocaleTimeString("pt-BR")}
               </span>
+            )}
+            {realData.platforms.meta.windowFallback?.applied && (
+              <div className="mt-1.5 text-[11px] text-sky-800 bg-sky-50 border border-sky-200 rounded-md px-2 py-1">
+                ⓘ <strong>Meta:</strong> sem investimento no período selecionado ({realData.platforms.meta.windowFallback.requestedRange.since} a {realData.platforms.meta.windowFallback.requestedRange.until}). Exibindo os <strong>últimos 90 dias com dados</strong> ({realData.platforms.meta.windowFallback.effectiveRange.since} a {realData.platforms.meta.windowFallback.effectiveRange.until}) pra você não ficar sem as campanhas.
+              </div>
             )}
           </div>
         </div>
