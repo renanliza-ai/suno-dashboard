@@ -15,8 +15,13 @@ import {
   Briefcase,
   TrendingUp,
   UserCheck,
+  CheckCircle2,
+  MinusCircle,
+  XCircle,
+  Loader2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useGA4, useGA4Audience } from "@/lib/ga4-context";
 
 /**
  * Modal do ICP Suno — Ideal Customer Profile.
@@ -320,6 +325,173 @@ function PersonaCard({ gender, age, onChangeGender, onChangeAge }: {
   );
 }
 
+/**
+ * ICP OBSERVADO (GA4 real) × PLANEJADO — data-driven.
+ * Compara o alvo definido pelo time (planejado) com o que a audiência REAL
+ * do GA4 está trazendo, por dimensão observável (idade, gênero, região,
+ * dispositivo). Idade/gênero dependem de Google Signals na property.
+ */
+type MatchVerdict = "match" | "parcial" | "fora" | "na";
+
+function MatchBadge({ v }: { v: MatchVerdict }) {
+  if (v === "match")
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
+        <CheckCircle2 size={11} /> Match
+      </span>
+    );
+  if (v === "parcial")
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200">
+        <MinusCircle size={11} /> Parcial
+      </span>
+    );
+  if (v === "fora")
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-red-50 text-red-700 border border-red-200">
+        <XCircle size={11} /> Fora do alvo
+      </span>
+    );
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 border border-slate-200">
+      indisponível
+    </span>
+  );
+}
+
+function ObservedVsPlanned() {
+  const { selected, useRealData } = useGA4();
+  const { data: aud, loading, meta } = useGA4Audience();
+
+  if (!useRealData) {
+    return (
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-xs text-slate-500">
+        Selecione uma property no header pra comparar o ICP planejado com o que a audiência real do GA4 está trazendo.
+      </div>
+    );
+  }
+  if (loading || meta.status === "loading") {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 text-xs text-slate-500 flex items-center gap-2">
+        <Loader2 size={14} className="animate-spin" /> Comparando com a audiência real de {selected?.displayName}...
+      </div>
+    );
+  }
+
+  const byAge = aud?.byAge || [];
+  const byGender = aud?.byGender || [];
+  const byState = aud?.byState || [];
+  const byDevice = aud?.byDevice || [];
+  const hasAge = aud?.meta?.hasAge;
+  const hasGender = aud?.meta?.hasGender;
+
+  // 1) Faixa etária dominante (sweet spot planejado: 38-48 → buckets 35-44 / 45-54)
+  const topAge = [...byAge].sort((a, b) => b.pct - a.pct)[0];
+  const ageVerdict: MatchVerdict = !hasAge || !topAge
+    ? "na"
+    : ["35-44", "45-54"].includes(topAge.name)
+      ? "match"
+      : ["25-34", "55-64"].includes(topAge.name)
+        ? "parcial"
+        : "fora";
+
+  // 2) Gênero (planejado: predominância masculina ~68%)
+  const male = byGender.find((g) => g.name === "Masculino")?.pct ?? null;
+  const genderVerdict: MatchVerdict = !hasGender || male == null
+    ? "na"
+    : male >= 55
+      ? "match"
+      : male >= 45
+        ? "parcial"
+        : "fora";
+
+  // 3) Região (planejado: Sudeste SP/RJ/MG + Sul RS/PR/SC)
+  const PLAN_STATES = new Set(["SP", "RJ", "MG", "RS", "PR", "SC"]);
+  const top3States = [...byState].sort((a, b) => b.pct - a.pct).slice(0, 3);
+  const inPlan = top3States.filter((s) => PLAN_STATES.has(s.name)).length;
+  const regionVerdict: MatchVerdict = top3States.length === 0
+    ? "na"
+    : inPlan >= 2
+      ? "match"
+      : inPlan === 1
+        ? "parcial"
+        : "fora";
+
+  const topDevice = [...byDevice].sort((a, b) => b.pct - a.pct)[0];
+
+  const rows: { dim: string; planned: string; observed: string; v: MatchVerdict }[] = [
+    {
+      dim: "Faixa etária",
+      planned: "Sweet spot 38–48",
+      observed: hasAge && topAge ? `${topAge.name} lidera (${topAge.pct}%)` : "Ative Google Signals",
+      v: ageVerdict,
+    },
+    {
+      dim: "Gênero",
+      planned: "~68% masculino",
+      observed: hasGender && male != null ? `${male}% masculino` : "Ative Google Signals",
+      v: genderVerdict,
+    },
+    {
+      dim: "Região",
+      planned: "Sudeste + Sul",
+      observed: top3States.length ? top3States.map((s) => `${s.name} ${s.pct}%`).join(" · ") : "sem dados",
+      v: regionVerdict,
+    },
+    {
+      dim: "Dispositivo",
+      planned: "—",
+      observed: topDevice ? `${topDevice.name} ${topDevice.pct}%` : "sem dados",
+      v: "na",
+    },
+  ];
+
+  const scored = rows.filter((r) => r.v !== "na");
+  const matches = scored.filter((r) => r.v === "match").length;
+  const overall = scored.length === 0
+    ? "Sem dados demográficos (ative Google Signals na property pra comparar idade e gênero)."
+    : `${matches}/${scored.length} dimensões batem com o ICP planejado.`;
+
+  return (
+    <div className="rounded-2xl border border-[#7c5cff]/30 bg-white p-4">
+      <div className="flex items-center gap-2 mb-1 flex-wrap">
+        <div className="w-8 h-8 rounded-xl bg-[#7c5cff]/10 text-[#7c5cff] flex items-center justify-center">
+          <UserCheck size={16} />
+        </div>
+        <h3 className="text-sm font-bold text-slate-900">ICP Observado (GA4 real) × Planejado</h3>
+        <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded ml-auto">
+          {selected?.displayName}
+        </span>
+      </div>
+      <p className="text-[11px] text-slate-500 mb-3">
+        O que a audiência real está trazendo vs o alvo definido. {overall}
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-[10px] uppercase tracking-wide text-slate-400 border-b border-slate-200">
+              <th className="text-left font-semibold py-1.5">Dimensão</th>
+              <th className="text-left font-semibold py-1.5">Planejado</th>
+              <th className="text-left font-semibold py-1.5">Observado (real)</th>
+              <th className="text-right font-semibold py-1.5">Match</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.dim} className="border-b border-slate-100 last:border-0">
+                <td className="py-2 font-semibold text-slate-700">{r.dim}</td>
+                <td className="py-2 text-slate-500">{r.planned}</td>
+                <td className="py-2 text-slate-800 font-medium">{r.observed}</td>
+                <td className="py-2 text-right"><MatchBadge v={r.v} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export function IcpModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   // Default respeita a regra: 68% masculino, sweet spot 38–48.
   const [gender, setGender] = useState<Gender>("male");
@@ -432,7 +604,10 @@ export function IcpModal({ open, onClose }: { open: boolean; onClose: () => void
 
             {/* Scrollable body */}
             <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-50">
-              {/* Persona dinâmica — segue regra gênero + idade do ICP */}
+              {/* ICP OBSERVADO (GA4 real) × PLANEJADO — data-driven, muda por property/período */}
+              <ObservedVsPlanned />
+
+              {/* Persona dinâmica — segue regra gênero + idade do ICP PLANEJADO */}
               <PersonaCard
                 gender={gender}
                 age={ageBand}
@@ -440,6 +615,9 @@ export function IcpModal({ open, onClose }: { open: boolean; onClose: () => void
                 onChangeAge={setAgeBand}
               />
 
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 pt-1">
+                ICP planejado (estudo consolidado · GA4 + CRM)
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {icpBlocks.map((block, i) => {
                   const Icon = block.icon;
