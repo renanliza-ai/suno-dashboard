@@ -259,6 +259,15 @@ export async function POST(req: NextRequest) {
     };
     sampleSizePerVariant?: number;
     estimatedTestDays?: number;
+    // A/B 2.0
+    variants?: {
+      a: { label: string; note: string; blocks: { type: string; label: string; changed?: boolean }[] };
+      b: { label: string; note: string; blocks: { type: string; label: string; changed?: boolean }[] };
+      primaryMetric: string;
+      guardrails: string[];
+    };
+    clarityProtocol?: string[];
+    clarityLinks?: { heatmaps?: string | null; recordings?: string | null; filterHint?: string };
   };
 
   let body: {
@@ -374,6 +383,39 @@ export async function POST(req: NextRequest) {
   if (ins.costEstimate) lines.push(`- **Custo estimado:** ${ins.costEstimate}`);
   if (ins.owner) lines.push(`- **Responsável sugerido:** ${ins.owner}`);
   lines.push("");
+
+  // ===== TESTE A/B: variantes visuais (o "print" em texto estruturado) =====
+  if (ins.variants) {
+    const v = ins.variants;
+    const wire = (blocks: { type: string; label: string; changed?: boolean }[]) =>
+      blocks.map((b) => `  ${b.changed ? "🟪" : "⬜"} [${b.type}] ${b.label}${b.changed ? "  ← MUDA" : ""}`).join("\n");
+    lines.push("## 🧪 Teste A/B proposto");
+    lines.push(`**Métrica primária:** ${v.primaryMetric}`);
+    lines.push(`**Guardrails:** ${v.guardrails.join(", ")}`);
+    lines.push("");
+    lines.push(`### ${v.a.label}`);
+    lines.push(v.a.note);
+    lines.push("```");
+    lines.push(wire(v.a.blocks));
+    lines.push("```");
+    lines.push(`### ${v.b.label}`);
+    lines.push(v.b.note);
+    lines.push("```");
+    lines.push(wire(v.b.blocks));
+    lines.push("```");
+    lines.push("_🟪 = elemento que muda na variante B. Wireframe de referência: montar o mockup final no design antes de subir._");
+    lines.push("");
+  }
+
+  // ===== 2ª FRENTE: validação qualitativa no Clarity (obrigatória) =====
+  if (ins.clarityProtocol && ins.clarityProtocol.length > 0) {
+    lines.push("## 🔎 Validação no Clarity (2ª frente obrigatória)");
+    lines.push("_Antes de subir o teste: confirmar a hipótese do GA4 com o comportamento real._");
+    for (const c of ins.clarityProtocol) lines.push(`- ${c}`);
+    if (ins.clarityLinks?.heatmaps) lines.push(`- **Heatmap:** ${ins.clarityLinks.heatmaps}`);
+    if (ins.clarityLinks?.recordings) lines.push(`- **Gravações:** ${ins.clarityLinks.recordings}`);
+    lines.push("");
+  }
 
   // Hipótese + Evidência
   if (ins.hypothesis) {

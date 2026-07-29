@@ -103,7 +103,71 @@ type Insight = {
   };
   sampleSizePerVariant?: number;
   estimatedTestDays?: number;
+  // A/B 2.0 — variantes visuais + 2ª frente (Clarity)
+  kind?: string;
+  variants?: CROInsight["variants"];
+  clarityProtocol?: string[];
+  clarityLinks?: { heatmaps: string | null; recordings: string | null; filterHint: string };
 };
+
+/** Preview visual das variantes A/B — wireframe lado a lado, B destaca o que muda. */
+function VariantPreview({ variants }: { variants: NonNullable<CROInsight["variants"]> }) {
+  const blockStyle: Record<string, string> = {
+    headline: "bg-slate-300",
+    sub: "bg-slate-200",
+    cta: "bg-emerald-400",
+    form: "bg-blue-300",
+    social: "bg-amber-300",
+    text: "bg-slate-100",
+    image: "bg-slate-200",
+    badge: "bg-violet-300",
+  };
+  const heights: Record<number, string> = { 1: "h-3", 2: "h-5", 3: "h-10" };
+  const render = (side: NonNullable<CROInsight["variants"]>["a"], isB: boolean) => (
+    <div className={`flex-1 rounded-xl border p-2.5 ${isB ? "border-[#7c5cff] bg-[#faf8ff]" : "border-[color:var(--border)] bg-white"}`}>
+      <div className="flex items-center gap-1.5 mb-2">
+        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${isB ? "bg-[#7c5cff] text-white" : "bg-slate-200 text-slate-700"}`}>
+          {side.label}
+        </span>
+      </div>
+      <div className="space-y-1.5 mb-2">
+        {side.blocks.map((b, i) => (
+          <div key={i} className="relative">
+            <div
+              className={`${heights[b.size || 1]} rounded ${blockStyle[b.type] || "bg-slate-200"} ${
+                b.changed ? "ring-2 ring-[#7c5cff] ring-offset-1" : ""
+              } flex items-center px-1.5`}
+            >
+              <span className="text-[8px] font-medium text-slate-700 truncate">{b.label}</span>
+            </div>
+            {b.changed && (
+              <span className="absolute -right-1 -top-1 text-[7px] font-bold bg-[#7c5cff] text-white rounded px-1">
+                muda
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+      <p className="text-[10px] leading-snug text-[color:var(--muted-foreground)]">{side.note}</p>
+    </div>
+  );
+  return (
+    <div className="mb-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--muted)]/20 p-2.5">
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-[#7c5cff]">Teste A/B proposto</span>
+        <span className="text-[10px] text-[color:var(--muted-foreground)]">
+          primária: <strong className="text-slate-700">{variants.primaryMetric}</strong> · guardrails:{" "}
+          {variants.guardrails.join(", ")}
+        </span>
+      </div>
+      <div className="flex gap-2 items-stretch">
+        {render(variants.a, false)}
+        <div className="flex items-center text-[color:var(--muted-foreground)] text-xs font-bold">vs</div>
+        {render(variants.b, true)}
+      </div>
+    </div>
+  );
+}
 
 type Decision = "pending" | "accepted" | "rejected";
 type DecisionRecord = {
@@ -310,9 +374,32 @@ function riskBadge(r: string) {
     : "bg-red-50 text-red-700 border-red-200";
 }
 
-// Chave estável por insight (sobrevive a re-render e reload). Usa título — único por seed.
+/**
+ * Chave ESTÁVEL por insight (sobrevive a re-render, reload e à variação diária
+ * das métricas).
+ *
+ * ⚠️ Antes usava `it.title` — e o título carrega os números do dia
+ * ("Bounce crítico (78%) em /x"). No dia seguinte o número muda (81%), o título
+ * muda, a chave muda e a RECUSA ERA ESQUECIDA: a sugestão voltava. Era a queixa
+ * do Renan ("recuso e volta com frequência").
+ *
+ * Agora a chave é (tipo de problema + página), sem números:
+ *   - usa `pageRef` quando existe (insight de página)
+ *   - deriva o "tipo" do título removendo dígitos/percentuais/parênteses
+ * Resultado: recusar uma vez vale para sempre naquela página, mesmo com a
+ * métrica oscilando.
+ */
 function insightKey(it: Insight): string {
-  return it.title;
+  const kind = it.title
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, " ") // remove "(78%)", "(12 dias)"
+    .replace(/[\d.,]+\s*(%|pp|s|min|dias?|d)?/g, " ") // remove números e unidades
+    .replace(/[^a-zà-ú\s/-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+  const page = it.pageRef || "global";
+  return `${kind}::${page}`;
 }
 
 /**
@@ -658,6 +745,9 @@ export default function CROPage() {
             metrics: it.metrics,
             sampleSizePerVariant: it.sampleSizePerVariant,
             estimatedTestDays: it.estimatedTestDays,
+            variants: it.variants,
+            clarityProtocol: it.clarityProtocol,
+            clarityLinks: it.clarityLinks,
           },
           sourceLink: typeof window !== "undefined" ? `${window.location.origin}/cro` : undefined,
         }),
@@ -878,8 +968,8 @@ export default function CROPage() {
   // ICE, PXL, LIFT e MECLABS. Substitui as recomendações genéricas estáticas.
   // Quando há dado real, esse engine SEMPRE tem precedência sobre apiRecs e mocks.
   const croEngineInsights: CROInsight[] = useMemo(
-    () => (realPagesAvailable ? generateCROInsights(pagesDetail?.pages) : []),
-    [realPagesAvailable, pagesDetail]
+    () => (realPagesAvailable ? generateCROInsights(pagesDetail?.pages, propertyName) : []),
+    [realPagesAvailable, pagesDetail, propertyName]
   );
   const insightsSummary = useMemo(() => summarizeInsights(croEngineInsights), [croEngineInsights]);
 
@@ -937,6 +1027,10 @@ export default function CROPage() {
       metrics: ci.metrics,
       sampleSizePerVariant: ci.sampleSizePerVariant,
       estimatedTestDays: ci.estimatedTestDays,
+      kind: ci.kind,
+      variants: ci.variants,
+      clarityProtocol: ci.clarityProtocol,
+      clarityLinks: ci.clarityLinks,
     };
   }
 
@@ -1556,8 +1650,10 @@ export default function CROPage() {
           <div className="space-y-3">
             {dynamicInsights
               .filter((it) => {
-                if (decisionFilter === "all") return true;
                 const status = decisions[insightKey(it)]?.status || "pending";
+                // Recusada SAI da lista (só reaparece no filtro "Recusadas").
+                // Pedido do Renan: "ao recusar, não volta mais".
+                if (decisionFilter === "all") return status !== "rejected";
                 return status === decisionFilter;
               })
               .slice() // copy antes de sort
@@ -1677,6 +1773,37 @@ export default function CROPage() {
                               <strong className="tabular-nums">{m.v}</strong>
                             </span>
                           ))}
+                        </div>
+                      )}
+                      {/* Preview VISUAL do teste A/B proposto */}
+                      {insight.variants && <VariantPreview variants={insight.variants} />}
+                      {/* 2ª frente obrigatória: validação qualitativa no Clarity */}
+                      {insight.clarityLinks && (insight.clarityLinks.heatmaps || insight.clarityLinks.recordings) && (
+                        <div className="mb-2 flex items-center gap-2 flex-wrap text-[10px]">
+                          <span className="font-bold uppercase tracking-wider text-amber-700">2ª frente · Clarity</span>
+                          {insight.clarityLinks.heatmaps && (
+                            <a
+                              href={insight.clarityLinks.heatmaps}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-800 font-semibold hover:bg-amber-100"
+                            >
+                              Heatmap →
+                            </a>
+                          )}
+                          {insight.clarityLinks.recordings && (
+                            <a
+                              href={insight.clarityLinks.recordings}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-800 font-semibold hover:bg-amber-100"
+                            >
+                              Gravações →
+                            </a>
+                          )}
+                          <span className="text-[color:var(--muted-foreground)]">{insight.clarityLinks.filterHint}</span>
                         </div>
                       )}
                       {/* Mini-grid de evidência rápida */}

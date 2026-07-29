@@ -20,6 +20,7 @@
  */
 
 import type { GA4PageDetail } from "./ga4-context";
+import { clarityLinksFor, clarityProtocol, type CroKind } from "./clarity";
 
 // ============================================================
 // Tipos
@@ -90,7 +91,170 @@ export type CROInsight = {
   // Dimensionamento do experimento (calculado do tráfego real)
   sampleSizePerVariant?: number;
   estimatedTestDays?: number;
+
+  // ===== A/B TEST 2.0 =====
+  /** Tipo do problema — dirige o protocolo Clarity e o desenho das variantes. */
+  kind?: CroKind;
+  /** Passos de validação qualitativa no Clarity (2ª frente obrigatória). */
+  clarityProtocol?: string[];
+  /** Links diretos pro Clarity da property (heatmap/gravações). */
+  clarityLinks?: { heatmaps: string | null; recordings: string | null; filterHint: string };
+  /** Especificação VISUAL das variantes — a UI renderiza o wireframe A vs B. */
+  variants?: {
+    a: { label: string; note: string; blocks: VariantBlock[] };
+    b: { label: string; note: string; blocks: VariantBlock[] };
+    primaryMetric: string;
+    guardrails: string[];
+  };
 };
+
+/** Bloco de wireframe pra preview visual da variante. */
+export type VariantBlock = {
+  type: "headline" | "sub" | "cta" | "form" | "social" | "text" | "image" | "badge";
+  label: string;
+  /** true = elemento que MUDA na variante B (destacado no preview) */
+  changed?: boolean;
+  /** tamanho relativo do bloco no wireframe (1-3) */
+  size?: 1 | 2 | 3;
+};
+
+// ============================================================
+// DESENHO VISUAL DAS VARIANTES A/B por tipo de problema.
+// Cada spec descreve o wireframe de A (controle) e B (teste), marcando o que
+// MUDA. A UI renderiza isso como preview visual - o time vê o teste, não lê.
+// ============================================================
+function variantSpec(kind: CroKind, pagePath: string): NonNullable<CROInsight["variants"]> {
+  const base = (): VariantBlock[] => [
+    { type: "headline", label: "Headline atual", size: 2 },
+    { type: "sub", label: "Subtítulo", size: 1 },
+    { type: "image", label: "Imagem/vídeo do hero", size: 3 },
+    { type: "text", label: "Bloco de conteúdo", size: 2 },
+    { type: "cta", label: "CTA (posição atual)", size: 1 },
+  ];
+
+  switch (kind) {
+    case "bounce":
+      return {
+        primaryMetric: "Taxa de rejeição",
+        guardrails: ["Conversão", "Tempo médio"],
+        a: { label: "A · Controle", note: "Hero atual, CTA abaixo do conteúdo", blocks: base() },
+        b: {
+          label: "B · Message match + CTA no 1º viewport",
+          note: "Headline repete a promessa do canal de maior volume, CTA e prova social sobem pro primeiro viewport",
+          blocks: [
+            { type: "headline", label: "Headline = promessa do anúncio", changed: true, size: 2 },
+            { type: "sub", label: "Subtítulo com benefício direto", changed: true, size: 1 },
+            { type: "cta", label: "CTA acima do fold", changed: true, size: 1 },
+            { type: "social", label: "Prova social (logos de imprensa)", changed: true, size: 1 },
+            { type: "image", label: "Imagem/vídeo do hero", size: 3 },
+            { type: "text", label: "Bloco de conteúdo", size: 2 },
+          ],
+        },
+      };
+    case "connect_rate":
+      return {
+        primaryMetric: "Connect Rate (lead / sessão)",
+        guardrails: ["Qualidade do lead (MQL/lead)", "CPL"],
+        a: {
+          label: "A · Controle",
+          note: "Formulário atual (muitos campos), sem prova social no topo",
+          blocks: [
+            { type: "headline", label: "Headline atual", size: 2 },
+            { type: "image", label: "Imagem do hero", size: 2 },
+            { type: "form", label: "Form atual (5+ campos)", size: 3 },
+            { type: "cta", label: "Botão enviar", size: 1 },
+          ],
+        },
+        b: {
+          label: "B · Form enxuto + prova social",
+          note: "Form no mínimo viável (nome, email, telefone) na primeira dobra + barra de credibilidade",
+          blocks: [
+            { type: "headline", label: "Headline com promessa clara", changed: true, size: 2 },
+            { type: "social", label: "Barra de prova social (imprensa)", changed: true, size: 1 },
+            { type: "form", label: "Form 3 campos", changed: true, size: 2 },
+            { type: "cta", label: "Botão enviar (contraste alto)", changed: true, size: 1 },
+            { type: "image", label: "Imagem do hero", size: 2 },
+          ],
+        },
+      };
+    case "retencao":
+      return {
+        primaryMetric: "Tempo médio na página",
+        guardrails: ["Bounce", "Conversão"],
+        a: { label: "A · Controle", note: "Primeira dobra atual", blocks: base() },
+        b: {
+          label: "B · Primeira dobra reescrita (JTBD)",
+          note: "Responde em 1 frase o que o usuário veio buscar; prova social sobe; CTA visível sem scroll",
+          blocks: [
+            { type: "headline", label: "Resposta direta ao JTBD", changed: true, size: 2 },
+            { type: "sub", label: "1 frase de contexto", changed: true, size: 1 },
+            { type: "social", label: "Prova social above-the-fold", changed: true, size: 1 },
+            { type: "cta", label: "CTA sem scroll", changed: true, size: 1 },
+            { type: "text", label: "Conteúdo (mantido)", size: 3 },
+          ],
+        },
+      };
+    case "oportunidade":
+      return {
+        primaryMetric: "Leads captados na página",
+        guardrails: ["Tempo médio (não cair >10%)", "Bounce"],
+        a: { label: "A · Controle", note: "Conteúdo sem captura contextual", blocks: base() },
+        b: {
+          label: "B · CTA contextual (lazy reveal)",
+          note: "Bloco de captura aparece após 30s / no ponto de maior dwell time, sem cortar a leitura",
+          blocks: [
+            { type: "headline", label: "Headline atual", size: 2 },
+            { type: "text", label: "Conteúdo (1ª parte)", size: 2 },
+            { type: "badge", label: "CTA contextual — lazy reveal", changed: true, size: 1 },
+            { type: "form", label: "Captura inline (email)", changed: true, size: 1 },
+            { type: "text", label: "Conteúdo (continuação)", size: 2 },
+          ],
+        },
+      };
+    case "conv_drop":
+      return {
+        primaryMetric: "Taxa de conversão da página",
+        guardrails: ["Receita/sessão", "Bounce"],
+        a: { label: "A · Estado atual (pós-queda)", note: "Versão que está no ar depois da mudança que derrubou a conversão", blocks: base() },
+        b: {
+          label: "B · Reverter o elemento suspeito",
+          note: "Volta o elemento alterado na semana da queda (form, CTA, oferta) e compara com o estado atual",
+          blocks: [
+            { type: "headline", label: "Headline anterior à queda", changed: true, size: 2 },
+            { type: "form", label: "Form/CTA no formato anterior", changed: true, size: 2 },
+            { type: "image", label: "Hero (mantido)", size: 3 },
+            { type: "cta", label: "CTA (posição anterior)", changed: true, size: 1 },
+          ],
+        },
+      };
+    case "funil":
+    default:
+      return {
+        primaryMetric: "Taxa de avanço da etapa",
+        guardrails: ["Aprovação de pagamento", "Receita por checkout"],
+        a: { label: "A · Fluxo atual", note: `Etapa como está hoje em ${pagePath}`, blocks: base() },
+        b: {
+          label: "B · Etapa simplificada",
+          note: "Menos campos obrigatórios, meio de pagamento primário em destaque, barra de progresso",
+          blocks: [
+            { type: "badge", label: "Barra de progresso", changed: true, size: 1 },
+            { type: "form", label: "Campos reduzidos ao essencial", changed: true, size: 2 },
+            { type: "cta", label: "Pagamento primário destacado", changed: true, size: 1 },
+            { type: "social", label: "Selo de segurança", changed: true, size: 1 },
+          ],
+        },
+      };
+  }
+}
+
+// Deriva o tipo do problema a partir do id da regra que gerou o insight.
+function kindFromId(id: string): CroKind {
+  if (id.startsWith("lp-connect-rate") || id.startsWith("lp-conversion")) return "connect_rate";
+  if (id.startsWith("bounce-critical") || id.startsWith("asset-bounce")) return "bounce";
+  if (id.startsWith("short-session") || id.startsWith("content-deadend") || id.startsWith("home-low-engagement")) return "retencao";
+  if (id.startsWith("engaged-no-action") || id.startsWith("scale-winner")) return "oportunidade";
+  return "funil";
+}
 
 // Tamanho de amostra por variante (teste de proporção, ~80% poder, 95% conf).
 function sampleSizePerVariant(baselineRate: number, relMde = 0.15): number {
@@ -552,7 +716,10 @@ const rules: ((ctx: RuleCtx) => CROInsight | null)[] = [
 // Função pública — gera insights data-driven
 // ============================================================
 
-export function generateCROInsights(pages: GA4PageDetail[] | undefined | null): CROInsight[] {
+export function generateCROInsights(
+  pages: GA4PageDetail[] | undefined | null,
+  propertyName?: string | null
+): CROInsight[] {
   if (!pages || pages.length === 0) return [];
 
   const totalViews = pages.reduce((s, p) => s + p.views, 0);
@@ -594,6 +761,26 @@ export function generateCROInsights(pages: GA4PageDetail[] | undefined | null): 
       insight.sampleSizePerVariant = nPer;
       insight.estimatedTestDays = estDays;
       insight.testDesign = `${insight.testDesign} · amostra ~${nPer.toLocaleString("pt-BR")} sessões/variante (MDE 15% relativo) → ≈ ${estDays} dias com ${Math.round(dailySessions).toLocaleString("pt-BR")} sessões/dia`;
+
+      // ===== A/B 2.0: tipo, variantes visuais e 2ª frente (Clarity) =====
+      const kind = kindFromId(insight.id);
+      insight.kind = kind;
+      insight.variants = variantSpec(kind, page.path);
+      insight.clarityProtocol = clarityProtocol(kind, page.path);
+      const cl = clarityLinksFor(propertyName, page.path);
+      insight.clarityLinks = { heatmaps: cl.heatmaps, recordings: cl.recordings, filterHint: cl.filterHint };
+
+      // Passos do experimento = GA4 (quantitativo) + Clarity (qualitativo).
+      // Regra: nenhuma sugestão vai pra execução sem a validação no Clarity.
+      insight.steps = [
+        `[GA4] Evidência: ${insight.detectedFrom}`,
+        ...insight.clarityProtocol.map((c) => `[Clarity] ${c}`),
+        `Variante A (controle): ${insight.variants.a.note}`,
+        `Variante B (teste): ${insight.variants.b.note}`,
+        `Métrica primária: ${insight.variants.primaryMetric} · guardrails: ${insight.variants.guardrails.join(", ")}`,
+        `Amostra: ~${nPer.toLocaleString("pt-BR")} sessões/variante → ≈ ${estDays} dias (${Math.round(dailySessions).toLocaleString("pt-BR")} sessões/dia)`,
+        `Decisão: mantém B se ganhar a métrica primária sem violar guardrail; senão mantém A`,
+      ];
 
       insights.push(insight);
     }
