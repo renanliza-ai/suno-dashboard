@@ -33,6 +33,14 @@ const ALLOWED_DIMENSIONS = [
   "pagePath",
   "hostName",
   "newVsReturning",
+  // Tempo — permite responder "qual o melhor horário / dia da semana".
+  // (pedido: análise do efeito Copom, cujo anúncio saiu 18h30)
+  "hour",
+  "dayOfWeekName",
+  "dateHour",
+  // Demografia — dependem de Google Signals ativo na property.
+  "userAgeBracket",
+  "userGender",
 ];
 
 const ALLOWED_METRICS = [
