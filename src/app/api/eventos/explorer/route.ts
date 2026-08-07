@@ -88,17 +88,28 @@ export async function GET(req: NextRequest) {
       ? { startDate: startDateParam, endDate: endDateParam }
       : { startDate: `${days}daysAgo`, endDate: "today" };
 
-  // Filter (se eventFilter passado e dimension é eventName, aplicamos como CONTAINS)
+  // Filter por nome de evento.
+  // ⚠️ Antes só era aplicado quando dimension === "eventName" — o que fazia
+  // "compras por hora" devolver TODOS os eventos por hora (bug silencioso de
+  // leitura: 167k "compras" num dia). Agora o filtro vale para QUALQUER
+  // dimensão, que é o caso de uso real (evento X quebrado por hora/canal/device).
   const buildFilter = () => {
-    if (eventFilter && dimension === "eventName") {
+    if (!eventFilter) return undefined;
+    // "purchase|generate_lead" -> lista exata; senão CONTAINS
+    if (eventFilter.includes("|")) {
       return {
         filter: {
           fieldName: "eventName",
-          stringFilter: { value: eventFilter, matchType: "CONTAINS" as const },
+          inListFilter: { values: eventFilter.split("|").map((s) => s.trim()).filter(Boolean) },
         },
       };
     }
-    return undefined;
+    return {
+      filter: {
+        fieldName: "eventName",
+        stringFilter: { value: eventFilter, matchType: "CONTAINS" as const },
+      },
+    };
   };
   const dimensionFilter = buildFilter();
 
