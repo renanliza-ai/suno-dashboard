@@ -81,6 +81,9 @@ export async function GET(req: NextRequest) {
   const startDateParam = req.nextUrl.searchParams.get("startDate");
   const endDateParam = req.nextUrl.searchParams.get("endDate");
   const eventFilter = req.nextUrl.searchParams.get("eventFilter") || ""; // filtra por nome de evento (substring)
+  // limit: top-100 escondia campanhas de cauda longa (ex: codigos SNC por anuncio).
+  const limitParam = Number(req.nextUrl.searchParams.get("limit") || 100);
+  const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 5000) : 100;
 
   // Date range — honra custom ou usa relativo
   const dateRange =
@@ -124,7 +127,7 @@ export async function GET(req: NextRequest) {
       dimensions: [{ name: dimension }],
       metrics: metricsToQuery,
       orderBys: [{ metric: { metricName: metric }, desc: true }],
-      limit: 100,
+      limit,
       dimensionFilter,
     }),
     runReport(propertyId, {
