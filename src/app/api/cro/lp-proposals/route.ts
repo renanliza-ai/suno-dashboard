@@ -1,6 +1,6 @@
 // src/app/api/cro/lp-proposals/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { applyRulesAll } from "@/lib/cro-rules";
+import { applyRulesAll, metricaPrimariaLp } from "@/lib/cro-rules";
 import {
   LPData,
   SourceBreakdownRow,
@@ -60,21 +60,24 @@ export async function POST(req: NextRequest) {
   // threshold próprio mais alto interno.
   const activeLPs = body.pages.filter((lp) => lp.sessions >= 100);
 
-  // Calcular hostMedians por host (mediana de leadConvRate). Usado por
-  // regras conv-vs-host-median, replicate-winner, etc.
+  // Calcular hostMedians por host. A mediana e da METRICA PRIMARIA de cada LP,
+  // nao de generate_lead para todas. LP de venda converte em cta_click, e
+  // comparar uma contra a outra pelo evento errado produzia card falso: uma LP
+  // que converte 29% em cta_click aparecia como 0,1% e caia na regra de
+  // conversao critica. Ver metricaPrimariaLp em src/lib/cro-rules.ts.
   const hostsSet = new Set(activeLPs.map((lp) => lp.host));
   const hostMedians: Record<string, number> = {};
   const hostTopLP: Record<string, LPData> = {};
   for (const host of hostsSet) {
     const lpsOfHost = activeLPs.filter((lp) => lp.host === host);
-    const convs = lpsOfHost.map((lp) => lp.leadConvRate).sort((a, b) => a - b);
+    const convs = lpsOfHost.map((lp) => metricaPrimariaLp(lp).taxa).sort((a, b) => a - b);
     hostMedians[host] =
       convs.length === 0
         ? 0
         : convs.length % 2 === 0
           ? (convs[convs.length / 2 - 1] + convs[convs.length / 2]) / 2
           : convs[Math.floor(convs.length / 2)];
-    const top = [...lpsOfHost].sort((a, b) => b.leadConvRate - a.leadConvRate)[0];
+    const top = [...lpsOfHost].sort((a, b) => metricaPrimariaLp(b).taxa - metricaPrimariaLp(a).taxa)[0];
     if (top) hostTopLP[host] = top;
   }
 

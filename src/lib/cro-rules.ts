@@ -28,6 +28,12 @@ import {
   impactoFechaGapMediana,
   impactoQualitativo,
 } from "./cro-impact";
+import {
+  avaliarGate,
+  escopoDaPagina,
+  foraDoEscopoDeConversao,
+  type CroGate,
+} from "./cro-gates";
 
 // ------------ Helpers ------------
 
@@ -40,15 +46,92 @@ function makeKey(lp: LPData, ruleId: string): string {
   return `${hash}:${ruleId}`;
 }
 
-/** Formata percentual com 1 casa decimal */
+/** Formata percentual com 1 casa decimal, no padrao brasileiro. */
 function pct(v: number): string {
-  return `${(v * 100).toFixed(1)}%`;
+  return (v * 100).toFixed(1).replace(".", ",") + "%";
 }
 
 /** Formata número com separador BR */
 function fmt(n: number): string {
   return n.toLocaleString("pt-BR");
 }
+
+
+/**
+ * Metrica primaria da LP.
+ *
+ * LP de venda converte em cta_click, LP de captacao converte em generate_lead.
+ * Nunca a soma das duas. Quando as duas existem, vale a de maior volume, que e
+ * a que descreve o objetivo real da pagina.
+ *
+ * Sem isso o motor julgava toda LP por generate_lead e produzia card falso.
+ * Caso real em 13/08/2026: /consultoria/pv-suno-invest-2026/ apareceu como
+ * "conversao 0,1%, metade da mediana do host", quando a pagina converte 29% em
+ * cta_click, que e o evento dela. Certo na aritmetica e errado no denominador,
+ * o que e pior que errado, porque parece confiavel.
+ */
+export function metricaPrimariaLp(lp: LPData): {
+  evento: "cta_click" | "generate_lead";
+  taxa: number;
+  count: number;
+} {
+  return lp.ctaCount > lp.leadCount
+    ? { evento: "cta_click", taxa: lp.ctaConvRate, count: lp.ctaCount }
+    : { evento: "generate_lead", taxa: lp.leadConvRate, count: lp.leadCount };
+}
+
+/** Pagina institucional nao entra em regra de conversao. */
+function temObjetivoDeConversao(lp: LPData): boolean {
+  return !foraDoEscopoDeConversao(escopoDaPagina(lp.host, lp.path));
+}
+
+/** Trilha e poder estatistico da LP, calculados do trafego real. */
+function gateDaLp(lp: LPData, ctx: RuleContext): CroGate {
+  const m = metricaPrimariaLp(lp);
+  return avaliarGate({
+    sessoes: lp.sessions,
+    diasJanela: ctx.rangeDays || 30,
+    baseline: m.taxa,
+    conversoes: m.count,
+    temObjetivoDeConversao: true,
+    metricaPrimaria: m.evento,
+  });
+}
+
+/** Bloco de decisao pronto para o card, em linguagem de execucao. */
+function comoDecide(gate: CroGate): string {
+  if (!gate.medicaoOk) {
+    return "NAO E TESTE AINDA. " + gate.bloqueio + " Resolver isso antes de desenhar variante.";
+  }
+  if (gate.trilha === "A") {
+    return (
+      "COMO DECIDE: teste A/B 50/50, metrica que decide " + gate.metricaPrimaria + ". Amostra de " +
+      gate.nPorVariante.toLocaleString("pt-BR") + " sessoes por versao, leitura em " +
+      gate.diasParaAlvo + " dias. Nao olhar antes disso."
+    );
+  }
+  if (gate.trilha === "B") {
+    return (
+      "COMO DECIDE: nao monte A/B, o trafego nao sustenta. " + gate.bloqueio +
+      " Rode antes e depois, com uma LP parecida como comparacao no mesmo periodo. Metrica que decide: " +
+      gate.metricaPrimaria + "."
+    );
+  }
+  return (
+    "COMO DECIDE: aqui nao decide receita. " + gate.bloqueio +
+    " Use gravacao de tela e conversa com usuario para levantar hipotese."
+  );
+}
+
+/** QA que vale para qualquer variante que suba. */
+const QA_PADRAO =
+  "ANTES DE SUBIR: abre no celular e no desktop sem quebrar, o botao de acao aparece sem rolar a " +
+  "tela, o formulario chega no CRM, o evento dispara uma vez por sessao, e o carregamento nao piora.";
+
+/** Verificacao que evita atacar a pagina quando o problema e a midia. */
+const CONFERIR_ORIGEM =
+  "CONFERIR ANTES: cruzar a conversao desta pagina por origem e por campanha. Se a diferenca entre " +
+  "origens for maior que o ganho esperado do teste, o problema e mix de midia e nao a pagina.";
 
 // ===================================================================
 // REGRAS CRÍTICAS
@@ -65,20 +148,26 @@ const ruleTrackingBroken: CRORule = {
     lp: { url: lp.url, host: lp.host, path: lp.path },
     priority: "critico",
     category: "tracking",
-    titulo: "LP sem nenhum evento de conversão",
-    hipotese: `LP \`${lp.path}\` recebeu **${fmt(lp.sessions)} sessões** sem disparar nenhum \`generate_lead\` nem \`cta_click\`. Provável bug de tracking ou formulário/CTA quebrado.`,
-    acaoSugerida: `Abrir a LP em janela anônima, completar formulário/clicar CTA, verificar no GA4 Realtime se evento dispara. Se não disparar, conferir GTM. Se evento existe mas com outro nome, ajustar regra.`,
+    titulo: "LP sem nenhum evento de conversao",
+    hipotese:
+      "O QUE ACONTECE: " + lp.path + " recebeu " + fmt(lp.sessions) + " sessoes no periodo e nao " +
+      "disparou nenhum generate_lead nem cta_click. POR QUE IMPORTA: isso e ausencia de medicao, nao " +
+      "conversao zero. Sao diagnosticos opostos, e sem evento nao existe metrica para decidir teste nenhum.",
+    acaoSugerida:
+      "NAO E TESTE. O QUE FAZER: abrir a LP em janela anonima, preencher o formulario ou clicar no CTA, " +
+      "e olhar o GA4 em tempo real. Se o evento nao aparece, o problema esta no GTM ou no formulario. " +
+      "Se aparece com outro nome, corrigir para o padrao da casa: generate_lead em captacao, cta_click " +
+      "em venda. NAO FAZER: mexer em layout, texto ou botao antes disso. Sem metrica nao da para saber " +
+      "se melhorou.",
     effort: "baixo",
     impactoEstimado: impactoQualitativo("alto"),
     sinaisDetalhados: [
-      `${fmt(lp.sessions)} sessões no período`,
-      `0 eventos generate_lead disparados`,
-      `0 eventos cta_click disparados`,
-      `Bounce rate: ${pct(lp.bounceRate)}`,
+      fmt(lp.sessions) + " sessoes no periodo",
+      "0 eventos generate_lead",
+      "0 eventos cta_click",
+      "Rejeicao: " + pct(lp.bounceRate),
     ],
-    benchmarks: [
-      "Esperado: pelo menos 1% das sessões disparam generate_lead ou cta_click",
-    ],
+    benchmarks: ["Esperado: pelo menos 1% das sessoes disparam generate_lead ou cta_click"],
   }),
 };
 
@@ -87,32 +176,52 @@ const ruleConvVsHostMedian: CRORule = {
   priority: "critico",
   category: "conversion",
   trigger: (lp, ctx) => {
+    if (!temObjetivoDeConversao(lp)) return false;
     const median = ctx.hostMedians[lp.host] || 0;
-    return median > 0 && lp.sessions >= 100 && lp.leadConvRate < median * 0.5;
+    return median > 0 && lp.sessions >= 100 && metricaPrimariaLp(lp).taxa < median * 0.5;
   },
   generate: (lp, ctx): Proposal => {
     const median = ctx.hostMedians[lp.host] || 0;
     const topLP = ctx.hostTopLP[lp.host];
+    const m = metricaPrimariaLp(lp);
+    const mTop = topLP ? metricaPrimariaLp(topLP) : null;
+    const gate = gateDaLp(lp, ctx);
     return {
       rule_id: "conv-vs-host-median",
       proposal_key: makeKey(lp, "conv-vs-host-median"),
       lp: { url: lp.url, host: lp.host, path: lp.path },
       priority: "critico",
       category: "conversion",
-      titulo: "Conversão metade da mediana do host",
-      hipotese: `LP \`${lp.path}\` converte **${pct(lp.leadConvRate)}** vs mediana de **${pct(median)}** do host \`${lp.host}\`. Top LP do host (\`${topLP?.path || "n/a"}\`) faz **${pct(topLP?.leadConvRate || 0)}**.`,
-      acaoSugerida: `Comparar formulário, copy do CTA e proposta de valor com a top LP do host. Testar versão A/B replicando elementos vencedores.`,
+      titulo: "Conversao menos da metade da mediana do host",
+      hipotese:
+        "O QUE VAMOS ATACAR: o caminho de conversao de " + lp.path + ". POR QUE: ela converte " +
+        pct(m.taxa) + " em " + m.evento + ", menos da metade da mediana de " + pct(median) +
+        " das LPs de " + lp.host +
+        (topLP && mTop
+          ? ", e a melhor LP do host, " + topLP.path + ", faz " + pct(mTop.taxa) + " em " + mTop.evento + "."
+          : ".") +
+        " Com diferenca desse tamanho, o que falta costuma ser estrutura de oferta, nao ajuste fino.",
+      acaoSugerida:
+        (topLP
+          ? "O QUE FAZER, PASSO 1: abrir " + lp.path + " e " + topLP.path + " lado a lado e anotar cada " +
+            "diferenca. Primeira dobra, quantidade de campos, prova social, se mostra preco, texto e " +
+            "posicao do botao. "
+          : "O QUE FAZER, PASSO 1: listar o que falta na primeira dobra: chamada de acao visivel, prova " +
+            "social e clareza da oferta. ") +
+        "PASSO 2: escolher as duas ou tres diferencas de maior efeito e subir so elas, uma versao por vez. " +
+        comoDecide(gate) + " " + CONFERIR_ORIGEM + " " + QA_PADRAO,
       effort: "medio",
       impactoEstimado: impactoFechaGapMediana(lp, median, ctx.rangeDays),
       sinaisDetalhados: [
-        `Conv. lead atual: ${pct(lp.leadConvRate)}`,
-        `Mediana do host: ${pct(median)}`,
-        `Top LP do host: ${pct(topLP?.leadConvRate || 0)} (${topLP?.path || "n/a"})`,
-        `Sessões: ${fmt(lp.sessions)}`,
-      ],
+        "Conversao desta LP: " + pct(m.taxa) + " em " + m.evento + ", " + fmt(m.count) + " no periodo",
+        "Mediana das LPs do host: " + pct(median),
+        topLP && mTop ? "Melhor LP do host: " + pct(mTop.taxa) + " em " + topLP.path : "",
+        "Sessoes: " + fmt(lp.sessions),
+        "Trilha " + gate.trilha + ": " + gate.resumo,
+      ].filter(Boolean),
       benchmarks: [
-        `Mediana host \`${lp.host}\`: ${pct(median)}`,
-        topLP ? `Top LP: ${topLP.path} → ${pct(topLP.leadConvRate)}` : "",
+        "Mediana do host " + lp.host + ": " + pct(median),
+        topLP && mTop ? "Melhor LP do host: " + topLP.path + " com " + pct(mTop.taxa) : "",
       ].filter(Boolean),
     };
   },
@@ -192,30 +301,42 @@ const ruleConvBelowMedian: CRORule = {
   priority: "atencao",
   category: "conversion",
   trigger: (lp, ctx) => {
+    if (!temObjetivoDeConversao(lp)) return false;
     const median = ctx.hostMedians[lp.host] || 0;
-    return median > 0 && lp.sessions >= 100 &&
-      lp.leadConvRate < median * 0.75 && lp.leadConvRate >= median * 0.5;
+    const taxa = metricaPrimariaLp(lp).taxa;
+    return median > 0 && lp.sessions >= 100 && taxa < median * 0.75 && taxa >= median * 0.5;
   },
   generate: (lp, ctx): Proposal => {
     const median = ctx.hostMedians[lp.host] || 0;
+    const m = metricaPrimariaLp(lp);
+    const gate = gateDaLp(lp, ctx);
     return {
       rule_id: "conv-below-median",
       proposal_key: makeKey(lp, "conv-below-median"),
       lp: { url: lp.url, host: lp.host, path: lp.path },
       priority: "atencao",
       category: "conversion",
-      titulo: "Conversão abaixo da mediana do host",
-      hipotese: `LP \`${lp.path}\` converte **${pct(lp.leadConvRate)}** vs mediana **${pct(median)}** do host. Gap de ${pct(median - lp.leadConvRate)} no host.`,
-      acaoSugerida: `Testar variação A/B do copy do CTA + revisar campos do formulário (reduzir atrito). Trocar 1 campo por vez.`,
+      titulo: "Conversao abaixo da mediana do host",
+      hipotese:
+        "O QUE VAMOS ATACAR: a conversao de " + lp.path + ". POR QUE: ela converte " + pct(m.taxa) +
+        " em " + m.evento + " contra mediana de " + pct(median) + " das LPs de " + lp.host +
+        ", uma distancia de " + pct(median - m.taxa) + ". A pagina funciona, so entrega menos que as " +
+        "irmas dela.",
+      acaoSugerida:
+        "O QUE VAMOS SUBIR: uma mudanca por vez, comecando pelo texto do botao de acao e pela " +
+        "quantidade de campos do formulario, que sao as duas alavancas de maior efeito em LP. Nao " +
+        "trocar tudo junto, senao nao da para saber o que fez efeito. " +
+        comoDecide(gate) + " " + CONFERIR_ORIGEM + " " + QA_PADRAO,
       effort: "baixo",
       impactoEstimado: impactoFechaGapMediana(lp, median, ctx.rangeDays),
       sinaisDetalhados: [
-        `Conv. lead: ${pct(lp.leadConvRate)}`,
-        `Mediana host: ${pct(median)}`,
-        `Gap: ${pct(median - lp.leadConvRate)}`,
-        `Sessões: ${fmt(lp.sessions)}`,
+        "Conversao desta LP: " + pct(m.taxa) + " em " + m.evento + ", " + fmt(m.count) + " no periodo",
+        "Mediana das LPs do host: " + pct(median),
+        "Distancia ate a mediana: " + pct(median - m.taxa),
+        "Sessoes: " + fmt(lp.sessions),
+        "Trilha " + gate.trilha + ": " + gate.resumo,
       ],
-      benchmarks: [`Mediana \`${lp.host}\`: ${pct(median)}`],
+      benchmarks: ["Mediana do host " + lp.host + ": " + pct(median)],
     };
   },
 };
@@ -348,30 +469,42 @@ const ruleReplicateWinner: CRORule = {
   priority: "otimizacao",
   category: "conversion",
   trigger: (lp, ctx) => {
+    if (!temObjetivoDeConversao(lp)) return false;
     const median = ctx.hostMedians[lp.host] || 0;
-    return median > 0 && lp.sessions >= 100 && lp.leadConvRate > median * 1.5;
+    return median > 0 && lp.sessions >= 100 && metricaPrimariaLp(lp).taxa > median * 1.5;
   },
   generate: (lp, ctx): Proposal => {
     const median = ctx.hostMedians[lp.host] || 0;
-    const ratio = (lp.leadConvRate / median).toFixed(1);
+    const m = metricaPrimariaLp(lp);
+    const ratio = (m.taxa / median).toFixed(1);
     return {
       rule_id: "replicate-winner",
       proposal_key: makeKey(lp, "replicate-winner"),
       lp: { url: lp.url, host: lp.host, path: lp.path },
       priority: "otimizacao",
       category: "conversion",
-      titulo: "LP top do host — replicar elementos vencedores",
-      hipotese: `LP \`${lp.path}\` converte **${pct(lp.leadConvRate)}** (${ratio}x a mediana do host \`${lp.host}\`). Identificar e replicar elementos vencedores.`,
-      acaoSugerida: `Documentar elementos diferenciados dessa LP: hero, CTA, copy do formulário, ordem de prova social. Propor sprint pra aplicar nas LPs abaixo da mediana.`,
+      titulo: "LP que mais converte do host, replicar o padrao",
+      hipotese:
+        "O QUE VAMOS ATACAR: nao e esta pagina. " + lp.path + " e a referencia do host " + lp.host +
+        " e nao deve ser alterada. POR QUE: ela converte " + pct(m.taxa) + " em " + m.evento + ", " +
+        ratio + " vezes a mediana das LPs do host. Copiar o que ja funciona rende mais que consertar " +
+        "pagina ruim no escuro, e o padrao serve para as outras LPs tambem.",
+      acaoSugerida:
+        "O QUE FAZER, PASSO 1: documentar o que esta pagina tem de diferente. Primeira dobra, texto e " +
+        "posicao do botao, quantidade de campos, ordem da prova social, se mostra preco. " +
+        "PASSO 2: conferir de onde vem o trafego dela. Se a origem for muito melhor que a das outras, " +
+        "parte do resultado e da midia e a copia rende menos do que parece. " +
+        "PASSO 3: aplicar as duas ou tres diferencas de maior efeito na LP de menor conversao do host, " +
+        "e medir na receptora, nao aqui. Esta pagina e o controle e nao muda.",
       effort: "alto",
       impactoEstimado: impactoQualitativo("alto"),
       sinaisDetalhados: [
-        `Conv. lead: ${pct(lp.leadConvRate)}`,
-        `Mediana host: ${pct(median)}`,
-        `Ratio: ${ratio}x acima`,
-        `Sessões: ${fmt(lp.sessions)}`,
+        "Conversao desta LP: " + pct(m.taxa) + " em " + m.evento + ", " + fmt(m.count) + " no periodo",
+        "Mediana das LPs do host: " + pct(median),
+        "Esta LP converte " + ratio + " vezes a mediana",
+        "Sessoes: " + fmt(lp.sessions),
       ],
-      benchmarks: [`Mediana host: ${pct(median)}`, `LP top: ${pct(lp.leadConvRate)}`],
+      benchmarks: ["Mediana do host: " + pct(median), "Esta LP: " + pct(m.taxa) + " em " + m.evento],
     };
   },
 };
