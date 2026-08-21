@@ -198,11 +198,11 @@ async function resolveGroupId(
 
 export async function POST(req: NextRequest) {
   const apiToken = process.env.MONDAY_API_TOKEN;
-  const boardId = process.env.MONDAY_BOARD_ID;
+  const boardIdPadrao = process.env.MONDAY_BOARD_ID;
   const groupName = process.env.MONDAY_GROUP_NAME;
   const groupIdFallback = process.env.MONDAY_GROUP_ID || "topics";
 
-  if (!apiToken || !boardId) {
+  if (!apiToken || !boardIdPadrao) {
     return NextResponse.json(
       {
         ok: false,
@@ -214,14 +214,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Resolve o group_id real — preferimos por nome (mais robusto a renomeações)
-  // O resolveGroupId já testa nome + fallback + lista grupos disponíveis pra debug
-  const groupResolution = await resolveGroupId(apiToken, boardId, groupName, groupIdFallback);
-  const groupId = groupResolution.groupId;
-  // Se houve erro na resolução (grupo não encontrado etc), guardamos pra
-  // incluir no payload de retorno caso o create_item também falhe
-  const groupWarning = groupResolution.error;
-  const availableGroups = groupResolution.availableGroups;
 
   type InsightPayload = {
     title: string;
@@ -274,6 +266,12 @@ export async function POST(req: NextRequest) {
     title?: string;
     insight?: InsightPayload;
     sourceLink?: string;
+    /**
+     * Board de destino. Quem chama decide, porque a aba de CRO manda para o
+     * quadro Tracker de testes e a varredura de saude continua no board padrao.
+     * Sem isso, tudo caia no mesmo quadro.
+     */
+    boardId?: string;
     // Compatibilidade retroativa com chamadas antigas (description simples)
     description?: string;
     // rawBody=true: `description` já é o corpo final (HTML) e deve ser postado
@@ -289,6 +287,25 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 });
   }
+
+  // Board de destino: o que o chamador pedir, senao o do CRO por variavel de
+  // ambiente, senao o padrao. Tarefa aceita na aba de CRO vai para o quadro
+  // Tracker de testes.
+  const boardId = body.boardId || process.env.MONDAY_CRO_BOARD_ID || boardIdPadrao;
+  const trocouDeBoard = boardId !== boardIdPadrao;
+
+  // Resolve o group_id real. Preferimos por nome, que sobrevive a renomeacao.
+  //
+  // Quando o chamador troca de quadro, o MONDAY_GROUP_NAME nao serve: ele nomeia
+  // um grupo do quadro padrao e nao existe no de destino. Nesse caso usamos o
+  // MONDAY_CRO_GROUP_NAME se estiver definido, e senao deixamos o resolvedor cair
+  // no primeiro grupo do quadro, que e o comportamento dele quando nao acha nome
+  // nem fallback.
+  const grupoDesejado = trocouDeBoard ? process.env.MONDAY_CRO_GROUP_NAME : groupName;
+  const groupResolution = await resolveGroupId(apiToken, boardId, grupoDesejado, groupIdFallback);
+  const groupId = groupResolution.groupId;
+  const groupWarning = groupResolution.error;
+  const availableGroups = groupResolution.availableGroups;
 
   // Reconciliação: aceita `insight` (formato novo, completo) OU campos soltos (legado)
   const ins: InsightPayload = body.insight || {
@@ -473,11 +490,9 @@ export async function POST(req: NextRequest) {
     lines.push("");
   }
 
-  // Footer
-  lines.push("---");
-  lines.push(`📌 **Origem:** Painel Suno · Aba CRO${ins.propertyName ? ` · ${ins.propertyName}` : ""}`);
-  if (body.sourceLink) lines.push(`🔗 **Ver no painel:** ${body.sourceLink}`);
-  lines.push(`🕒 **Criado em:** ${new Date().toLocaleString("pt-BR")}`);
+  // Sem rodape de painel. O Renan pediu para tirar em 21/08/2026: origem, link
+  // do painel e data de criacao poluem a tarefa e nao ajudam quem executa. A
+  // data ja vem do proprio Monday e a pagina analisada ja aparece no briefing.
 
   // rawBody: corpo já vem pronto (HTML) do chamador (ex.: briefing CRO senior).
   // Posta verbatim, ignorando o markdown montado acima e o rodapé de painel.

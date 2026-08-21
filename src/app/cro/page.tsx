@@ -14,6 +14,7 @@ import { formatNumber } from "@/lib/utils";
 import { useGA4, useGA4PagesDetail } from "@/lib/ga4-context";
 import { DataStatus } from "@/components/data-status";
 import { generateCROInsights, summarizeInsights, type CROInsight } from "@/lib/cro-engine";
+import { MONDAY_BOARD_TRACKER_TESTES } from "@/lib/monday-boards";
 import { LPAnalyzer } from "@/components/lp-analyzer";
 import { CROProposalsBoard } from "@/components/cro-proposals-board";
 import { CROCycleGuide } from "@/components/cro-cycle-guide";
@@ -724,6 +725,8 @@ export default function CROPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          // Proposta aceita vai para o Tracker de testes, nao para o board padrao.
+          boardId: MONDAY_BOARD_TRACKER_TESTES,
           title: it.title,
           // Payload completo do insight — o endpoint Monday vai montar o markdown
           insight: {

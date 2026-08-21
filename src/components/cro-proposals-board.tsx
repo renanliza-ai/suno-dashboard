@@ -8,6 +8,7 @@ import { ProposalDetailsModal } from "@/components/proposal-details-modal";
 import { SkeletonBlock, DataErrorCard } from "@/components/data-status";
 import type { Proposal, LPData, SourceBreakdownRow } from "@/lib/cro-types";
 import { buildCroBriefHtml } from "@/lib/cro-playbook";
+import { MONDAY_BOARD_TRACKER_TESTES } from "@/lib/monday-boards";
 
 /**
  * CROProposalsBoard — orquestrador da feature CRO Automation.
@@ -177,6 +178,8 @@ export function CROProposalsBoard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          // Proposta aceita vai para o Tracker de testes, nao para o board padrao.
+          boardId: MONDAY_BOARD_TRACKER_TESTES,
           title: `[CRO] ${p.lp.path} - ${p.titulo}`,
           description,
           rawBody: true,
