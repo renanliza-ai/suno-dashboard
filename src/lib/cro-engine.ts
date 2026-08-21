@@ -21,6 +21,16 @@
 
 import type { GA4PageDetail } from "./ga4-context";
 import { clarityLinksFor, clarityProtocol, type CroKind } from "./clarity";
+import { montarBriefing, descricaoCurta, semTravessao } from "./cro-briefing";
+import {
+  avaliarGate,
+  rotuloTrilha,
+  escopoDaPagina,
+  foraDoEscopoDeConversao,
+  gateForaDeEscopo,
+  scoreDeExecucao,
+  type CroGate,
+} from "./cro-gates";
 
 // ============================================================
 // Tipos
@@ -97,6 +107,13 @@ export type CROInsight = {
   kind?: CroKind;
   /** Passos de validação qualitativa no Clarity (2ª frente obrigatória). */
   clarityProtocol?: string[];
+  /** Travas de medicao, poder e composicao. Decide a trilha da hipotese. */
+  gate?: CroGate;
+  /**
+   * Uma linha em linguagem de execucao, para o corpo do card. Substitui a
+   * hipotese, que era escrita para analista e nao para quem executa.
+   */
+  briefing?: string;
   /** Links diretos pro Clarity da property (heatmap/gravações). */
   clarityLinks?: { heatmaps: string | null; recordings: string | null; filterHint: string };
   /** Especificação VISUAL das variantes — a UI renderiza o wireframe A vs B. */
@@ -252,7 +269,9 @@ function kindFromId(id: string): CroKind {
   if (id.startsWith("lp-connect-rate") || id.startsWith("lp-conversion")) return "connect_rate";
   if (id.startsWith("bounce-critical") || id.startsWith("asset-bounce")) return "bounce";
   if (id.startsWith("short-session") || id.startsWith("content-deadend") || id.startsWith("home-low-engagement")) return "retencao";
-  if (id.startsWith("engaged-no-action") || id.startsWith("scale-winner")) return "oportunidade";
+  if (id.startsWith("engaged-no-action") || id.startsWith("scale-winner") || id.startsWith("conversion-winner")) {
+    return "oportunidade";
+  }
   return "funil";
 }
 
@@ -349,6 +368,18 @@ function pxl(flags: {
   return { ...f, score };
 }
 
+/**
+ * Taxa de conversao da pagina, em fracao, pela metrica primaria do objetivo.
+ * LP de venda converte em cta_click, captacao em generate_lead. Nunca soma as
+ * duas. Quando as duas existem, vale a de maior volume.
+ */
+function taxaConversao(page: GA4PageDetail): number {
+  if (page.sessions <= 0) return 0;
+  const leads = page.leads || 0;
+  const cta = page.ctaClicks || 0;
+  return Math.max(leads, cta) / page.sessions;
+}
+
 // ============================================================
 // Regras de detecção — cada uma vira 0+ insights
 // ============================================================
@@ -357,6 +388,22 @@ type RuleCtx = {
   page: GA4PageDetail;
   totalViews: number;
   rank: number; // posição da página por views (0 = top)
+  /**
+   * Melhor e pior LP com volume, por taxa de conversao. A comparacao que
+   * interessa para extrair padrao e melhor contra pior, nao contra mediana.
+   * Primeira versao usava 3 vezes a mediana como limiar, e com mediana de 23%
+   * isso exigia 69%, patamar que nenhuma pagina da casa atinge. Resultado: a
+   * regra nunca disparava. Medido na Research em 30 dias: melhor LP converte
+   * 53,5% e pior converte 2,9%, 18,6 vezes de diferenca.
+   */
+  lpBenchmark: {
+    melhorPath: string;
+    melhorTaxa: number;
+    piorPath: string;
+    piorTaxa: number;
+  } | null;
+  /** Escopo da pagina. Regra de conversao nao roda em pagina institucional. */
+  escopo: ReturnType<typeof escopoDaPagina>;
 };
 
 const rules: ((ctx: RuleCtx) => CROInsight | null)[] = [
@@ -676,6 +723,11 @@ const rules: ((ctx: RuleCtx) => CROInsight | null)[] = [
     const isCapture = classifyPage(page.path) === "lp" || (page.leads || 0) > 0;
     if (!isCapture) return null;
     if (page.sessions < 300) return null; // amostra mínima
+    // LP de VENDA nao converte em lead, converte em cta_click. Chamar de
+    // "connect rate baixo" uma pagina cuja metrica primaria e cta_click produz
+    // titulo falso: a LP da 5a emissao aparecia como 0,92% quando converte
+    // 9,4% no evento que importa.
+    if ((page.ctaClicks || 0) > (page.leads || 0)) return null;
     const cr = page.connectRate || 0;
     // Benchmark Suno: LP de captação saudável conecta >= 3% (lead/sessão).
     if (cr >= 3) return null;
@@ -710,6 +762,61 @@ const rules: ((ctx: RuleCtx) => CROInsight | null)[] = [
       estimatedImpact: `≈ ${potentialLeads.toLocaleString("pt-BR")} leads adicionais no período se atingir 3% de connect rate`,
     };
   },
+
+  // ------------------------------------------------------------
+  // R9: Página VENCEDORA POR CONVERSÃO — extrair o padrão e replicar
+  //
+  // A R8 já detecta vencedora, mas por rejeição e tempo de sessão, e só entre
+  // as 3 primeiras por volume. Isso deixa de fora exatamente as páginas que
+  // mais convertem da casa. Medido na Research em 30 dias: /pv/premium-webinar/
+  // converte 55,83% de cta_click com 3.344 sessões, e nunca acionaria a R8.
+  // Enquanto isso /asset/snel11/ converte 2,88%. São 19 vezes de diferença na
+  // mesma property, no mesmo mês, e o padrão que explica isso vale mais que
+  // qualquer variante desenhada no escuro.
+  // ------------------------------------------------------------
+  ({ page, lpBenchmark, escopo }) => {
+    if (escopo !== "lp" || !lpBenchmark) return null;
+    // Dispara somente na melhor LP da property, e so quando a distancia ate a
+    // pior for grande o suficiente para existir padrao a extrair.
+    if (page.path !== lpBenchmark.melhorPath) return null;
+    if (lpBenchmark.piorTaxa <= 0) return null;
+    const taxa = lpBenchmark.melhorTaxa;
+    if (taxa < lpBenchmark.piorTaxa * 3) return null;
+    const taxaPct = (taxa * 100).toFixed(1);
+    const medianaPct = (lpBenchmark.piorTaxa * 100).toFixed(1);
+    const vezes = (taxa / lpBenchmark.piorTaxa).toFixed(1);
+    const receptora = lpBenchmark.piorPath;
+    const limiar = lpBenchmark.piorTaxa * 3;
+    return {
+      id: `conversion-winner-${page.path}`,
+      title: `${page.path} converte ${taxaPct}% — extrair o padrão e replicar`,
+      category: "Mensagem",
+      priority: "Alta",
+      page: page.path,
+      pageUrl: fullPageUrl(page),
+      detectedFrom: `conversão de ${taxaPct}% contra ${medianaPct}% de ${receptora}, ${vezes} vezes acima, em ${page.sessions.toLocaleString("pt-BR")} sessões`,
+      metric: { name: "taxaConversao", value: Number(taxaPct), threshold: Number((limiar * 100).toFixed(1)), unit: "%" },
+      hypothesis: `Esta página resolve algo que as outras LPs não resolvem. Descobrir o que é rende mais que otimizar página ruim no escuro, porque o padrão vale para todas as LPs da casa e não só para uma.`,
+      diagnosis: "Não é problema, é ativo. O motor existia só para achar defeito e por isso não te mostrava o que já funciona.",
+      framework: "ICE",
+      frameworkNote: "Replicar padrão comprovado tem confiança maior que hipótese nova, e esforço menor.",
+      action: "Análise comparativa elemento a elemento contra a LP de menor conversão com volume, e transplante do padrão",
+      steps: [
+        `Inspecionar ${page.path} elemento a elemento: primeira dobra, quantidade de campos, prova social, presença de preço, tipo e rótulo de CTA`,
+        `Comparar com ${receptora}, que converte ${medianaPct}% e é a LP de menor conversão com volume, registrando cada diferença`,
+        `Confirmar composição de origem das duas antes de atribuir o efeito à página, e não ao tráfego`,
+        `Transplantar as duas ou três diferenças de maior efeito para a página receptora`,
+        `Medir na página receptora, não nesta. Esta é o controle`,
+      ],
+      testDesign: "Transplante de padrão, medido na página receptora",
+      ice: ice(9, 8, 6),
+      pxl: pxl({ aboveFold: true, addsValue: true, runsOnHighTraffic: page.sessions > 3000, isPainPoint: false, isQuickWin: false }),
+      primaryKPI: `Conversão de ${receptora}, pela métrica primária dela`,
+      secondaryKPIs: ["Conversão desta página, que não deve cair", "Qualidade do lead na receptora"],
+      rollbackCriteria: "Reverter na receptora se a conversão cair, e nunca alterar esta página no processo",
+      estimatedImpact: `Padrão aplicável às demais LPs da property. Referência: esta página converte ${vezes} vezes a mediana`,
+    };
+  },
 ];
 
 // ============================================================
@@ -732,14 +839,39 @@ export function generateCROInsights(
   // Janela do pagesDetail é 30d por padrão — usamos pra estimar dias de teste.
   const PERIOD_DAYS = 30;
 
+  // Melhor e pior LP com volume, por taxa de conversao. Base comparativa da R9.
+  const lpsComVolume = topPages
+    .filter((p) => escopoDaPagina(p.host, p.path) === "lp" && p.sessions >= 1000)
+    .map((p) => ({ path: p.path, taxa: taxaConversao(p) }))
+    .filter((x) => x.taxa > 0)
+    .sort((a, b) => b.taxa - a.taxa);
+  const lpBenchmark =
+    lpsComVolume.length >= 2
+      ? {
+          melhorPath: lpsComVolume[0].path,
+          melhorTaxa: lpsComVolume[0].taxa,
+          piorPath: lpsComVolume[lpsComVolume.length - 1].path,
+          piorTaxa: lpsComVolume[lpsComVolume.length - 1].taxa,
+        }
+      : null;
+
   topPages.forEach((page, rank) => {
-    const ctx: RuleCtx = { page, totalViews, rank };
+    const ctx: RuleCtx = {
+      page,
+      totalViews,
+      rank,
+      lpBenchmark,
+      escopo: escopoDaPagina(page.host, page.path),
+    };
     for (const rule of rules) {
       const insight = rule(ctx);
       if (!insight) continue;
 
       // Métricas atuais da página no card
-      const isCapture = classifyPage(page.path) === "lp" || (page.leads || 0) > 0;
+      // LP de venda nao gera lead, ela gera cta_click. Sem incluir isso, a
+      // pagina caia no ramo de "engajamento" e o motor media a coisa errada.
+      const isCapture =
+        classifyPage(page.path) === "lp" || (page.leads || 0) > 0 || (page.ctaClicks || 0) > 0;
       insight.metrics = {
         users: page.users,
         sessions: page.sessions,
@@ -758,29 +890,85 @@ export function generateCROInsights(
       const nPer = sampleSizePerVariant(baseline);
       const dailySessions = Math.max(1, page.sessions / PERIOD_DAYS);
       const estDays = Math.max(7, Math.ceil((2 * nPer) / dailySessions));
+      // ===== TRAVAS: medicao, poder e composicao =====
+      // Calcula a trilha real da hipotese a partir do trafego observado, em vez
+      // de assumir MDE de 15% para todo mundo. Ver src/lib/cro-gates.ts.
+      // Metrica primaria por objetivo da pagina, nunca a soma das duas.
+      // Captacao converte em generate_lead, LP de venda converte em cta_click.
+      // Quando as duas existem, vale a de maior volume, que e a que descreve o
+      // objetivo real da pagina. Medido na LP da 5a emissao SNEL11 em 30 dias:
+      // 1.281 generate_lead contra 14.053 cta_click.
+      const leadsJanela = page.leads || 0;
+      const ctaJanela = page.ctaClicks || 0;
+      const usaCta = ctaJanela > leadsJanela;
+      const conversoesJanela = isCapture ? (usaCta ? ctaJanela : leadsJanela) : (page.engagedSessions || 0);
+      const metricaPrimariaEvento = isCapture
+        ? (usaCta ? "cta_click" : "generate_lead")
+        : "sessao engajada";
+      // ATENCAO: `baseline` acima tem piso (0,5% ou 2%) para nao estourar o
+      // calculo de amostra do motor antigo. A trava precisa da taxa REAL, senao
+      // pagina com 0,050% de conversao chega aqui como 0,5% e escapa do gate de
+      // medicao. Caso real que expos isso: /asset/fundos/snel11/, 18 leads em
+      // 35,8 mil sessoes.
+      const baselineReal = page.sessions > 0 ? conversoesJanela / page.sessions : 0;
+      // Pagina institucional nao e julgada com regua de LP. Ver escopoDaPagina.
+      const escopo = escopoDaPagina(page.host, page.path);
+      const foraDeEscopo = foraDoEscopoDeConversao(escopo);
+      const gate = foraDeEscopo
+        ? gateForaDeEscopo(page.host, page.path)
+        : avaliarGate({
+        sessoes: page.sessions,
+        diasJanela: PERIOD_DAYS,
+        baseline: baselineReal,
+        conversoes: conversoesJanela,
+        temObjetivoDeConversao: isCapture,
+        metricaPrimaria: metricaPrimariaEvento,
+      });
+      if (foraDeEscopo) {
+        // Nao pode disputar o topo do ranking com hipotese testavel. O sinal
+        // continua visivel, mas como decisao de objetivo, nao como experimento.
+        insight.priority = "Baixa";
+        insight.ice = { ...insight.ice, total: Math.min(insight.ice.total, 40) };
+      }
+      insight.gate = gate;
+
       insight.sampleSizePerVariant = nPer;
       insight.estimatedTestDays = estDays;
-      insight.testDesign = `${insight.testDesign} · amostra ~${nPer.toLocaleString("pt-BR")} sessões/variante (MDE 15% relativo) → ≈ ${estDays} dias com ${Math.round(dailySessions).toLocaleString("pt-BR")} sessões/dia`;
+      const mdeTxt = gate.mdeRelativo !== null ? `${Math.round(gate.mdeRelativo * 100)}% relativo` : "indefinido";
+      insight.testDesign = gate.trilha === "A"
+        ? `${insight.testDesign} · amostra ~${nPer.toLocaleString("pt-BR")} sessões/variante · MDE detectável ${mdeTxt} → ≈ ${gate.diasParaAlvo ?? estDays} dias com ${Math.round(dailySessions).toLocaleString("pt-BR")} sessões/dia`
+        : `${rotuloTrilha(gate.trilha)} · NÃO desenhar como A/B 50/50 · ${gate.bloqueio ?? ""}`;
 
       // ===== A/B 2.0: tipo, variantes visuais e 2ª frente (Clarity) =====
       const kind = kindFromId(insight.id);
       insight.kind = kind;
-      insight.variants = variantSpec(kind, page.path);
+      // Card de pagina vencedora nao e experimento nesta pagina. Ela e o
+      // controle, e o teste roda na receptora. Anexar desenho de variante aqui
+      // fazia o briefing mandar mexer justamente na pagina que funciona, com
+      // instrucao de checkout que nada tinha a ver.
+      const ehReplicacao = insight.id.startsWith("conversion-winner");
+      insight.variants = ehReplicacao ? undefined : variantSpec(kind, page.path);
       insight.clarityProtocol = clarityProtocol(kind, page.path);
       const cl = clarityLinksFor(propertyName, page.path);
       insight.clarityLinks = { heatmaps: cl.heatmaps, recordings: cl.recordings, filterHint: cl.filterHint };
 
       // Passos do experimento = GA4 (quantitativo) + Clarity (qualitativo).
       // Regra: nenhuma sugestão vai pra execução sem a validação no Clarity.
-      insight.steps = [
-        `[GA4] Evidência: ${insight.detectedFrom}`,
-        ...insight.clarityProtocol.map((c) => `[Clarity] ${c}`),
-        `Variante A (controle): ${insight.variants.a.note}`,
-        `Variante B (teste): ${insight.variants.b.note}`,
-        `Métrica primária: ${insight.variants.primaryMetric} · guardrails: ${insight.variants.guardrails.join(", ")}`,
-        `Amostra: ~${nPer.toLocaleString("pt-BR")} sessões/variante → ≈ ${estDays} dias (${Math.round(dailySessions).toLocaleString("pt-BR")} sessões/dia)`,
-        `Decisão: mantém B se ganhar a métrica primária sem violar guardrail; senão mantém A`,
-      ];
+      // ===== BRIEFING PARA O TIME =====
+      // Este texto e o MESMO que vai virar a descricao da tarefa no Monday.
+      // Ele responde, nesta ordem: o que atacar, por que, o que subir, como
+      // medir e quando decide. Sem nome de framework e sem travessao.
+      // Ver src/lib/cro-briefing.ts.
+      insight.title = semTravessao(insight.title);
+      insight.detectedFrom = semTravessao(insight.detectedFrom);
+      insight.hypothesis = semTravessao(insight.hypothesis);
+      insight.diagnosis = semTravessao(insight.diagnosis);
+      insight.action = semTravessao(insight.action);
+      insight.frameworkNote = semTravessao(insight.frameworkNote);
+      insight.rollbackCriteria = semTravessao(insight.rollbackCriteria);
+      insight.estimatedImpact = semTravessao(insight.estimatedImpact);
+      insight.steps = montarBriefing(insight);
+      insight.briefing = descricaoCurta(insight);
 
       insights.push(insight);
     }
@@ -796,7 +984,11 @@ export function generateCROInsights(
   }
   const deduped = Array.from(byPage.values());
 
-  return deduped.sort((a, b) => b.ice.total - a.ice.total).slice(0, 10);
+  // Ordena por velocidade de decisao, nao por gravidade do sintoma.
+  // Ver scoreDeExecucao em src/lib/cro-gates.ts.
+  return deduped
+    .sort((a, b) => scoreDeExecucao(b.ice.total, b.gate) - scoreDeExecucao(a.ice.total, a.gate))
+    .slice(0, 10);
 }
 
 // ============================================================

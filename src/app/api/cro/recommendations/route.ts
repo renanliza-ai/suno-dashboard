@@ -1,4 +1,5 @@
 import { runReport, getAnomalies, getCheckoutFunnel, getJourneyFunnel } from "@/lib/ga4-server";
+import { analisarComposicao, type LinhaOrigem } from "@/lib/cro-composicao";
 import { auth } from "@/auth";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -58,6 +59,8 @@ type Recommendation = {
   rollback: string;
   affectedSegments: string[];
   pageRef?: string;
+  /** Veredicto de composicao: o problema e da pagina, da midia ou do dado. */
+  composicao?: { tipo: "pagina" | "midia" | "dado"; texto: string };
   pageUrl?: string;
   // Motor 2.0
   trend?: Trend;
@@ -146,6 +149,7 @@ export async function GET(req: NextRequest) {
     pagesCurRes, pagesPrevRes,
     campCurRes, campPrevRes,
     anomaliesResult, checkoutResult, journeyResult, revenueRes, mqlRes,
+    origemRes,
   ] = await Promise.all([
     runReport(propertyId, { dateRanges: [curWeek], dimensions: pageDims, metrics: pageMetrics, orderBys: pageOrder, limit: 60 }),
     runReport(propertyId, { dateRanges: [prevWeek], dimensions: pageDims, metrics: pageMetrics, orderBys: pageOrder, limit: 60 }),
@@ -170,7 +174,35 @@ export async function GET(req: NextRequest) {
       },
       limit: 200,
     }).catch((e) => ({ data: null, error: (e as Error).message })),
+    // Composicao de origem por pagina. Existe para separar problema de pagina
+    // de problema de midia antes de propor teste. Sem isso o painel sugere
+    // teste de CRO para trafego sem intencao, e o time gasta duas semanas de
+    // trafego para descobrir. keyEvents e a conversao configurada na property,
+    // entao o veredicto depende de quais eventos estao marcados como principais
+    // no GA4, e isso esta declarado no texto do card.
+    runReport(propertyId, {
+      dateRanges: [analysisRange],
+      dimensions: [{ name: "pagePath" }, { name: "sessionSourceMedium" }],
+      metrics: [{ name: "sessions" }, { name: "keyEvents" }],
+      orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+      limit: 1000,
+    }).catch((e) => ({ data: null, error: (e as Error).message })),
   ]);
+
+  // Mapa pagePath -> linhas de origem, para o veredicto de composicao.
+  const origemPorPagina = new Map<string, LinhaOrigem[]>();
+  for (const r of origemRes.data?.rows || []) {
+    const path = r.dimensionValues?.[0]?.value || "/";
+    const label = r.dimensionValues?.[1]?.value || "(not set)";
+    const linha: LinhaOrigem = {
+      label,
+      sessions: Number(r.metricValues?.[0]?.value || 0),
+      leads: Number(r.metricValues?.[1]?.value || 0),
+    };
+    const atual = origemPorPagina.get(path) || [];
+    atual.push(linha);
+    origemPorPagina.set(path, atual);
+  }
 
   const recs: Recommendation[] = [];
 
@@ -591,6 +623,25 @@ export async function GET(req: NextRequest) {
   }
   const top = deduped.slice(0, 12);
 
+  // ============================================================
+  // Veredicto de composicao. Roda so no top, para nao gastar CPU em card que
+  // ninguem vai ver. Quando o veredicto nao e "pagina", a recomendacao segue
+  // aparecendo, mas carregando o aviso de que atacar a pagina nao e o caminho
+  // mais curto. O time decide com o numero na frente, nao com opiniao.
+  // ============================================================
+  for (const r of top) {
+    if (!r.pageRef) continue;
+    const linhas = origemPorPagina.get(r.pageRef);
+    if (!linhas || linhas.length < 2) continue;
+    const v = analisarComposicao(linhas, "leads");
+    if (v.tipo === "pagina") continue;
+    r.composicao = { tipo: v.tipo, texto: v.texto };
+    const prefixo = v.tipo === "dado" ? "[DADO QUEBRADO]" : "[COMPOSICAO DE MIDIA]";
+    r.evidence = `${prefixo} ${v.texto} | Evidencia original: ${r.evidence}`;
+    r.steps = [`${prefixo} ${v.texto}`, ...r.steps];
+    if (v.tipo === "dado") r.confidence = "Baixa";
+  }
+
   const worsening = top.filter((r) => r.trend === "piorando").length;
   const impactTotal = top.reduce((sum, r) => {
     const m = r.impact.match(/R\$\s*([\d.,]+)/);
@@ -614,6 +665,8 @@ export async function GET(req: NextRequest) {
           checkoutFunnelAvailable: !!checkoutResult.data,
           journeyFunnelAvailable: !!journeyResult.data,
           consultoriaMqlPages: mqlCandidates.length,
+          composicaoPaginasAnalisadas: origemPorPagina.size,
+          composicaoAvisos: top.filter((r) => r.composicao).length,
         },
       },
     },

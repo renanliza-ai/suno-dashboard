@@ -108,7 +108,21 @@ type Insight = {
   variants?: CROInsight["variants"];
   clarityProtocol?: string[];
   clarityLinks?: { heatmaps: string | null; recordings: string | null; filterHint: string };
+  // Travas: trilha de evidencia (poder e medicao) e veredicto de composicao.
+  gate?: CROInsight["gate"];
+  composicao?: { tipo: "pagina" | "midia" | "dado"; texto: string };
 };
+
+/**
+ * Estilo do selo de trilha de evidencia.
+ * A = experimento controlado com poder. B = quase-experimento, evidencia media.
+ * C = descoberta qualitativa, nao decide receita. Ver src/lib/cro-gates.ts.
+ */
+function trilhaBadge(t: "A" | "B" | "C"): string {
+  if (t === "A") return "bg-emerald-50 text-emerald-700 border-emerald-300";
+  if (t === "B") return "bg-amber-50 text-amber-700 border-amber-300";
+  return "bg-slate-100 text-slate-600 border-slate-300";
+}
 
 /** Preview visual das variantes A/B — wireframe lado a lado, B destaca o que muda. */
 function VariantPreview({ variants }: { variants: NonNullable<CROInsight["variants"]> }) {
@@ -905,6 +919,7 @@ export default function CROPage() {
     rollback: string;
     affectedSegments: string[];
     pageRef?: string;
+    composicao?: { tipo: "pagina" | "midia" | "dado"; texto: string };
     pageUrl?: string;
   };
 
@@ -998,7 +1013,9 @@ export default function CROPage() {
       color: colorByPriority[ci.priority],
       priority: ci.priority,
       title: ci.title,
-      desc: ci.hypothesis,
+      // Briefing em linguagem de execucao. A hipotese fica como reserva para
+      // insight antigo que ainda nao passa pelo montador de briefing.
+      desc: ci.briefing || ci.hypothesis,
       action: ci.action,
       impact: ci.estimatedImpact,
       effort: effortFromEase,
@@ -1031,6 +1048,7 @@ export default function CROPage() {
       variants: ci.variants,
       clarityProtocol: ci.clarityProtocol,
       clarityLinks: ci.clarityLinks,
+      gate: ci.gate,
     };
   }
 
@@ -1038,7 +1056,19 @@ export default function CROPage() {
   const dynamicInsights: Insight[] = useMemo(() => {
     // ⚠ PRIORIDADE MÁXIMA: CRO Engine (data-driven via frameworks)
     if (croEngineInsights.length > 0) {
-      return croEngineInsights.map(convertCROInsight);
+      // O veredicto de composicao (pagina, midia ou dado) e calculado na API,
+      // porque exige quebra por origem que o pagesDetail nao traz. A engine
+      // client-side tem precedencia na geracao do card, entao sem esse
+      // cruzamento por pagina o veredicto nunca apareceria na tela.
+      const composicaoPorPagina = new Map<string, { tipo: "pagina" | "midia" | "dado"; texto: string }>();
+      for (const r of apiRecs || []) {
+        if (r.pageRef && r.composicao) composicaoPorPagina.set(r.pageRef, r.composicao);
+      }
+      return croEngineInsights.map((ci) => {
+        const base = convertCROInsight(ci);
+        const comp = composicaoPorPagina.get(ci.page);
+        return comp ? { ...base, composicao: comp } : base;
+      });
     }
 
     // ⚠ PRIORIDADE 2: recomendações do endpoint real (data-driven)
@@ -1068,6 +1098,7 @@ export default function CROPage() {
         // Link da página real — vai pro Monday e pro painel
         pageRef: r.pageRef,
         pageUrl: r.pageUrl,
+        composicao: r.composicao,
       }));
     }
 
@@ -1700,6 +1731,36 @@ export default function CROPage() {
                             {insight.framework}
                           </span>
                         )}
+                        {/* Trilha de evidencia. Vem das travas de medicao e poder,
+                            calculadas do trafego real da pagina. */}
+                        {insight.gate && (
+                          <span
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${trilhaBadge(insight.gate.trilha)}`}
+                            title={insight.gate.resumo}
+                          >
+                            Trilha {insight.gate.trilha}
+                          </span>
+                        )}
+                        {insight.gate && !insight.gate.medicaoOk && (
+                          <span
+                            className="px-2 py-0.5 rounded-md text-[10px] font-bold border bg-red-50 text-red-700 border-red-300"
+                            title={insight.gate.bloqueio || "Medicao incompleta"}
+                          >
+                            Sem medição
+                          </span>
+                        )}
+                        {insight.composicao && insight.composicao.tipo !== "pagina" && (
+                          <span
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                              insight.composicao.tipo === "dado"
+                                ? "bg-red-50 text-red-700 border-red-300"
+                                : "bg-orange-50 text-orange-700 border-orange-300"
+                            }`}
+                            title={insight.composicao.texto}
+                          >
+                            {insight.composicao.tipo === "dado" ? "Dado quebrado" : "É mídia, não página"}
+                          </span>
+                        )}
                         <span
                           className={`px-2 py-0.5 rounded-md text-[10px] font-bold border inline-flex items-center gap-1 ${iceBadgeStyle(ice.tier)}`}
                           title={`ICE = Impacto ${ice.impact} × Confiança ${ice.confidence} × Facilidade ${ice.ease}`}
@@ -1749,6 +1810,45 @@ export default function CROPage() {
                         </a>
                       )}
                       <p className="text-sm text-[color:var(--muted-foreground)] mb-2">{insight.desc}</p>
+                      {/* Faixa de trava. Aparece antes de qualquer numero da pagina,
+                          porque muda o que fazer com o card: pagina com medicao
+                          incompleta pede instrumentacao, e diferenca grande entre
+                          origens pede decisao de midia, nao teste de CRO. */}
+                      {(insight.gate?.bloqueio || insight.composicao) && (
+                        <div className="mb-2 space-y-1.5">
+                          {insight.composicao && insight.composicao.tipo !== "pagina" && (
+                            <div
+                              className={`text-[11px] leading-snug rounded-lg border px-2.5 py-1.5 ${
+                                insight.composicao.tipo === "dado"
+                                  ? "bg-red-50/70 border-red-200 text-red-900"
+                                  : "bg-orange-50/70 border-orange-200 text-orange-900"
+                              }`}
+                            >
+                              <span className="font-bold">
+                                {insight.composicao.tipo === "dado" ? "Dado quebrado. " : "Composição de mídia. "}
+                              </span>
+                              {insight.composicao.texto}
+                            </div>
+                          )}
+                          {insight.gate?.bloqueio && (
+                            <div className="text-[11px] leading-snug rounded-lg border px-2.5 py-1.5 bg-amber-50/70 border-amber-200 text-amber-900">
+                              <span className="font-bold">Trilha {insight.gate.trilha}. </span>
+                              {insight.gate.bloqueio}
+                            </div>
+                          )}
+                          {insight.gate && (
+                            <div className="text-[10px] text-[color:var(--muted-foreground)]">
+                              Métrica primária: <span className="font-mono">{insight.gate.metricaPrimaria}</span>
+                              {insight.gate.mdeRelativo !== null && (
+                                <> · efeito mínimo detectável {Math.round(insight.gate.mdeRelativo * 100)}% relativo</>
+                              )}
+                              {insight.gate.nPorVariante > 0 && (
+                                <> · {insight.gate.nPorVariante.toLocaleString("pt-BR")} sessões por variante</>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                       {/* Métricas ATUAIS da página — contexto real do card.
                           Connect Rate + Leads só aparecem em LP de captação. */}
                       {insight.metrics && (

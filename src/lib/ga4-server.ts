@@ -558,6 +558,7 @@ export type LPBreakdownRow = {
   leads: number; // count de generate_lead nesse breakdown
   mqls: number; // count de LeadQualificadoConsultoria (MQL) nesse breakdown
   purchases: number; // count de purchase nesse breakdown
+  ctaClicks: number; // count de cta_click nesse breakdown (metrica primaria de LP de venda)
 };
 export type LPChannelResult = {
   url: string;
@@ -570,6 +571,7 @@ export type LPChannelResult = {
   totalLeads: number; // soma generate_lead total
   totalMqls: number; // soma LeadQualificadoConsultoria (MQL Consultoria)
   totalPurchases: number; // soma purchase total
+  totalCtaClicks: number; // soma cta_click total
   byChannel: LPBreakdownRow[]; // mantido `byChannel` por compat retroativa, mas é "byBreakdown"
 };
 
@@ -689,7 +691,12 @@ export async function getLPChannels(
       // na property da Research, host lp.suno.com.br/consultoria/*). Pedido do
       // Renan 01/07: Consultoria mede performance por Lead -> MQL.
       inListFilter: {
-        values: ["generate_lead", "purchase", "purchase_success", "LeadQualificadoConsultoria"],
+        // cta_click = metrica primaria das LPs de VENDA da casa (motor
+        // lib/cta-click.js, padrao data-suno-cta). Sem ele, LP de venda
+        // aparecia com conversao zero e o motor de CRO julgava a pagina pela
+        // metrica errada. Medido em caso real na LP da 5a emissao SNEL11:
+        // 1.281 generate_lead contra 14.053 cta_click em 30 dias.
+        values: ["generate_lead", "purchase", "purchase_success", "LeadQualificadoConsultoria", "cta_click"],
       },
     },
   };
@@ -781,6 +788,7 @@ export async function getLPChannels(
       totalLeads: 0,
       totalMqls: 0,
       totalPurchases: 0,
+      totalCtaClicks: 0,
       byChannel: [],
     }));
     return { data: emptyResults, error: null };
@@ -803,6 +811,7 @@ export async function getLPChannels(
     leads: number; // generate_lead count
     mqls: number; // LeadQualificadoConsultoria count (MQL Consultoria)
     purchases: number; // purchase count
+    ctaClicks: number; // cta_click count
   };
   const breakdownDimCount = Array.isArray(dimMap) ? dimMap.length : 1;
 
@@ -855,12 +864,13 @@ export async function getLPChannels(
       leads: 0, // preenchido abaixo via eventsRes
       mqls: 0, // preenchido abaixo via eventsRes
       purchases: 0, // preenchido abaixo via eventsRes
+      ctaClicks: 0, // preenchido abaixo via eventsRes
     };
   });
 
   // Cruza eventsRes (que tem split lead vs purchase) com rows
   // Key = `${host}|${path}|${label}|${utmSource}|${utmMedium}|${utmCampaign}`
-  type EventCounts = { leads: number; mqls: number; purchases: number };
+  type EventCounts = { leads: number; mqls: number; purchases: number; ctaClicks: number };
   const eventsByKey = new Map<string, EventCounts>();
   // No eventsRes a dimensão eventName é a ÚLTIMA. Outras seguem a mesma ordem
   // que res principal (host, path, ...breakdownDims, ...utmDims).
@@ -884,13 +894,15 @@ export async function getLPChannels(
     const eventName = r.dimensionValues?.[eventNameIdx]?.value || "";
     const count = Number(r.metricValues?.[0]?.value || 0);
     const key = `${host}|${path}|${label}|${utmSource}|${utmMedium}|${utmCampaign}`;
-    const existing = eventsByKey.get(key) || { leads: 0, mqls: 0, purchases: 0 };
+    const existing = eventsByKey.get(key) || { leads: 0, mqls: 0, purchases: 0, ctaClicks: 0 };
     if (eventName === "generate_lead") {
       existing.leads += count;
     } else if (eventName === "LeadQualificadoConsultoria") {
       existing.mqls += count;
     } else if (eventName === "purchase" || eventName === "purchase_success") {
       existing.purchases += count;
+    } else if (eventName === "cta_click") {
+      existing.ctaClicks += count;
     }
     eventsByKey.set(key, existing);
   }
@@ -903,6 +915,7 @@ export async function getLPChannels(
       r.leads = ev.leads;
       r.mqls = ev.mqls;
       r.purchases = ev.purchases;
+      r.ctaClicks = ev.ctaClicks;
     }
   }
 
@@ -933,6 +946,7 @@ export async function getLPChannels(
         leads: 0,
         mqls: 0,
         purchases: 0,
+        ctaClicks: 0,
       };
       cur.users += m.users;
       cur.sessions += m.sessions;
@@ -942,6 +956,7 @@ export async function getLPChannels(
       cur.leads += m.leads;
       cur.mqls += m.mqls;
       cur.purchases += m.purchases;
+      cur.ctaClicks += m.ctaClicks;
       byChannelMap.set(m.label, cur);
     }
     // Finaliza bounce rate (média ponderada)
@@ -959,6 +974,7 @@ export async function getLPChannels(
     const totalLeads = byChannel.reduce((s, c) => s + c.leads, 0);
     const totalMqls = byChannel.reduce((s, c) => s + c.mqls, 0);
     const totalPurchases = byChannel.reduce((s, c) => s + c.purchases, 0);
+    const totalCtaClicks = byChannel.reduce((s, c) => s + c.ctaClicks, 0);
     const totalBounceWeighted = byChannel.reduce((s, c) => s + (c.bounceRate / 100) * c.sessions, 0);
     const avgBounceRate = totalSessions > 0
       ? Number(((totalBounceWeighted / totalSessions) * 100).toFixed(1))
@@ -975,6 +991,7 @@ export async function getLPChannels(
       totalLeads,
       totalMqls,
       totalPurchases,
+      totalCtaClicks,
       byChannel,
     };
   });

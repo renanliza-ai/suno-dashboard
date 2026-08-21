@@ -778,7 +778,9 @@ export type GA4PageDetail = {
   entries: number;
   engagedSessions: number;
   leads: number; // generate_lead + lead_create_account nessa página
+  ctaClicks: number; // cta_click nessa página (métrica primária de LP de venda)
   connectRate: number; // % leads / sessões (taxa de captação da LP)
+  ctaClickRate: number; // % cta_click / sessões (taxa de LP de venda)
   engagementRate: number; // % engagedSessions / sessões
   engagementPerUser: number; // seg por usuário
 };

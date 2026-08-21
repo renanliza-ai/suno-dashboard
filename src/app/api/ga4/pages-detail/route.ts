@@ -85,22 +85,39 @@ export async function GET(req: NextRequest) {
     }),
     runReport(propertyId, {
       dateRanges: [dateRange],
-      dimensions: [{ name: "hostName" }, { name: "pagePath" }],
+      // eventName entra como dimensao para separar conversao de captacao
+      // (generate_lead) de conversao de venda (cta_click). Sem essa separacao
+      // a LP de venda aparecia com conversao zero e o motor de CRO julgava a
+      // pagina pela metrica errada. Uma query so, uma dimensao a mais.
+      dimensions: [{ name: "hostName" }, { name: "pagePath" }, { name: "eventName" }],
       metrics: [{ name: "eventCount" }],
       dimensionFilter: {
-        filter: { fieldName: "eventName", inListFilter: { values: ["generate_lead", "lead_create_account"] } },
+        filter: {
+          fieldName: "eventName",
+          inListFilter: { values: ["generate_lead", "lead_create_account", "cta_click"] },
+        },
       },
       orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
       limit: 500,
     }),
   ]);
 
-  // Leads (generate_lead + lead_create_account) por host|path
+  // Leads (generate_lead + lead_create_account) e cta_click por host|path.
+  // Sao metricas primarias DIFERENTES: captacao converte em lead, LP de venda
+  // converte em cta_click. Nunca somar as duas.
   const leadsMap = new Map<string, number>();
+  const ctaClicksMap = new Map<string, number>();
   for (const r of leadsRes.data?.rows || []) {
     const host = r.dimensionValues?.[0]?.value || "";
     const path = r.dimensionValues?.[1]?.value || "/";
-    leadsMap.set(`${host}|${path}`, (leadsMap.get(`${host}|${path}`) || 0) + Number(r.metricValues?.[0]?.value || 0));
+    const eventName = r.dimensionValues?.[2]?.value || "";
+    const count = Number(r.metricValues?.[0]?.value || 0);
+    const key = `${host}|${path}`;
+    if (eventName === "cta_click") {
+      ctaClicksMap.set(key, (ctaClicksMap.get(key) || 0) + count);
+    } else {
+      leadsMap.set(key, (leadsMap.get(key) || 0) + count);
+    }
   }
 
   const entrancesMap = new Map<string, number>();
@@ -125,6 +142,7 @@ export async function GET(req: NextRequest) {
     const engagedSessions = Number(r.metricValues?.[6]?.value || 0);
     const entries = entrancesMap.get(`${host}|${path}`) || 0;
     const leads = leadsMap.get(`${host}|${path}`) || 0;
+    const ctaClicks = ctaClicksMap.get(`${host}|${path}`) || 0;
     // Exit rate = aproximação: (sessions - (views-sessions))/sessions... preferimos
     // usar o ratio (1 - engagementRate) como aproximação de saída quando engagement
     // não estiver disponível. Se bounceRate == 1 (só rejeição), exitRate == 100%.
@@ -144,8 +162,11 @@ export async function GET(req: NextRequest) {
       entries,
       engagedSessions,
       leads,
+      ctaClicks,
       // Connect Rate = leads / sessões (%) — a taxa de captação da LP.
       connectRate: sessions > 0 ? Number(((leads / sessions) * 100).toFixed(2)) : 0,
+      // Taxa de cta_click — metrica primaria de LP de VENDA.
+      ctaClickRate: sessions > 0 ? Number(((ctaClicks / sessions) * 100).toFixed(2)) : 0,
       engagementRate: sessions > 0 ? Number(((engagedSessions / sessions) * 100).toFixed(1)) : 0,
       engagementPerUser: users > 0 ? Math.round(userEngagementDuration / users) : 0,
     };
