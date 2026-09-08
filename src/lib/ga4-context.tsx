@@ -1250,7 +1250,8 @@ export type LPPerfRow = {
   users: number; avgSessionDuration: number; bounceRate: number;
   leads: number; leadsSource: string;
   qualified: number | null; disqualified: number | null; qualificationRate: number | null;
-  ctaClicks: number | null; connectRate: number | null; ctaRate: number | null;
+  ctaClicks: number | null; checkoutStarts: number | null;
+  connectRate: number | null; ctaRate: number | null; checkoutRate: number | null;
   isThankPage: boolean;
 };
 
@@ -1271,7 +1272,9 @@ export type LPPerfData = {
     engagementRate: number | null; leads: number;
     qualified: number | null; disqualified: number | null; qualificationRate: number | null;
     ctaClicks: number | null; connectRate: number | null; ctaRate: number | null;
+    checkoutStarts: number | null; checkoutRate: number | null;
   } | null;
+  checkoutAttribution?: { event: string; method: string; caveat: string; matchedPaths: number } | null;
   range: { startDate: string; endDate: string };
   meta?: { eventsQueried: string[]; thankPagesExcluded: boolean; rowsReturnedByGa4: number; truncated: boolean };
   error?: string;

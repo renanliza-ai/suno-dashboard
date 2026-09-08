@@ -29,6 +29,8 @@ type SortKey =
   | "qualificationRate"
   | "ctaClicks"
   | "ctaRate"
+  | "checkoutStarts"
+  | "checkoutRate"
   | "bounceRate";
 
 const nf = new Intl.NumberFormat("pt-BR");
@@ -167,8 +169,16 @@ export default function LandingPagesPage() {
                       lead = <code className="text-xs bg-[color:var(--muted)] px-1 rounded">{data.bu.leadEvent}</code>
                       {hasCta && (
                         <>
-                          {" "}e clique pro checkout ={" "}
+                          , engajamento com CTA ={" "}
                           <code className="text-xs bg-[color:var(--muted)] px-1 rounded">{data.bu.ctaEvent}</code>
+                          {data.checkoutAttribution && (
+                            <>
+                              {" "}e chegada ao checkout ={" "}
+                              <code className="text-xs bg-[color:var(--muted)] px-1 rounded">
+                                {data.checkoutAttribution.event}
+                              </code>
+                            </>
+                          )}
                         </>
                       )}
                     </span>
@@ -177,6 +187,20 @@ export default function LandingPagesPage() {
                 <p className="text-xs text-[color:var(--muted-foreground)] mb-2">
                   Hosts considerados: {data.lpHosts.join(", ")}
                 </p>
+                {data.checkoutAttribution && (
+                  <div className="rounded-xl bg-[color:var(--muted)] p-2.5 mb-2">
+                    <p className="text-xs font-semibold mb-0.5">
+                      Duas colunas diferentes, não confunda
+                    </p>
+                    <p className="text-xs text-[color:var(--muted-foreground)] leading-relaxed">
+                      <b>Cliques CTA</b> é o evento <code>cta_click</code>: mede engajamento com
+                      qualquer CTA, inclusive WhatsApp, download e formulário.{" "}
+                      <b>Chegou ao checkout</b> é o <code>begin_checkout</code> atribuído à landing
+                      page de entrada, ou seja, quem de fato abriu o checkout. É esta a coluna de
+                      intenção de compra.
+                    </p>
+                  </div>
+                )}
                 {data.caveats.length > 0 && (
                   <ul className="space-y-1 mt-2">
                     {data.caveats.map((c, i) => (
@@ -221,9 +245,16 @@ export default function LandingPagesPage() {
                   <Kpi label="Connect rate" value={pct(data.totals.connectRate)} sub="leads ÷ sessões" />
                   {hasCta && (
                     <Kpi
-                      label="Cliques pro checkout"
+                      label="Cliques em CTA"
                       value={fmt(data.totals.ctaClicks)}
-                      sub={pct(data.totals.ctaRate)}
+                      sub={`${pct(data.totals.ctaRate)} · todos os CTAs`}
+                    />
+                  )}
+                  {data.totals.checkoutStarts !== null && (
+                    <Kpi
+                      label="Chegou ao checkout"
+                      value={fmt(data.totals.checkoutStarts)}
+                      sub={`${pct(data.totals.checkoutRate)} · begin_checkout`}
                       accent
                     />
                   )}
@@ -284,8 +315,9 @@ export default function LandingPagesPage() {
                     )}
                     {hasCta && (
                       <>
-                        <Th k="ctaClicks">CTA checkout</Th>
-                        <Th k="ctaRate">% CTA</Th>
+                        <Th k="ctaClicks">Cliques CTA</Th>
+                        <Th k="checkoutStarts">Chegou checkout</Th>
+                        <Th k="checkoutRate">% checkout</Th>
                       </>
                     )}
                     <Th k="bounceRate">Rejeição</Th>
@@ -351,8 +383,16 @@ export default function LandingPagesPage() {
                         )}
                         {hasCta && (
                           <>
-                            <td className="px-3 py-2.5 text-right tabular-nums">{fmt(r.ctaClicks)}</td>
-                            <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.ctaRate)}</td>
+                            <td
+                              className="px-3 py-2.5 text-right tabular-nums text-[color:var(--muted-foreground)]"
+                              title="Todos os cliques em CTA da LP, incluindo WhatsApp, download e formulário. Não é só checkout."
+                            >
+                              {fmt(r.ctaClicks)}
+                            </td>
+                            <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-[#7c5cff]">
+                              {fmt(r.checkoutStarts)}
+                            </td>
+                            <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.checkoutRate)}</td>
                           </>
                         )}
                         <td className="px-3 py-2.5 text-right tabular-nums text-[color:var(--muted-foreground)]">

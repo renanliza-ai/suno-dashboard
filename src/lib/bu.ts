@@ -10,7 +10,12 @@
  *
  * REGRAS DE NEGÓCIO CODIFICADAS AQUI (definidas pelo Renan em 08/09/2026)
  *   - Suno Research e Status Invest: sessões, sessões engajadas, `generate_lead`
- *     e `cta_click`. O `cta_click` conta SÓ clique que leva ao checkout.
+ *     e clique que leva ao checkout. ⚠️ O pedido original era usar `cta_click`
+ *     para isso, mas medição de 08/09/2026 mostrou que o `cta_click` das LPs
+ *     inclui WhatsApp, download e formulário, e o GA4 não tem dimensão de
+ *     destino registrada para filtrar. Então "levou ao checkout" é medido por
+ *     `begin_checkout` atribuído à landing page de entrada, e o `cta_click`
+ *     fica na tela como engajamento com CTA, com o rótulo correto.
  *   - Suno Consultoria: não tem checkout. Mede `generate_lead`,
  *     `LeadQualificadoConsultoria` e `LeadDesqualificadoConsultoria`, com
  *     leitura por MQL.
@@ -110,6 +115,8 @@ const PROFILES: Record<Exclude<BUKey, "desconhecida">, BUProfile> = {
     ctaEvent: "cta_click",
     caveats: [
       "O cta_click da Research é 100% de landing page (31.530 em lp + 4.285 em lp2, zero no portal e zero no checkout).",
+      "⚠️ O cta_click NÃO é só clique para checkout. Sondando customEvent:cta_name dentro do próprio evento aparecem entrar_na_comunidade (826 sessões), entrar_no_grupo_vip_agora (659), entre_na_comunidade (643), baixar_agora (476) e preencha_o_formulário (449), que são WhatsApp, download e formulário. Existe uma segunda tag disparando cta_click genérico além do motor da LP, que esse sim só dispara para destino de checkout. Use a coluna Chegou ao checkout para ler intenção de compra.",
+      "Não é possível filtrar cta_click por destino no GA4 hoje: o parâmetro cta_destino existe no dataLayer mas nunca foi registrado como dimensão personalizada (customEvent:cta_destino é recusado pela API). Registrar essa dimensão em Admin > Definições personalizadas destrava o filtro por destino real.",
       "Thank Pages excluídas do numerador: o cta_click dispara depois da conversão.",
       "BANNER E POP-UP: na Research a conversão por espaço é estruturalmente próxima de zero. Espaço de banner responde por 12,1% das sessões (160.895 de 1.331.119) e por 0,66% dos leads (39 de 5.920). Não é atribuição quebrada: o mesmo eixo devolve 1.229 leads para e-mail e 873 para orgânico, e banner dá 39, não zero. A causa provável é o link interno com utm_medium=banner forçar novo session_start e zerar a atribuição, então só conta a conversão que acontece dentro dessa sessão nova. Use a coluna de sessões para rankear espaço na Research, não a de lead.",
       "A coluna de sessões por espaço significa COISAS DIFERENTES entre B.U.s: na Research são 1,00 a 1,06 sessão por usuário (visita única de gente distinta), no Status são 8,7 a 12,4 (sessão interna reciclada). Não compare o número absoluto entre as duas.",
@@ -147,6 +154,7 @@ const PROFILES: Record<Exclude<BUKey, "desconhecida">, BUProfile> = {
     caveats: [
       "ATENÇÃO: 97,6% do cta_click do Status vem de statusinvest.com.br (78,8% só na home), não da LP. Sem filtro de host o número infla cerca de 40x. Esta aba conta apenas o cta_click de sessão que ATERRISSOU numa LP deste host, o que é menos que o total do host: o resto veio de sessão que entrou pelo portal e passou pela LP depois.",
       "Nunca somar lead_create_account com sign_up: os dois têm eventCount idêntico (7.385), é o mesmo disparo com dois nomes.",
+      "O Status não tem NENHUMA dimensão personalizada cta_* registrada no GA4, então aqui não há como saber nem o nome nem o destino do clique. Use a coluna Chegou ao checkout, que mede begin_checkout atribuído à LP de entrada.",
     ],
     blocked: null,
   },

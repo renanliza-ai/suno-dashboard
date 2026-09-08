@@ -55,9 +55,14 @@ type LPRow = {
   qualified: number | null;
   disqualified: number | null;
   qualificationRate: number | null;
+  /** Todos os cliques em CTA da LP. ⚠️ NÃO é só checkout, ver comentário abaixo. */
   ctaClicks: number | null;
+  /** begin_checkout atribuído a esta LP: quem REALMENTE chegou ao checkout. */
+  checkoutStarts: number | null;
   connectRate: number | null;
   ctaRate: number | null;
+  /** begin_checkout ÷ sessões. */
+  checkoutRate: number | null;
   isThankPage: boolean;
 };
 
@@ -313,10 +318,90 @@ export async function GET(req: NextRequest) {
       disqualified: conv.disqualified,
       qualificationRate: conv.qualificationRate,
       ctaClicks: conv.ctaClicks,
+      checkoutStarts: null, // preenchido abaixo
       connectRate: conv.connectRate,
       ctaRate: conv.ctaRate,
+      checkoutRate: null, // preenchido abaixo
       isThankPage: thank,
     });
+  }
+
+  /**
+   * QUEM REALMENTE CHEGOU AO CHECKOUT.
+   *
+   * Pedido do Renan em 08/09/2026: a coluna de CTA deveria mostrar só clique que
+   * leva ao checkout. Ele estava certo em desconfiar. O `cta_click` das LPs NÃO
+   * é só checkout: sondando `customEvent:cta_name` dentro do próprio evento
+   * aparecem "entrar_na_comunidade" (826 sessões), "entrar_no_grupo_vip_agora"
+   * (659), "entre_na_comunidade" (643), "baixar_agora" (476) e
+   * "preencha_o_formulário" (449), que são WhatsApp, download e formulário.
+   * Existe uma segunda tag disparando cta_click genérico além do motor da LP.
+   *
+   * E não dá para filtrar por destino: o parâmetro `cta_destino` existe no
+   * dataLayer mas NUNCA foi registrado como dimensão personalizada no GA4
+   * (`customEvent:cta_destino` é recusado pela API). No Status não existe
+   * nenhuma dimensão `cta_*`.
+   *
+   * A medição honesta de "levou ao checkout" é o `begin_checkout` atribuído à
+   * landing page de entrada: medida na CHEGADA, não na intenção do clique.
+   *
+   * ⚠️ Duas ressalvas de método, ambas declaradas no payload:
+   *   1. O begin_checkout dispara no domínio de checkout, então NÃO se pode
+   *      aplicar filtro de hostName aqui: hostName é event-scoped e zeraria a
+   *      contagem. O recorte é feito pela lista de caminhos de LP já validados.
+   *   2. Por isso a junção é por CAMINHO. Se o portal servir um caminho com o
+   *      mesmo texto de uma LP, os dois somam na mesma linha.
+   */
+  let checkoutAttribution: {
+    event: string;
+    method: string;
+    caveat: string;
+    matchedPaths: number;
+  } | null = null;
+
+  if (profile.conversionModel === "captacao_venda" && rows.length > 0) {
+    const paths = Array.from(new Set(rows.map((r) => r.path))).slice(0, 300);
+    const bcRes = await runReport(propertyId, {
+      dateRanges: [dateRange],
+      dimensions: [{ name: "landingPage" }],
+      metrics: [{ name: "eventCount" }],
+      orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
+      limit: 500,
+      dimensionFilter: {
+        andGroup: {
+          expressions: [
+            {
+              filter: {
+                fieldName: "eventName",
+                stringFilter: { matchType: "EXACT" as const, value: "begin_checkout" },
+              },
+            },
+            { filter: { fieldName: "landingPage", inListFilter: { values: paths } } },
+          ],
+        },
+      },
+    });
+    if (!bcRes.error) {
+      const bcMap = new Map<string, number>();
+      for (const r of bcRes.data?.rows || []) {
+        const pth = r.dimensionValues?.[0]?.value ?? "";
+        if (!pth) continue;
+        bcMap.set(pth, Number(r.metricValues?.[0]?.value || 0));
+      }
+      for (const row of rows) {
+        const bc = bcMap.get(row.path) ?? 0;
+        row.checkoutStarts = bc;
+        row.checkoutRate = row.sessions > 0 ? Number(((bc / row.sessions) * 100).toFixed(2)) : null;
+      }
+      checkoutAttribution = {
+        event: "begin_checkout",
+        method:
+          "Atribuído pela landing page de entrada da sessão. É a medição de quem CHEGOU ao checkout, não de quem clicou com intenção de ir.",
+        caveat:
+          "O begin_checkout dispara no domínio de checkout, então não é possível filtrar por host aqui. A junção é por caminho: se o portal servir um caminho com o mesmo texto de uma LP, os dois somam na mesma linha.",
+        matchedPaths: bcMap.size,
+      };
+    }
   }
 
   // Totais recalculados a partir das linhas, não somando taxa (média de taxa mente).
@@ -327,6 +412,7 @@ export async function GET(req: NextRequest) {
   const tQual = profile.mqlEvents ? sum((r) => r.qualified || 0) : null;
   const tDisq = profile.mqlEvents ? sum((r) => r.disqualified || 0) : null;
   const tCta = profile.ctaEvent ? sum((r) => r.ctaClicks || 0) : null;
+  const tCheckout = checkoutAttribution ? sum((r) => r.checkoutStarts || 0) : null;
 
   const totals = {
     landingPages: rows.length,
@@ -341,6 +427,9 @@ export async function GET(req: NextRequest) {
     ctaClicks: tCta,
     connectRate: tSessions > 0 ? Number(((tLeads / tSessions) * 100).toFixed(2)) : null,
     ctaRate: tCta !== null && tSessions > 0 ? Number(((tCta / tSessions) * 100).toFixed(2)) : null,
+    checkoutStarts: tCheckout,
+    checkoutRate:
+      tCheckout !== null && tSessions > 0 ? Number(((tCheckout / tSessions) * 100).toFixed(2)) : null,
   };
 
   return NextResponse.json(
@@ -357,6 +446,7 @@ export async function GET(req: NextRequest) {
       },
       lpHosts: profile.lpHosts,
       caveats: profile.caveats,
+      checkoutAttribution,
       blocked: null,
       rows,
       totals,
