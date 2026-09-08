@@ -536,7 +536,8 @@ export type LPBreakdownDimension =
   | "medium" // sessionMedium
   | "campaign" // sessionCampaignName
   | "deviceCategory" // deviceCategory
-  | "country"; // country
+  | "country" // country
+  | "audience"; // audienceName — públicos configurados no GA4
 
 const DIMENSION_API_NAME: Record<LPBreakdownDimension, string | string[]> = {
   channel: "sessionDefaultChannelGroup",
@@ -546,6 +547,10 @@ const DIMENSION_API_NAME: Record<LPBreakdownDimension, string | string[]> = {
   campaign: "sessionCampaignName",
   deviceCategory: "deviceCategory",
   country: "country",
+  // Públicos do GA4 (Admin > Públicos). ⚠️ Só devolve linha para o período em
+  // que o público já existia e estava coletando: público criado ontem não tem
+  // histórico, o GA4 não aplica retroativo.
+  audience: "audienceName",
 };
 
 export type LPBreakdownRow = {

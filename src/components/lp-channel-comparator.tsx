@@ -98,6 +98,11 @@ const DIMENSION_OPTIONS: {
   { value: "campaign", label: "Campanha", description: "Nome da campanha (utm_campaign)" },
   { value: "deviceCategory", label: "Dispositivo", description: "desktop, mobile, tablet" },
   { value: "country", label: "País", description: "Brasil, EUA, Portugal..." },
+  {
+    value: "audience",
+    label: "Público (GA4)",
+    description: "Públicos configurados em Admin > Públicos. Sem histórico antes da criação do público.",
+  },
 ];
 
 export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string[] }) {

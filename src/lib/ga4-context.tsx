@@ -872,6 +872,12 @@ export function useGA4Anomalies(baselineDays = 14) {
 }
 
 // Hook: comparativo de N landing pages × dimensão escolhida. POST em /api/ga4/lp-channels.
+/**
+ * ⚠️ Cópia client-side do tipo que vive em src/lib/ga4-server.ts. As duas
+ * listas precisam andar juntas: acrescentar dimensão só aqui faz o seletor
+ * oferecer uma opção que o servidor rejeita e cai no fallback "channel", ou
+ * seja, o rótulo diz uma coisa e o dado é outra.
+ */
 export type LPBreakdownDimension =
   | "channel"
   | "sourceMedium"
@@ -879,7 +885,8 @@ export type LPBreakdownDimension =
   | "medium"
   | "campaign"
   | "deviceCategory"
-  | "country";
+  | "country"
+  | "audience";
 
 export type LPChannelsResult = {
   url: string;

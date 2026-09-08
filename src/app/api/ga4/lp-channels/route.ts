@@ -9,6 +9,7 @@ const VALID_DIMENSIONS: LPBreakdownDimension[] = [
   "campaign",
   "deviceCategory",
   "country",
+  "audience",
 ];
 
 function normalizeDimension(input: unknown): LPBreakdownDimension {

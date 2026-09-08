@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { AlertTriangle, Info, Ban } from "lucide-react";
 import { useGA4, useComunicacaoSpaces, type SpaceRow } from "@/lib/ga4-context";
 import { DataStatus, PeriodBadge, SkeletonBlock, DataErrorCard } from "@/components/data-status";
+import { CollapsibleNote, ShowMore, BotaoExportar, baixarCsv } from "@/components/ui-collapse";
 
 /**
  * Visão compartilhada das abas Banners e Pop-ups.
@@ -52,6 +53,8 @@ export function SpacesView({
   const { data, meta, error, loading } = useComunicacaoSpaces(kind);
   const [sortKey, setSortKey] = useState<SortKey>("sessions");
   const [sortDesc, setSortDesc] = useState(true);
+  const PASSO = 10;
+  const [visiveis, setVisiveis] = useState(PASSO);
 
   const hasPurchase = data?.bu.conversionModel === "captacao_venda";
 
@@ -66,6 +69,8 @@ export function SpacesView({
       return sortDesc ? -d : d;
     });
   }, [data, sortKey, sortDesc]);
+
+  const rowsVisiveis = useMemo(() => rows.slice(0, visiveis), [rows, visiveis]);
 
   const toggleSort = (k: SortKey) => {
     if (k === sortKey) setSortDesc((v) => !v);
@@ -179,24 +184,24 @@ export function SpacesView({
           )}
 
           {/* O QUE NÃO DÁ PRA MEDIR — em cima, não escondido no rodapé */}
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 mb-4">
+          <CollapsibleNote
+            tone="bloqueio"
+            title={`O que NÃO dá para medir em ${kind === "banner" ? "banner" : "pop-up"} hoje`}
+            summary={`Não há ranking de criativa individual nem CTR por espaço. ${data.limitations.length} limitações medidas. Clique para ler.`}
+            badge={`${data.limitations.length} limitações`}
+          >
             <div className="flex items-start gap-2.5">
               <Ban size={16} className="text-red-600 shrink-0 mt-0.5" />
-              <div className="text-sm">
-                <p className="font-semibold text-red-900 mb-1.5">
-                  Não é possível ranquear {kind === "banner" ? "banner" : "pop-up"} individual hoje
-                </p>
-                <ul className="space-y-1.5">
-                  {data.limitations.map((l, i) => (
-                    <li key={i} className="text-xs text-red-800 leading-relaxed flex gap-1.5">
-                      <span className="shrink-0">•</span>
-                      <span>{l}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              <ul className="space-y-1.5">
+                {data.limitations.map((l, i) => (
+                  <li key={i} className="text-xs text-red-800 leading-relaxed flex gap-1.5">
+                    <span className="shrink-0">•</span>
+                    <span>{l}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
-          </div>
+          </CollapsibleNote>
 
           {/* KPIs */}
           {data.strategyNote && (
@@ -208,7 +213,10 @@ export function SpacesView({
             </div>
           )}
 
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+          <div
+            className="grid grid-cols-2 md:grid-cols-3 lg:[grid-template-columns:repeat(var(--kpis),minmax(0,1fr))] gap-3 mb-5"
+            style={{ ["--kpis" as string]: hasPurchase ? 5 : 3 }}
+          >
             <Kpi label="Espaços ativos" value={fmt(data.totals.spaces)} />
             <Kpi label="Sessões geradas" value={fmt(data.totals.sessions)} sub="entraram clicando" />
             <Kpi label="Leads · estratégia A" value={fmt(data.totals.leads)} sub="captação" accent />
@@ -238,7 +246,18 @@ export function SpacesView({
             <>
               <div className="flex items-center justify-between mb-3">
                 <h2 className="font-bold">Cliques e conversão por espaço</h2>
-                <span className="text-xs text-[color:var(--muted-foreground)]">{periodLabel}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[color:var(--muted-foreground)]">{periodLabel}</span>
+                  <BotaoExportar
+                    onClick={() =>
+                      baixarCsv(
+                        `espacos-${kind}-${data.bu.key}-${data.range.startDate}-a-${data.range.endDate}`,
+                        ["Espaco","Grafias somadas","Tipo","Sessoes","Sessoes engajadas","% engajamento","Leads (A)","% lead","Chegou ao checkout (B)","% checkout","Compras","% compra"],
+                        rows.map((r) => [r.space, r.rawMediums.join(" | "), r.kind, r.sessions, r.engagedSessions, r.engagementRate, r.leads, r.leadRate, r.checkoutStarts, r.checkoutRate, r.purchases, r.purchaseRate])
+                      )
+                    }
+                  />
+                </div>
               </div>
               <div className="rounded-2xl border border-[color:var(--border)] bg-white overflow-hidden">
                 <div className="overflow-x-auto">
@@ -262,7 +281,7 @@ export function SpacesView({
                       </tr>
                     </thead>
                     <tbody>
-                      {rows.map((r) => (
+                      {rowsVisiveis.map((r) => (
                         <tr
                           key={r.space}
                           className="border-b border-[color:var(--border)] last:border-0 hover:bg-[color:var(--muted)]/40"
@@ -300,6 +319,14 @@ export function SpacesView({
                     </tbody>
                   </table>
                 </div>
+                <ShowMore
+                  shown={rowsVisiveis.length}
+                  total={rows.length}
+                  step={PASSO}
+                  onShowMore={() => setVisiveis((v) => v + PASSO)}
+                  onShowAll={() => setVisiveis(rows.length)}
+                  onReset={() => setVisiveis(PASSO)}
+                />
               </div>
               <p className="text-[11px] text-[color:var(--muted-foreground)] mt-3 leading-relaxed">
                 Leitura: <b>Leads (A)</b> e <b>Checkout (B)</b> são as duas estratégias, e cada

@@ -6,6 +6,7 @@ import { useGA4, useLPPerformance, type LPPerfRow } from "@/lib/ga4-context";
 import { DataStatus, PeriodBadge, SkeletonBlock, DataErrorCard } from "@/components/data-status";
 import { clarityLinksFor } from "@/lib/clarity";
 import { LPChannelComparator } from "@/components/lp-channel-comparator";
+import { CollapsibleNote, ShowMore, BotaoExportar, baixarCsv } from "@/components/ui-collapse";
 
 /**
  * /landing-pages — desempenho de LP com a regra de conversão da B.U.
@@ -61,10 +62,18 @@ export default function LandingPagesPage() {
   const [objFilter, setObjFilter] = useState<"todos" | "captacao" | "venda" | "indefinido" | "alarme">("todos");
   const [sortKey, setSortKey] = useState<SortKey>("sessions");
   const [sortDesc, setSortDesc] = useState(true);
+  // Tabela carrega 10 linhas e expande por clique. Pedido do Renan: a lista
+  // completa empurrava tudo para baixo da dobra.
+  const PASSO = 10;
+  const [visiveis, setVisiveis] = useState(PASSO);
 
   const isMQL = data?.bu.conversionModel === "mql";
   const hasCta = Boolean(data?.bu.ctaEvent);
   const isResearch = data?.bu.key === "research" || data?.bu.key === "asset";
+  // Quantidade de KPIs muda por B.U. (MQL tem 6, venda tem 7). A grade recebe o
+  // número como CSS var para caber tudo numa linha só em telas largas, em vez
+  // de quebrar o último card sozinho embaixo.
+  const nKpis = 4 + (isMQL ? 2 : 1 + (hasCta ? 1 : 0) + (data?.totals?.checkoutStarts !== null && data?.totals?.checkoutStarts !== undefined ? 1 : 0));
 
   const rows = useMemo(() => {
     const base = data?.rows || [];
@@ -81,6 +90,11 @@ export default function LandingPagesPage() {
       return sortDesc ? -d : d;
     });
   }, [data, q, objFilter, sortKey, sortDesc]);
+
+  // Volta para 10 sempre que o recorte muda, senão o usuário fica com uma
+  // janela grande herdada de outro filtro e acha que a lista é maior.
+  const rowsVisiveis = useMemo(() => rows.slice(0, visiveis), [rows, visiveis]);
+  const resetPaginacao = () => setVisiveis(PASSO);
 
   const toggleSort = (k: SortKey) => {
     if (k === sortKey) setSortDesc((v) => !v);
@@ -157,8 +171,18 @@ export default function LandingPagesPage() {
 
       {useRealData && !loading && data && !data.blocked && (
         <>
-          {/* Regra aplicada + ressalvas medidas */}
-          <div className="rounded-2xl border border-[color:var(--border)] bg-white p-4 mb-4">
+          {/* Regra aplicada + ressalvas medidas — recolhido por padrão */}
+          <CollapsibleNote
+            title={`Regra de ${data.bu.label} e ressalvas da medição`}
+            summary={`lead = ${
+              isMQL ? "MQL qualificado + desqualificado" : data.bu.leadEvent
+            }${hasCta ? ", CTA = cta_click, checkout = begin_checkout" : ""}. ${
+              data.caveats.length
+            } ressalva${data.caveats.length === 1 ? "" : "s"} medida${
+              data.caveats.length === 1 ? "" : "s"
+            } sobre estes números. Clique para ler.`}
+            badge={`${data.caveats.length} ressalvas`}
+          >
             <div className="flex items-start gap-2.5">
               <Info size={16} className="text-[#7c5cff] shrink-0 mt-0.5" />
               <div className="text-sm">
@@ -218,11 +242,14 @@ export default function LandingPagesPage() {
                 )}
               </div>
             </div>
-          </div>
+          </CollapsibleNote>
 
           {/* KPIs */}
           {data.totals && (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-5">
+            <div
+              className="grid grid-cols-2 md:grid-cols-4 lg:[grid-template-columns:repeat(var(--kpis),minmax(0,1fr))] gap-3 mb-5"
+              style={{ ["--kpis" as string]: nKpis }}
+            >
               <Kpi label="Landing pages" value={fmt(data.totals.landingPages)} />
               <Kpi label="Sessões" value={fmt(data.totals.sessions)} />
               <Kpi
@@ -360,7 +387,10 @@ export default function LandingPagesPage() {
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[color:var(--muted-foreground)]" />
               <input
                 value={q}
-                onChange={(e) => setQ(e.target.value)}
+                onChange={(e) => {
+                  setQ(e.target.value);
+                  resetPaginacao();
+                }}
                 placeholder="Filtrar por caminho da LP"
                 className="pl-8 pr-3 py-2 text-sm rounded-xl border border-[color:var(--border)] bg-white w-[280px] outline-none focus:border-[#7c5cff]"
               />
@@ -375,7 +405,10 @@ export default function LandingPagesPage() {
               ] as const).map(([k, label]) => (
                 <button
                   key={k}
-                  onClick={() => setObjFilter(k)}
+                  onClick={() => {
+                    setObjFilter(k);
+                    resetPaginacao();
+                  }}
                   className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg transition ${
                     objFilter === k
                       ? k === "alarme"
@@ -401,9 +434,57 @@ export default function LandingPagesPage() {
                 Só Suno Asset (/asset/)
               </button>
             )}
-            <span className="text-xs text-[color:var(--muted-foreground)] ml-auto">
-              {rows.length} LP{rows.length === 1 ? "" : "s"} · {periodLabel}
-            </span>
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-xs text-[color:var(--muted-foreground)]">
+                {rows.length} LP{rows.length === 1 ? "" : "s"} · {periodLabel}
+              </span>
+              <BotaoExportar
+                onClick={() =>
+                  baixarCsv(
+                    `lps-${data.bu.key}-${data.range.startDate}-a-${data.range.endDate}`,
+                    [
+                      "Landing page",
+                      "Host",
+                      "Objetivo",
+                      "Origem do objetivo",
+                      "Sessoes",
+                      "Sessoes engajadas",
+                      "% engajamento",
+                      "Leads",
+                      "Origem do lead",
+                      "MQL",
+                      "% qualificacao",
+                      "Cliques CTA",
+                      "Chegou ao checkout",
+                      "% checkout",
+                      "% da meta",
+                      "% rejeicao",
+                      "Alarme",
+                    ],
+                    // Exporta a lista FILTRADA inteira, não só as linhas visíveis.
+                    rows.map((r) => [
+                      r.path,
+                      r.host,
+                      r.objective,
+                      r.objectiveFrom,
+                      r.sessions,
+                      r.engagedSessions,
+                      r.engagementRate,
+                      r.leads,
+                      r.leadsSource,
+                      r.qualified,
+                      r.qualificationRate,
+                      r.ctaClicks,
+                      r.checkoutStarts,
+                      r.checkoutRate,
+                      r.primaryRate,
+                      r.bounceRate,
+                      r.mismatch,
+                    ])
+                  )
+                }
+              />
+            </div>
           </div>
 
           {/* Tabela */}
@@ -452,7 +533,7 @@ export default function LandingPagesPage() {
                       </td>
                     </tr>
                   )}
-                  {rows.map((r) => {
+                  {rowsVisiveis.map((r) => {
                     const cl = clarityLinksFor(selected?.displayName || "", r.path);
                     return (
                       <tr key={r.url} className="border-b border-[color:var(--border)] last:border-0 hover:bg-[color:var(--muted)]/40">
@@ -558,6 +639,14 @@ export default function LandingPagesPage() {
                 </tbody>
               </table>
             </div>
+            <ShowMore
+              shown={rowsVisiveis.length}
+              total={rows.length}
+              step={PASSO}
+              onShowMore={() => setVisiveis((v) => v + PASSO)}
+              onShowAll={() => setVisiveis(rows.length)}
+              onReset={resetPaginacao}
+            />
           </div>
 
           {data.meta?.truncated && (
