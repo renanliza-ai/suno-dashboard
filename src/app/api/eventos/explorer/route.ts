@@ -45,6 +45,10 @@ const ALLOWED_DIMENSIONS = [
   // pagePath conta qualquer visualização, landingPage conta a ENTRADA.
   "landingPage",
   "landingPagePlusQueryString",
+  // Públicos do GA4 (Admin > Públicos). Não têm histórico anterior à criação
+  // do público: o GA4 não aplica retroativo.
+  "audienceName",
+  "audienceId",
   // Promoção (banner/pop-up). ⚠️ São ITEM-SCOPED no GA4: não combinam com
   // métricas de evento (eventCount). Se o GA4 recusar a combinação, o erro
   // agora SOBE pro cliente em vez de virar dado errado silencioso.
