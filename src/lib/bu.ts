@@ -79,7 +79,15 @@ export const JUNK_HOST_RE =
  * /cl/lpm26-premium/obrigado/ são clique PÓS-conversão. Somados ao numerador,
  * inflam a taxa da LP que já converteu.
  */
-export const THANK_PAGE_RE = /\/(obrigado|obrigada|thank[-_]?you|obrigado-q|obrigado-nq)(\/|$|\?)/i;
+/**
+ * A versão anterior aceitava só os sufixos fixos `-q` e `-nq`, então escapavam
+ * `/obrigado-a`, `/obrigado-bi-v1`, `/obrigado-download` e `/qt-obrigado`
+ * (achados em auditoria de 08/09/2026). O impacto numérico era pequeno, a
+ * fragilidade não: qualquer variante nova de Thank Page voltaria a contaminar
+ * a taxa de aquisição.
+ */
+export const THANK_PAGE_RE =
+  /(^|\/)[a-z0-9-]*?(obrigado|obrigada|thank[-_]?you|thankyou)([a-z0-9-]*)?(\/|$|\?)/i;
 
 export function isThankPage(path: string): boolean {
   return THANK_PAGE_RE.test(path || "");
@@ -103,6 +111,8 @@ const PROFILES: Record<Exclude<BUKey, "desconhecida">, BUProfile> = {
     caveats: [
       "O cta_click da Research é 100% de landing page (31.530 em lp + 4.285 em lp2, zero no portal e zero no checkout).",
       "Thank Pages excluídas do numerador: o cta_click dispara depois da conversão.",
+      "BANNER E POP-UP: na Research a conversão por espaço é estruturalmente próxima de zero. Espaço de banner responde por 12,1% das sessões (160.895 de 1.331.119) e por 0,66% dos leads (39 de 5.920). Não é atribuição quebrada: o mesmo eixo devolve 1.229 leads para e-mail e 873 para orgânico, e banner dá 39, não zero. A causa provável é o link interno com utm_medium=banner forçar novo session_start e zerar a atribuição, então só conta a conversão que acontece dentro dessa sessão nova. Use a coluna de sessões para rankear espaço na Research, não a de lead.",
+      "A coluna de sessões por espaço significa COISAS DIFERENTES entre B.U.s: na Research são 1,00 a 1,06 sessão por usuário (visita única de gente distinta), no Status são 8,7 a 12,4 (sessão interna reciclada). Não compare o número absoluto entre as duas.",
     ],
     blocked: null,
   },
