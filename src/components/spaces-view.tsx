@@ -107,8 +107,69 @@ export function SpacesView({
         </div>
       )}
 
-      {useRealData && !loading && data && (
+      {/* B.U. bloqueada: mostra o motivo, nunca número.
+          Auditoria de 08/09/2026: esta tela só tratava `error`, então a rota
+          publicava 17 leads da FIIs sem nenhuma forma de a UI avisar. */}
+      {useRealData && !loading && data?.blocked && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6">
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={20} className="text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold text-amber-900 mb-1">
+                {data.bu.label}: dado não confiável, número não publicado
+              </p>
+              <p className="text-sm text-amber-800 leading-relaxed">{data.blocked}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {useRealData && !loading && data && !data.blocked && (
         <>
+          {/* Criativas nomeadas, só onde o dataLayer de promoção está populado */}
+          {data.creatives && data.creatives.rows.length > 0 && (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 mb-4">
+              <p className="font-semibold text-emerald-900 mb-1">
+                Criativas nomeadas nesta B.U. ({data.creatives.coveragePct}% de cobertura)
+              </p>
+              <p className="text-xs text-emerald-800 mb-3">{data.creatives.note}</p>
+              <div className="rounded-xl bg-white border border-emerald-200 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-emerald-100/50">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-emerald-900">
+                        Promoção
+                      </th>
+                      <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-emerald-900">
+                        Criativa
+                      </th>
+                      <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wider text-emerald-900">
+                        Sessões
+                      </th>
+                      <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wider text-emerald-900">
+                        Share
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.creatives.rows.map((c, i) => (
+                      <tr key={`${c.promotion}|${c.creative}|${i}`} className="border-t border-emerald-100">
+                        <td className="px-3 py-2">{c.promotion}</td>
+                        <td className="px-3 py-2 text-[color:var(--muted-foreground)]">{c.creative}</td>
+                        <td className="px-3 py-2 text-right tabular-nums font-semibold">{fmt(c.sessions)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{pct(c.sharePct)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[11px] text-emerald-800 mt-2">
+                {fmt(data.creatives.notSetSessions)} sessões de promoção chegaram sem nome no dataLayer e
+                não aparecem nesta lista.
+              </p>
+            </div>
+          )}
+
           {/* O QUE NÃO DÁ PRA MEDIR — em cima, não escondido no rodapé */}
           <div className="rounded-2xl border border-red-200 bg-red-50 p-4 mb-4">
             <div className="flex items-start gap-2.5">

@@ -61,6 +61,26 @@ const ALLOWED_DIMENSIONS = [
  */
 const CUSTOM_DIM_RE = /^customEvent:[A-Za-z0-9_]{1,40}$/;
 
+/**
+ * Dimensões ITEM-SCOPED. A série diária NÃO pode ser construída para elas.
+ *
+ * Auditoria de 08/09/2026: a query da timeline usa só `date` e reaproveita o
+ * dimensionFilter, não a dimensão. Em dimensão que restringe o universo, o
+ * gráfico contradizia a tabela ao lado: na Research a tabela dava 29.082 e a
+ * timeline 1.328.430 (45,7x); no Status 3.280 contra 2.868.647 (874,6x); na
+ * Consultoria a tabela vinha VAZIA e o gráfico mostrava 23.449 sessões.
+ * Controle que provou o escopo: landingPage, sessionMedium, userAgeBracket e
+ * eventName ficaram todos em 1,00x.
+ *
+ * Melhor não ter gráfico do que ter gráfico que contradiz a tabela.
+ */
+const ITEM_SCOPED_DIMS = new Set([
+  "itemPromotionId",
+  "itemPromotionName",
+  "itemPromotionCreativeName",
+  "itemPromotionCreativeSlot",
+]);
+
 function isAllowedDimension(d: string): boolean {
   return ALLOWED_DIMENSIONS.includes(d) || CUSTOM_DIM_RE.test(d);
 }
@@ -216,19 +236,37 @@ export async function GET(req: NextRequest) {
       limit,
       dimensionFilter,
     }),
-    runReport(propertyId, {
-      dateRanges: [dateRange],
-      dimensions: [{ name: "date" }],
-      metrics: [{ name: metric }],
-      orderBys: [{ dimension: { dimensionName: "date", orderType: "NUMERIC" }, desc: false }],
-      dimensionFilter,
-    }),
+    ITEM_SCOPED_DIMS.has(dimension)
+      ? Promise.resolve({ data: null, error: null })
+      : runReport(propertyId, {
+          dateRanges: [dateRange],
+          dimensions: [{ name: "date" }],
+          metrics: [{ name: metric }],
+          orderBys: [{ dimension: { dimensionName: "date", orderType: "NUMERIC" }, desc: false }],
+          dimensionFilter,
+        }),
   ]);
 
   if (tableRes.error) {
+    /**
+     * O GA4 recusou a consulta. Isso NÃO pode voltar como HTTP 200.
+     *
+     * Auditoria de 08/09/2026: com `customEvent:banner_name` inexistente, ou
+     * com dimensão de promoção somada a eventCount, o GA4 respondia 400 e esta
+     * rota devolvia 200 com `rows: []`. Qualquer cliente que testasse
+     * `res.ok` lia "período sem dado" onde houve consulta RECUSADA. É a forma
+     * residual do mesmo defeito do fallback silencioso.
+     */
     return NextResponse.json(
-      { propertyId, error: tableRes.error, rows: [], timeline: [] },
-      { status: 200 }
+      {
+        propertyId,
+        error: "ga4_rejected_query",
+        detail: tableRes.error,
+        query: { dimension, metric, metric2: metric2Safe },
+        rows: [],
+        timeline: [],
+      },
+      { status: 502 }
     );
   }
 
@@ -263,6 +301,9 @@ export async function GET(req: NextRequest) {
       meta: {
         rowCount: rows.length,
         timelineDays: timeline.length,
+        timelineUnavailableReason: ITEM_SCOPED_DIMS.has(dimension)
+          ? "Dimensão item-scoped: a série diária mostraria o total da propriedade, não o recorte da tabela, então não é gerada."
+          : null,
       },
     },
     { headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=600" } }

@@ -1296,6 +1296,9 @@ export function useLPPerformance(pathContains: string = "", daysOverride?: numbe
     setMeta({ status: "loading", propertyId: selectedId, propertyName, fetchedAt: null });
     const ctrl = new AbortController();
     const qs = buildDateQS(days, customRange, { propertyId: selectedId, propertyName });
+    // limit explícito: o default 200 da rota escondia mais da metade do
+    // inventário de LP (Research 119 de 226, Status 28 de 74).
+    qs.set("limit", "1000");
     if (pathContains) qs.set("pathContains", pathContains);
     cachedFetch(`/api/lp/performance?${qs.toString()}`, { signal: ctrl.signal })
       .then((r) => r.json())
@@ -1325,17 +1328,27 @@ export function useLPPerformance(pathContains: string = "", daysOverride?: numbe
 
 export type SpaceRow = {
   space: string; rawMediums: string[]; kind: "banner" | "popup" | "outro";
-  sessions: number; users: number; engagedSessions: number; engagementRate: number | null;
+  sessions: number; engagedSessions: number; engagementRate: number | null;
   leads: number; leadsSource: string; purchases: number | null;
   leadRate: number | null; purchaseRate: number | null;
 };
 
 export type ImpressionPage = { path: string; views: number; clicks: number; ctr: number | null; implausible: boolean };
 
+export type Creative = {
+  promotion: string;
+  creative: string;
+  sessions: number;
+  users: number;
+  sharePct: number | null;
+};
+
 export type SpacesData = {
   propertyId: string;
   bu: { key: string; label: string; conversionModel: string };
   kind: string;
+  blocked?: string | null;
+  creatives?: { rows: Creative[]; coveragePct: number | null; notSetSessions: number; note: string } | null;
   range: { startDate: string; endDate: string };
   spaces: SpaceRow[];
   totals: { spaces: number; sessions: number; leads: number; purchases: number | null };
@@ -1373,7 +1386,7 @@ export function useComunicacaoSpaces(kind: "banner" | "popup" | "todos" = "todos
       .then((r) => r.json())
       .then((d: SpacesData) => {
         if (d.propertyId && d.propertyId !== requestPropertyId) return;
-        if (d.error && !d.spaces?.length) {
+        if (d.error && !d.spaces?.length && !d.blocked) {
           setError(d.error);
           setMeta({ status: "error", propertyId: selectedId, propertyName, fetchedAt: Date.now() });
         } else {

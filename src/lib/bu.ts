@@ -135,7 +135,7 @@ const PROFILES: Record<Exclude<BUKey, "desconhecida">, BUProfile> = {
     mqlEvents: null,
     ctaEvent: "cta_click",
     caveats: [
-      "ATENÇÃO: 97,6% do cta_click do Status vem de statusinvest.com.br (78,8% só na home), não da LP. Sem filtro de host o número infla cerca de 40x. Esta aba filtra host, então mostra apenas os 2.130 eventos que são de LP.",
+      "ATENÇÃO: 97,6% do cta_click do Status vem de statusinvest.com.br (78,8% só na home), não da LP. Sem filtro de host o número infla cerca de 40x. Esta aba conta apenas o cta_click de sessão que ATERRISSOU numa LP deste host, o que é menos que o total do host: o resto veio de sessão que entrou pelo portal e passou pela LP depois.",
       "Nunca somar lead_create_account com sign_up: os dois têm eventCount idêntico (7.385), é o mesmo disparo com dois nomes.",
     ],
     blocked: null,
@@ -434,8 +434,22 @@ export type SpaceKind = "banner" | "popup" | "outro";
 
 export function spaceKind(medium: string): SpaceKind {
   const m = normalizeSpace(medium);
+  // Pop-up e sobreposição (modal, lightbox, blur de paywall).
   if (/popup|modal|lightbox|interstitial|blur/.test(m)) return "popup";
   if (/^banner|banner\.|bannergam|bannerfino/.test(m)) return "banner";
+  /**
+   * Comunicação da área logada (família `nai.*`).
+   *
+   * Auditoria de 08/09/2026: 84 mediums `nai.*` da Research, somando 5.828
+   * sessões, caíam em "outro" e desapareciam das DUAS abas. Pior, a família era
+   * cortada ao meio por acidente de string: os `nai.*.modal.*` entravam na aba
+   * de pop-up (a regex de pop-up casa "modal") enquanto os `nai.*.carteiras.*`,
+   * `nai.*.home.*`, `nai.*.perfil.*` e `nai.*.portfolio.*` saíam. A aba de
+   * pop-up exibia um subconjunto enviesado da mesma taxonomia.
+   *
+   * `menu.nai` fica de fora de propósito: é navegação, não peça de comunicação.
+   */
+  if (/^nai[.-]/.test(m)) return "banner";
   return "outro";
 }
 
@@ -460,7 +474,7 @@ export function impressionPairFor(
   profile: BUProfile,
   kind: SpaceKind | "todos" = "todos"
 ): ImpressionPair | null {
-  if ((profile.key === "research" || profile.key === "asset") && kind !== "banner") {
+  if ((profile.key === "research" || profile.key === "asset") && kind === "popup") {
     return {
       viewEvent: "wisepops_view",
       clickEvent: "wisepops_click",
@@ -470,7 +484,7 @@ export function impressionPairFor(
         "CTR do Wisepops está BLOQUEADO: o wisepops_click dispara múltiplas vezes na área logada e passa de 100% em /carteiras (2,06), /carteiras/fiis (1,95) e /home (1,12). Toda página com razão acima de 1 é da área logada, toda página abaixo de 1 é pública, o que descarta aleatoriedade. Use a exibição como volume, não como denominador. Em 29 e 30/08/2026 a coleta caiu 99,3%, então agregados que incluem esses dias subestimam o mês.",
     };
   }
-  if (profile.key === "status" && kind !== "popup") {
+  if (profile.key === "status" && kind === "banner") {
     return {
       viewEvent: "ad_impression",
       clickEvent: "ad_click",

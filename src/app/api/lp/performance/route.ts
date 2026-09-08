@@ -210,7 +210,8 @@ export async function GET(req: NextRequest) {
   const evMap = new Map<string, Record<string, number>>();
   for (const r of eventsRes.data?.rows || []) {
     const host = (r.dimensionValues?.[0]?.value || "").toLowerCase();
-    const path = r.dimensionValues?.[1]?.value || "/";
+    const path = r.dimensionValues?.[1]?.value ?? "";
+    if (!path) continue; // bucket vazio do GA4: nao e uma pagina
     const ev = r.dimensionValues?.[2]?.value || "";
     const n = Number(r.metricValues?.[0]?.value || 0);
     const key = `${host}|${path}`;
@@ -219,41 +220,70 @@ export async function GET(req: NextRequest) {
     evMap.set(key, bucket);
   }
 
-  // Conjunto de (host|caminho) que o host de LP realmente serviu como página.
-  const served = new Set<string>();
+  /**
+   * (host|caminho) -> pageviews que aquele host realmente serviu.
+   *
+   * Guarda existência NÃO basta. Auditoria de 08/09/2026 provou que um único
+   * pageview solto liberava centenas de sessões de portal:
+   * `lp.statusinvest.com.br/acoes/cmig4` aparecia com 371 sessões de
+   * aterrissagem contra 1 pageview servido, e entrava no top 10 de LP do Status
+   * com 99,5% de engajamento. Eram 574 sessões fantasma no Status e 1.570 na
+   * Research.
+   *
+   * O teste correto é aritmético: a sessão que ATERRISSOU num caminho não pode
+   * ser mais numerosa que os pageviews que o host serviu naquele caminho, na
+   * mesma janela. Se for, a sessão entrou por outro host.
+   */
+  const servedViews = new Map<string, number>();
+  const bump = (k: string, n: number) => servedViews.set(k, Math.max(servedViews.get(k) || 0, n));
   for (const r of servedRes.data?.rows || []) {
     const h = (r.dimensionValues?.[0]?.value || "").toLowerCase();
-    const p = r.dimensionValues?.[1]?.value || "/";
-    served.add(`${h}|${p}`);
-    // O GA4 alterna barra final entre pagePath e landingPage. Registra as duas
+    const p = r.dimensionValues?.[1]?.value ?? "";
+    if (!p) continue;
+    const views = Number(r.metricValues?.[0]?.value || 0);
+    // O GA4 alterna barra final entre pagePath e landingPage. Registra as três
     // formas para a comparação não falhar por isso.
-    served.add(`${h}|${p.replace(/\/$/, "")}`);
-    served.add(`${h}|${p}/`);
+    bump(`${h}|${p}`, views);
+    bump(`${h}|${p.replace(/\/$/, "")}`, views);
+    bump(`${h}|${p}/`, views);
   }
   let crossHostDropped = 0;
+  let crossHostDroppedSessions = 0;
 
   const rows: LPRow[] = [];
   for (const r of sessionsRes.data?.rows || []) {
     const host = r.dimensionValues?.[0]?.value || "(sem host)";
     if (isJunkHost(host)) continue;
-    const path = r.dimensionValues?.[1]?.value || "/";
+    // ⚠️ NAO coagir vazio para "/" aqui. O GA4 devolve landingPage VAZIO como bucket
+    // proprio, e coagir vazio para "/" criava DUAS linhas com o mesmo host e o
+    // mesmo caminho. As duas liam o mesmo bucket de eventos no evMap, entao a
+    // conversao era contada em dobro: +39 leads na Consultoria (+9,9%) e +46
+    // leads mais +511 cta_click na Research, medidos em auditoria de 08/09/2026.
+    const path = r.dimensionValues?.[1]?.value ?? "";
+    if (!path) continue;
     // "(not set)" aparece quando o GA4 não conseguiu resolver a página de
     // entrada da sessão. Não é uma LP: exibir como linha sugeriria que existe
     // uma página com aquele volume.
     if (path === "(not set)" || path === "(other)") continue;
     if (pathContains && !path.toLowerCase().includes(pathContains)) continue;
 
+    const sessions = Number(r.metricValues?.[0]?.value || 0);
+    const engagedSessions = Number(r.metricValues?.[1]?.value || 0);
+
     // Descarta contaminação cruzada: sessão que entrou por outro host.
-    if (served.size > 0 && !served.has(`${host.toLowerCase()}|${path}`)) {
-      crossHostDropped++;
-      continue;
+    // Existência não basta, o volume tem que ser possível (ver servedViews).
+    if (servedViews.size > 0) {
+      const views = servedViews.get(`${host.toLowerCase()}|${path}`) || 0;
+      if (views < sessions) {
+        crossHostDropped++;
+        crossHostDroppedSessions += sessions;
+        continue;
+      }
     }
 
     const thank = isThankPage(path);
     if (thank && !includeThankPages) continue;
 
-    const sessions = Number(r.metricValues?.[0]?.value || 0);
-    const engagedSessions = Number(r.metricValues?.[1]?.value || 0);
     const bucket = evMap.get(`${host.toLowerCase()}|${path}`) || {};
 
     const conv = computeLPConversion(profile, {
@@ -335,6 +365,7 @@ export async function GET(req: NextRequest) {
         eventsQueried: events,
         thankPagesExcluded: !includeThankPages,
         crossHostDropped,
+        crossHostDroppedSessions,
         rowsReturnedByGa4: sessionsRes.data?.rows?.length || 0,
         truncated: (sessionsRes.data?.rows?.length || 0) >= limit,
       },
