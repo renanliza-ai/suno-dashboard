@@ -138,7 +138,7 @@ export async function GET(req: NextRequest) {
         }
       : hostFilter;
 
-  const [sessionsRes, eventsRes] = await Promise.all([
+  const [sessionsRes, eventsRes, servedRes] = await Promise.all([
     runReport(propertyId, {
       dateRanges: [dateRange],
       dimensions: [{ name: "hostName" }, { name: "landingPage" }],
@@ -167,6 +167,29 @@ export async function GET(req: NextRequest) {
           dimensionFilter: eventFilter,
         })
       : Promise.resolve({ data: null, error: null }),
+    /**
+     * GUARDA CONTRA CONTAMINAÇÃO CRUZADA DE HOST.
+     *
+     * `hostName` é dimensão de EVENTO e `landingPage` é de SESSÃO. Filtrar
+     * hostName NÃO filtra a página de entrada: o GA4 devolve a sessão para cada
+     * combinação (host, landingPage) em que houve evento. Resultado medido em
+     * 08/09/2026 no Status: apareciam `/`, `/fiagros/roca11` e
+     * `/fundos-imobiliarios/mxrf11` como landing page de lp.statusinvest.com.br,
+     * com 99,7% de engajamento. Eram sessões que aterrissaram no PORTAL e depois
+     * passaram pela LP.
+     *
+     * Esta query lista os caminhos que cada host de LP realmente SERVIU como
+     * página (pagePath, que é event-scoped igual ao hostName). Só sobrevive a
+     * linha cujo par (host, caminho) existe aqui.
+     */
+    runReport(propertyId, {
+      dateRanges: [dateRange],
+      dimensions: [{ name: "hostName" }, { name: "pagePath" }],
+      metrics: [{ name: "screenPageViews" }],
+      orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }],
+      limit: 3000,
+      dimensionFilter: hostFilter,
+    }),
   ]);
 
   if (sessionsRes.error) {
@@ -196,6 +219,19 @@ export async function GET(req: NextRequest) {
     evMap.set(key, bucket);
   }
 
+  // Conjunto de (host|caminho) que o host de LP realmente serviu como página.
+  const served = new Set<string>();
+  for (const r of servedRes.data?.rows || []) {
+    const h = (r.dimensionValues?.[0]?.value || "").toLowerCase();
+    const p = r.dimensionValues?.[1]?.value || "/";
+    served.add(`${h}|${p}`);
+    // O GA4 alterna barra final entre pagePath e landingPage. Registra as duas
+    // formas para a comparação não falhar por isso.
+    served.add(`${h}|${p.replace(/\/$/, "")}`);
+    served.add(`${h}|${p}/`);
+  }
+  let crossHostDropped = 0;
+
   const rows: LPRow[] = [];
   for (const r of sessionsRes.data?.rows || []) {
     const host = r.dimensionValues?.[0]?.value || "(sem host)";
@@ -206,6 +242,12 @@ export async function GET(req: NextRequest) {
     // uma página com aquele volume.
     if (path === "(not set)" || path === "(other)") continue;
     if (pathContains && !path.toLowerCase().includes(pathContains)) continue;
+
+    // Descarta contaminação cruzada: sessão que entrou por outro host.
+    if (served.size > 0 && !served.has(`${host.toLowerCase()}|${path}`)) {
+      crossHostDropped++;
+      continue;
+    }
 
     const thank = isThankPage(path);
     if (thank && !includeThankPages) continue;
@@ -289,6 +331,7 @@ export async function GET(req: NextRequest) {
       meta: {
         eventsQueried: events,
         thankPagesExcluded: !includeThankPages,
+        crossHostDropped,
         rowsReturnedByGa4: sessionsRes.data?.rows?.length || 0,
         truncated: (sessionsRes.data?.rows?.length || 0) >= limit,
       },
