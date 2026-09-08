@@ -102,7 +102,7 @@ export async function GET(req: NextRequest) {
   const hasPurchase = profile.conversionModel === "captacao_venda";
   if (hasPurchase) convEvents.push("purchase");
 
-  const pair = impressionPairFor(profile);
+  const pair = impressionPairFor(profile, kindParam);
 
   const [medRes, convRes, viewRes, clickRes] = await Promise.all([
     // 1. Sessões por medium. É o clique: a sessão entrou por aquele espaço.

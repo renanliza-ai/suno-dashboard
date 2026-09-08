@@ -451,8 +451,16 @@ export type ImpressionPair = {
   warning: string | null;
 };
 
-export function impressionPairFor(profile: BUProfile): ImpressionPair | null {
-  if (profile.key === "research" || profile.key === "asset") {
+/**
+ * O par depende do TIPO: o Wisepops é ferramenta de pop-up, então não pode
+ * aparecer na aba de banner. O `ad_impression` do Status é inventário de
+ * banner, então não pode aparecer na aba de pop-up.
+ */
+export function impressionPairFor(
+  profile: BUProfile,
+  kind: SpaceKind | "todos" = "todos"
+): ImpressionPair | null {
+  if ((profile.key === "research" || profile.key === "asset") && kind !== "banner") {
     return {
       viewEvent: "wisepops_view",
       clickEvent: "wisepops_click",
@@ -462,7 +470,7 @@ export function impressionPairFor(profile: BUProfile): ImpressionPair | null {
         "CTR do Wisepops está BLOQUEADO: o wisepops_click dispara múltiplas vezes na área logada e passa de 100% em /carteiras (2,06), /carteiras/fiis (1,95) e /home (1,12). Toda página com razão acima de 1 é da área logada, toda página abaixo de 1 é pública, o que descarta aleatoriedade. Use a exibição como volume, não como denominador. Em 29 e 30/08/2026 a coleta caiu 99,3%, então agregados que incluem esses dias subestimam o mês.",
     };
   }
-  if (profile.key === "status") {
+  if (profile.key === "status" && kind !== "popup") {
     return {
       viewEvent: "ad_impression",
       clickEvent: "ad_click",
