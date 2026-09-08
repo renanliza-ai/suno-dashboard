@@ -273,7 +273,10 @@ export async function GET(req: NextRequest) {
       engagementRate: sessions > 0 ? Number(((engagedSessions / sessions) * 100).toFixed(1)) : null,
       users: Number(r.metricValues?.[2]?.value || 0),
       avgSessionDuration: Number(r.metricValues?.[3]?.value || 0),
-      bounceRate: Number(Number(r.metricValues?.[4]?.value || 0).toFixed(1)),
+      // A Data API devolve bounceRate como FRAÇÃO (0,908 = 90,8%). Sem o ×100 a
+      // tela mostrava 0,9% de rejeição em LP com 9,2% de engajamento, ou seja,
+      // cem vezes menor e com cara de excelente.
+      bounceRate: Number((Number(r.metricValues?.[4]?.value || 0) * 100).toFixed(1)),
       leads: conv.leads,
       leadsSource: conv.leadsSource,
       qualified: conv.qualified,

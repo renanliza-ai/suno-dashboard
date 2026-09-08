@@ -17,6 +17,17 @@
  *      entram como evidência quantificada. O slot já está previsto abaixo.
  */
 
+import { resolveBU, type BUKey } from "@/lib/bu";
+
+/** Project IDs públicos do Clarity, por B.U. Ver comentário em clarityProjectId. */
+const CLARITY_PROJECT_BY_BU: Partial<Record<BUKey, string>> = {
+  research: "i7z0grrjn5",
+  asset: "i7z0grrjn5", // Asset compartilha o projeto da Research
+  consultoria: "xmvijj46fk",
+  status: "ic1rhluxfu",
+  funds: "i81rpq047d",
+};
+
 function slug(s: string): string {
   return s
     .normalize("NFD")
@@ -44,7 +55,12 @@ export function clarityProjectId(propertyName: string | null | undefined): strin
     const v = process.env[k as keyof typeof process.env] as string | undefined;
     if (v) return v;
   }
-  return null;
+  // Fallback por B.U. Estes IDs NÃO são segredo: são públicos por natureza,
+  // aparecem no fonte de cada site como `clarity.ms/tag/<id>`. Estão aqui
+  // porque as variáveis NEXT_PUBLIC_CLARITY_PROJECT_* nunca foram criadas no
+  // Vercel e, sem elas, a coluna de Clarity ficava vazia em todas as abas.
+  // O TOKEN da Data Export API continua fora do código, como deve ser.
+  return CLARITY_PROJECT_BY_BU[resolveBU(propertyName).key] || null;
 }
 
 export type ClarityLinks = {
