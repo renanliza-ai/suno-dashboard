@@ -18,7 +18,7 @@ const ROUTES_WITH_INLINE_HEADER = new Set([
   "/auditoria",
   "/auditoria-utm",
   "/area-logada",
-  "/conversoes",
+  // /conversoes saiu em 08/09/2026; as abas novas usam o PeriodPicker flutuante
   "/copiloto-log",
   "/cro",
   "/seo",

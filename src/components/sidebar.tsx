@@ -2,12 +2,11 @@
 
 import {
   LayoutDashboard,
-  BarChart3,
   Users,
-  Target,
   Settings,
   FileText,
   Zap,
+  Image,
   TrendingUp,
   Radar,
   Crown,
@@ -45,10 +44,14 @@ const aquisicaoNav: NavItem[] = [
   { icon: Users, label: "Audiência", href: "/audiencia", description: "Demografia + ICP" },
 ];
 
+// Em 08/09/2026 as abas "Páginas", "Eventos" e "Conversões" saíram: eram
+// genéricas, ninguém usava, e misturavam LP com portal e área logada. No lugar
+// entraram três visões acionáveis, cada uma com regra de conversão por B.U.
+// definida em src/lib/bu.ts.
 const comportamentoNav: NavItem[] = [
-  { icon: FileText, label: "Páginas", href: "/paginas", description: "Top páginas + Web Vitals" },
-  { icon: Zap, label: "Eventos", href: "/eventos", description: "Eventos GA4" },
-  { icon: Target, label: "Conversões", href: "/conversoes", description: "Funil + objetivos" },
+  { icon: FileText, label: "Landing Pages", href: "/landing-pages", description: "Desempenho e conversão por LP, com regra da B.U." },
+  { icon: Image, label: "Banners", href: "/banners", description: "Cliques e conversão por espaço de banner" },
+  { icon: Zap, label: "Pop-ups", href: "/pop-ups", description: "Exibição e clique de pop-up por página" },
   { icon: Lock, label: "Área Logada", href: "/area-logada", description: "Análise NAI — perfil de assinatura, demografia, ICP" },
 ];
 

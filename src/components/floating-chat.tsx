@@ -25,7 +25,9 @@ const contextSuggestions: Record<string, string[]> = {
   "/seo": ["🔍 Top termos orgânicos", "📈 Páginas com melhor CTR", "✨ Oportunidades de Parte 2"],
   "/cro": ["💡 Recomendações prioritárias", "🛒 Analisa o checkout", "🎣 Lead funnel"],
   "/tracking": ["🚨 Eventos críticos", "❓ Tem evento faltando?", "🏷️ UTMs fora do padrão"],
-  "/conversoes": ["📉 Por que abandono cresceu?", "💸 Receita por evento", "🔁 Taxa de recuperação"],
+  "/landing-pages": ["🏆 Quais LPs convertem melhor?", "📉 LP com pior connect rate", "🎯 Taxa de qualificação por LP"],
+  "/banners": ["🥇 Qual espaço de banner traz mais lead?", "💸 Banner que gera compra", "🏷️ UTMs de banner fora do padrão"],
+  "/pop-ups": ["📊 Pop-up com mais exibição", "⚠️ Onde o clique passa da exibição?", "🎣 Pop-up que gera lead"],
 };
 
 function formatInline(text: string) {

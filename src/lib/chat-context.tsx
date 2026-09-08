@@ -1639,7 +1639,7 @@ function handleIntent(
           {
             type: "actions",
             items: [
-              { label: "📄 Ver todas páginas da NAI", command: `/paginas?q=investidor.` },
+              { label: "🔒 Abrir aba Área Logada", command: `/area-logada` },
               { label: "📊 Comparar com período anterior", command: "Como está a NAI vs semana passada?" },
               { label: "💰 Vendas dentro da área logada", command: "Quanto vendi pra usuários logados?" },
             ],
@@ -1650,7 +1650,7 @@ function handleIntent(
           "Quais canais trazem mais usuários pra NAI?",
           "Quanto vendi pra usuários logados?",
         ],
-        navigate: `/paginas?q=investidor.`,
+        navigate: `/area-logada`,
       };
     }
 
@@ -1745,7 +1745,7 @@ function handleIntent(
             {
               type: "actions",
               items: [
-                { label: "📄 Abrir aba Páginas", command: "/paginas" },
+                { label: "📄 Abrir aba Landing Pages", command: "/landing-pages" },
               ],
             },
           ],
@@ -1753,8 +1753,8 @@ function handleIntent(
             "Quais são as páginas mais acessadas?",
             "Como estão as vendas hoje?",
           ],
-          // Navega pro /paginas pra usuário ver lista completa
-          navigate: "/paginas",
+          // Navega pro /landing-pages pra usuário ver lista completa
+          navigate: "/landing-pages",
         };
       }
 
@@ -1815,8 +1815,8 @@ function handleIntent(
           "Compare 3 LPs por canal",
           "Como estão as vendas hoje?",
         ],
-        // Leva pro /paginas com a busca pré-preenchida via query string
-        navigate: `/paginas?q=${encodeURIComponent(normalizedPath.replace(/^\//, ""))}`,
+        // Leva pro /landing-pages com a busca pré-preenchida via query string
+        navigate: `/landing-pages?q=${encodeURIComponent(normalizedPath.replace(/^\//, ""))}`,
       };
     }
 

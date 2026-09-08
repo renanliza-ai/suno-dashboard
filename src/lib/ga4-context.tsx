@@ -1233,3 +1233,162 @@ export function useGA4Audience(daysOverride?: number) {
 
   return { data, meta, error, loading: meta.status === "loading" };
 }
+
+// =====================================================================
+// LANDING PAGES e COMUNICAÇÃO (banner / pop-up)
+//
+// Abas criadas em 08/09/2026 em substituição a Páginas, Eventos e Conversões.
+// Diferença central em relação aos hooks antigos: a REGRA DE CONVERSÃO vem da
+// B.U., resolvida no servidor por src/lib/bu.ts a partir do displayName da
+// property. Por isso os dois hooks abaixo mandam `propertyName` junto: sem ele
+// a rota recusa a requisição em vez de adivinhar qual evento é conversão.
+// =====================================================================
+
+export type LPPerfRow = {
+  host: string; path: string; url: string;
+  sessions: number; engagedSessions: number; engagementRate: number | null;
+  users: number; avgSessionDuration: number; bounceRate: number;
+  leads: number; leadsSource: string;
+  qualified: number | null; disqualified: number | null; qualificationRate: number | null;
+  ctaClicks: number | null; connectRate: number | null; ctaRate: number | null;
+  isThankPage: boolean;
+};
+
+export type LPPerfData = {
+  propertyId: string;
+  bu: {
+    key: string; label: string; conversionModel: string;
+    leadEvent: string | null;
+    mqlEvents: { qualified: string; disqualified: string } | null;
+    ctaEvent: string | null; leadDivisor: number;
+  };
+  lpHosts: string[];
+  caveats: string[];
+  blocked: string | null;
+  rows: LPPerfRow[];
+  totals: {
+    landingPages: number; sessions: number; engagedSessions: number;
+    engagementRate: number | null; leads: number;
+    qualified: number | null; disqualified: number | null; qualificationRate: number | null;
+    ctaClicks: number | null; connectRate: number | null; ctaRate: number | null;
+  } | null;
+  range: { startDate: string; endDate: string };
+  meta?: { eventsQueried: string[]; thankPagesExcluded: boolean; rowsReturnedByGa4: number; truncated: boolean };
+  error?: string;
+};
+
+export function useLPPerformance(pathContains: string = "", daysOverride?: number) {
+  const { selectedId, selected, useRealData, days: ctxDays, customRange } = useGA4();
+  const days = daysOverride ?? ctxDays;
+  const [data, setData] = useState<LPPerfData | null>(null);
+  const [meta, setMeta] = useState<GA4Meta>({ status: "idle", propertyId: null, propertyName: null, fetchedAt: null });
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setData(null);
+    setError(null);
+    if (!useRealData || !selectedId || !selected?.displayName) {
+      setMeta({ status: "idle", propertyId: null, propertyName: null, fetchedAt: null });
+      return;
+    }
+    const requestPropertyId = selectedId;
+    const propertyName = selected.displayName;
+    setMeta({ status: "loading", propertyId: selectedId, propertyName, fetchedAt: null });
+    const ctrl = new AbortController();
+    const qs = buildDateQS(days, customRange, { propertyId: selectedId, propertyName });
+    if (pathContains) qs.set("pathContains", pathContains);
+    cachedFetch(`/api/lp/performance?${qs.toString()}`, { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((d: LPPerfData) => {
+        if (d.propertyId && d.propertyId !== requestPropertyId) return; // anti race-condition
+        // `blocked` NÃO é erro: é resposta legítima dizendo que a B.U. não tem
+        // dado confiável. A tela mostra o motivo, e nunca número inventado.
+        if (d.error && !d.rows?.length && !d.blocked) {
+          setError(d.error);
+          setMeta({ status: "error", propertyId: selectedId, propertyName, fetchedAt: Date.now() });
+        } else {
+          setData(d);
+          setMeta({ status: "success", propertyId: selectedId, propertyName, fetchedAt: Date.now() });
+        }
+      })
+      .catch((e) => {
+        if (e.name !== "AbortError") {
+          setError(e.message || "erro");
+          setMeta({ status: "error", propertyId: selectedId, propertyName, fetchedAt: Date.now() });
+        }
+      });
+    return () => ctrl.abort();
+  }, [selectedId, selected, useRealData, days, pathContains, customRange?.startDate, customRange?.endDate]);
+
+  return { data, meta, error, loading: meta.status === "loading" };
+}
+
+export type SpaceRow = {
+  space: string; rawMediums: string[]; kind: "banner" | "popup" | "outro";
+  sessions: number; users: number; engagedSessions: number; engagementRate: number | null;
+  leads: number; leadsSource: string; purchases: number | null;
+  leadRate: number | null; purchaseRate: number | null;
+};
+
+export type ImpressionPage = { path: string; views: number; clicks: number; ctr: number | null; implausible: boolean };
+
+export type SpacesData = {
+  propertyId: string;
+  bu: { key: string; label: string; conversionModel: string };
+  kind: string;
+  range: { startDate: string; endDate: string };
+  spaces: SpaceRow[];
+  totals: { spaces: number; sessions: number; leads: number; purchases: number | null };
+  impressions: {
+    label: string; viewEvent: string; clickEvent: string;
+    warning: string | null; ctrTrustworthy: boolean;
+    totals: { views: number; clicks: number; ctr: number | null };
+    pages: ImpressionPage[];
+  } | null;
+  limitations: string[];
+  caveats: string[];
+  error?: string;
+};
+
+export function useComunicacaoSpaces(kind: "banner" | "popup" | "todos" = "todos", daysOverride?: number) {
+  const { selectedId, selected, useRealData, days: ctxDays, customRange } = useGA4();
+  const days = daysOverride ?? ctxDays;
+  const [data, setData] = useState<SpacesData | null>(null);
+  const [meta, setMeta] = useState<GA4Meta>({ status: "idle", propertyId: null, propertyName: null, fetchedAt: null });
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setData(null);
+    setError(null);
+    if (!useRealData || !selectedId || !selected?.displayName) {
+      setMeta({ status: "idle", propertyId: null, propertyName: null, fetchedAt: null });
+      return;
+    }
+    const requestPropertyId = selectedId;
+    const propertyName = selected.displayName;
+    setMeta({ status: "loading", propertyId: selectedId, propertyName, fetchedAt: null });
+    const ctrl = new AbortController();
+    const qs = buildDateQS(days, customRange, { propertyId: selectedId, propertyName, kind });
+    cachedFetch(`/api/comunicacao/spaces?${qs.toString()}`, { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((d: SpacesData) => {
+        if (d.propertyId && d.propertyId !== requestPropertyId) return;
+        if (d.error && !d.spaces?.length) {
+          setError(d.error);
+          setMeta({ status: "error", propertyId: selectedId, propertyName, fetchedAt: Date.now() });
+        } else {
+          setData(d);
+          setMeta({ status: "success", propertyId: selectedId, propertyName, fetchedAt: Date.now() });
+        }
+      })
+      .catch((e) => {
+        if (e.name !== "AbortError") {
+          setError(e.message || "erro");
+          setMeta({ status: "error", propertyId: selectedId, propertyName, fetchedAt: Date.now() });
+        }
+      });
+    return () => ctrl.abort();
+  }, [selectedId, selected, useRealData, days, kind, customRange?.startDate, customRange?.endDate]);
+
+  return { data, meta, error, loading: meta.status === "loading" };
+}

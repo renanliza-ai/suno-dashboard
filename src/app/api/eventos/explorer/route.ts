@@ -41,7 +41,29 @@ const ALLOWED_DIMENSIONS = [
   // Demografia — dependem de Google Signals ativo na property.
   "userAgeBracket",
   "userGender",
+  // Landing page — a primeira página da sessão. Necessário pra aba de LP:
+  // pagePath conta qualquer visualização, landingPage conta a ENTRADA.
+  "landingPage",
+  "landingPagePlusQueryString",
+  // Promoção (banner/pop-up). ⚠️ São ITEM-SCOPED no GA4: não combinam com
+  // métricas de evento (eventCount). Se o GA4 recusar a combinação, o erro
+  // agora SOBE pro cliente em vez de virar dado errado silencioso.
+  "itemPromotionId",
+  "itemPromotionName",
+  "itemPromotionCreativeName",
+  "itemPromotionCreativeSlot",
 ];
+
+/**
+ * Dimensão personalizada de evento: `customEvent:<param>`. Permite consultar
+ * qualquer parâmetro registrado em Admin > Definições personalizadas, o que é
+ * o caminho pra identificar criativa de banner sem alterar este arquivo de novo.
+ */
+const CUSTOM_DIM_RE = /^customEvent:[A-Za-z0-9_]{1,40}$/;
+
+function isAllowedDimension(d: string): boolean {
+  return ALLOWED_DIMENSIONS.includes(d) || CUSTOM_DIM_RE.test(d);
+}
 
 const ALLOWED_METRICS = [
   "eventCount",
@@ -56,14 +78,38 @@ const ALLOWED_METRICS = [
   "userEngagementDuration",
 ];
 
-function safeDim(d: string | null, fallback: string): string {
-  if (d && ALLOWED_DIMENSIONS.includes(d)) return d;
-  return fallback;
+/**
+ * ⚠️ NÃO reintroduzir fallback silencioso aqui.
+ *
+ * Até 08/09/2026 estas funções trocavam qualquer dimensão desconhecida por
+ * `eventName` e devolviam HTTP 200. Consequência real, medida numa auditoria:
+ * `dimension=bananas` respondia com dado plausível, e nove dimensões de
+ * promoção testadas devolveram todas a MESMA linha de eventName, com o nome
+ * pedido ecoado de volta no payload. Ou seja, o painel podia rotular um
+ * gráfico com uma dimensão que nunca foi consultada.
+ *
+ * Regra nova: nome inválido é erro 400 declarando o que foi rejeitado.
+ * Errar alto é melhor que acertar por acidente.
+ */
+function validateDimension(d: string | null): { ok: true; value: string } | { ok: false; msg: string } {
+  if (!d) return { ok: true, value: "eventName" };
+  if (isAllowedDimension(d)) return { ok: true, value: d };
+  return {
+    ok: false,
+    msg: `dimensão não suportada: "${d}". Use uma de [${ALLOWED_DIMENSIONS.join(", ")}] ou o formato customEvent:<parametro>.`,
+  };
 }
 
-function safeMetric(m: string | null, fallback: string): string {
-  if (m && ALLOWED_METRICS.includes(m)) return m;
-  return fallback;
+function validateMetric(
+  m: string | null,
+  fallback: string
+): { ok: true; value: string } | { ok: false; msg: string } {
+  if (!m) return { ok: true, value: fallback };
+  if (ALLOWED_METRICS.includes(m)) return { ok: true, value: m };
+  return {
+    ok: false,
+    msg: `métrica não suportada: "${m}". Use uma de [${ALLOWED_METRICS.join(", ")}].`,
+  };
 }
 
 export async function GET(req: NextRequest) {
@@ -72,10 +118,27 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "propertyId required" }, { status: 400 });
   }
 
-  const dimension = safeDim(req.nextUrl.searchParams.get("dimension"), "eventName");
-  const metric = safeMetric(req.nextUrl.searchParams.get("metric"), "eventCount");
-  const metric2 = req.nextUrl.searchParams.get("metric2");
-  const metric2Safe = metric2 && metric2 !== "none" ? safeMetric(metric2, "totalUsers") : null;
+  const dimCheck = validateDimension(req.nextUrl.searchParams.get("dimension"));
+  if (!dimCheck.ok) {
+    return NextResponse.json({ error: "invalid_dimension", detail: dimCheck.msg }, { status: 400 });
+  }
+  const dimension = dimCheck.value;
+
+  const metricCheck = validateMetric(req.nextUrl.searchParams.get("metric"), "eventCount");
+  if (!metricCheck.ok) {
+    return NextResponse.json({ error: "invalid_metric", detail: metricCheck.msg }, { status: 400 });
+  }
+  const metric = metricCheck.value;
+
+  const metric2Raw = req.nextUrl.searchParams.get("metric2");
+  let metric2Safe: string | null = null;
+  if (metric2Raw && metric2Raw !== "none") {
+    const m2Check = validateMetric(metric2Raw, "totalUsers");
+    if (!m2Check.ok) {
+      return NextResponse.json({ error: "invalid_metric2", detail: m2Check.msg }, { status: 400 });
+    }
+    metric2Safe = m2Check.value;
+  }
 
   const days = Number(req.nextUrl.searchParams.get("days") || 30);
   const startDateParam = req.nextUrl.searchParams.get("startDate");
@@ -114,7 +177,30 @@ export async function GET(req: NextRequest) {
       },
     };
   };
-  const dimensionFilter = buildFilter();
+
+  /**
+   * Filtro de host (`hostsIn=lp.suno.com.br,lp2.suno.com.br`).
+   *
+   * Existe porque agregar landing page no cliente era impossível: pagePath
+   * devolve exatamente 3.000 linhas em Research e Status, ou seja, a cauda
+   * chega truncada e a soma sai errada. Filtrando host NO SERVIDOR, antes do
+   * corte, o total fecha. Também é o que separa LP de portal e de área logada.
+   */
+  const hostsIn = (req.nextUrl.searchParams.get("hostsIn") || "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+
+  const buildHostFilter = () =>
+    hostsIn.length > 0
+      ? { filter: { fieldName: "hostName", inListFilter: { values: hostsIn, caseSensitive: false } } }
+      : undefined;
+
+  const evF = buildFilter();
+  const hostF = buildHostFilter();
+  // Combina os dois com AND quando ambos existem.
+  const dimensionFilter =
+    evF && hostF ? { andGroup: { expressions: [evF, hostF] } } : evF || hostF;
 
   // ============================================================
   // 2 queries paralelas: tabela (por dimension) + timeline (por date)
@@ -170,7 +256,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(
     {
       propertyId,
-      query: { dimension, metric, metric2: metric2Safe, days, dateRange, eventFilter },
+      query: { dimension, metric, metric2: metric2Safe, days, dateRange, eventFilter, hostsIn },
       rows,
       timeline,
       totals: { metric: totalMetric, metric2: totalMetric2 },
