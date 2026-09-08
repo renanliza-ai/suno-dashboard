@@ -412,6 +412,14 @@ export async function GET(req: NextRequest) {
        * Limitações que a UI é OBRIGADA a exibir. Não remover: foram medidas,
        * não são disclaimer defensivo.
        */
+      /**
+       * Regra universal do Grupo Suno: captação de lead mede `generate_lead`,
+       * venda direta mede chegada ao checkout. As colunas da tela vêm separadas
+       * por estratégia DE PROPÓSITO, senão um espaço que alimenta LP de captação
+       * apareceria como fracasso por não gerar checkout.
+       */
+      strategyNote:
+        "Captação de lead mede generate_lead. Venda direta mede chegada ao checkout. Cada espaço deve ser cobrado pela estratégia que ele serve: espaço que manda gente para LP de captação não converte em checkout, e isso não é falha dele.",
       limitations: [
         wantsCreatives && creatives
           ? "Ranking de criativa disponível NESTA B.U.: o dataLayer de promoção está populado com promotion_name e creative_name. Falta o promotion_id, e a cobertura é parcial (o restante das sessões chega como (not set)). Nas outras B.U.s a criativa continua indisponível."
