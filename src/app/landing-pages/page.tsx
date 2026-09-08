@@ -284,7 +284,7 @@ export default function LandingPagesPage() {
                   </p>
                   <p className="text-xs text-[color:var(--muted-foreground)] mb-1.5">
                     Conversão = <code className="bg-[color:var(--muted)] px-1 rounded">generate_lead</code> ·
-                    /lm/ /ebook- /minicurso- /planilha- /whatsapp- /lista-vip-
+                    /cl/ /lm/ /ebook- /minicurso- /planilha- /whatsapp- /lista-vip-
                   </p>
                   <p className="text-sm">
                     <b className="text-lg tabular-nums">{data.objectiveSummary.captacao}</b> LPs ·{" "}

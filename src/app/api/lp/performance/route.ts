@@ -431,8 +431,8 @@ export async function GET(req: NextRequest) {
    *
    * Regra universal do Grupo Suno (material oficial do Growth Team): o padrão da
    * URL declara o objetivo, e o objetivo declara qual evento é a conversão.
-   * `/lm/`, `/ebook-`, `/minicurso-`, `/planilha-`, `/whatsapp-`, `/lista-vip-`
-   * são captação (generate_lead). `/pv/`, `/nossas-assinaturas`, `/planos-`,
+   * `/cl/`, `/lm/`, `/ebook-`, `/minicurso-`, `/planilha-`, `/whatsapp-`,
+   * `/lista-vip-` são captação (generate_lead). `/pv/`, `/nossas-assinaturas`, `/planos-`,
    * `/combo-`, `/integracao-`, `/especial-` são venda (levar ao checkout).
    *
    * Roda AQUI, depois do begin_checkout, porque o `/ao/` só é captação quando
@@ -538,7 +538,7 @@ export async function GET(req: NextRequest) {
         captacao: {
           evento: "generate_lead",
           objetivo: "Pegar contato para nutrir.",
-          padroes: ["/lm/", "/ebook-", "/minicurso-", "/planilha-", "/whatsapp-", "/lista-vip-"],
+          padroes: ["/cl/", "/lm/", "/ebook-", "/minicurso-", "/planilha-", "/whatsapp-", "/lista-vip-"],
         },
         venda: {
           evento: "cta_click (lido pela chegada ao checkout)",

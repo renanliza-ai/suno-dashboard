@@ -112,6 +112,7 @@ export function isJunkHost(host: string): boolean {
 // Vale para TODAS as B.U.s, não é específico de uma property.
 //
 //   Estratégia A · CAPTAÇÃO DE LEAD  → conversão = generate_lead
+//     (inclui "/cl/", que é literalmente a sigla de Captação de Lead)
 //   Estratégia B · VENDA DIRETA      → conversão = cta_click (leva ao checkout)
 //
 // Por que isso importa: cobrar cta_click de uma LP /lm/ ou generate_lead de uma
@@ -123,6 +124,12 @@ export type LPObjective = "captacao" | "venda" | "indefinido";
 
 /** Estratégia A: padrões oficiais de captação de lead. */
 const CAPTACAO_PATTERNS = [
+  // "/cl/" é a sigla de Captação de Lead. Confirmado pelo Renan em 08/09/2026.
+  // Não estava no slide oficial e ficava como indefinido, o que deixava fora da
+  // conta LPs de peso: /cl/arsenal-independencia (8.670 sessões, 651 leads),
+  // /cl/viva-de-dividendos-2026 (2.849 sessões, 1.407 leads) na Research e
+  // /cl/masterclass-eleicoes-b na Consultoria.
+  "/cl/",
   "/lm/",
   "/ebook-",
   "/minicurso-",
@@ -142,6 +149,17 @@ const VENDA_PATTERNS = [
 ];
 
 /**
+ * DIRETÓRIO vence SLUG.
+ *
+ * `/cl/` e `/lm/` são pastas que declaram a intenção da LP, e `/pv/` também.
+ * Um padrão que aparece no MEIO do slug é mais fraco que a pasta: sem essa
+ * precedência, `/cl/algo-combo-premium` seria classificado como venda por causa
+ * do "-combo-", contrariando a pasta que diz Captação de Lead.
+ */
+const DIR_CAPTACAO = ["/cl/", "/lm/"];
+const DIR_VENDA = ["/pv/"];
+
+/**
  * Classifica a LP pelo padrão da URL.
  *
  * ⚠️ O `/ao/` é ambíguo DE PROPÓSITO: pelo material oficial ele é captação
@@ -149,12 +167,18 @@ const VENDA_PATTERNS = [
  * aqui ele sai como "indefinido" e quem chama pode desambiguar pelo dado
  * (ver `resolveObjective`): se a página registra generate_lead, tem formulário.
  *
- * Padrões fora da lista oficial (`/cl/`, `/asset/`, `/redes/`, `/sessao-*`)
- * também ficam indefinidos. Preferimos declarar "não sei" a adivinhar.
+ * Padrões fora da lista (`/asset/`, `/redes/`, `/sessao-*`) ficam indefinidos.
+ * Preferimos declarar "não sei" a adivinhar.
  */
 export function lpObjective(path: string): LPObjective {
   const p = (path || "").toLowerCase();
   if (!p) return "indefinido";
+
+  // 1. Pasta primeiro: é declaração estrutural de intenção.
+  if (DIR_CAPTACAO.some((d) => p.includes(d))) return "captacao";
+  if (DIR_VENDA.some((d) => p.includes(d))) return "venda";
+
+  // 2. Padrão no slug depois.
   if (VENDA_PATTERNS.some((v) => p.includes(v))) return "venda";
   if (CAPTACAO_PATTERNS.some((c) => p.includes(c))) return "captacao";
   return "indefinido";
