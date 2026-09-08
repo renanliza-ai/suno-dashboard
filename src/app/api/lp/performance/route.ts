@@ -21,7 +21,7 @@ export const maxDuration = 60;
  *   1. Filtra host de LP NO SERVIDOR (`hostsIn`), antes do corte de linhas.
  *      Sem isso a agregação sai truncada: pagePath devolve exatamente 3.000
  *      linhas em Research e Status, e a cauda longa nunca chega.
- *   2. Usa `landingPagePlusQueryString`, ou seja, a página de ENTRADA da sessão.
+ *   2. Usa `landingPage`, ou seja, a página de ENTRADA da sessão.
  *      `pagePath` contaria qualquer visualização e infla o denominador.
  *   3. Exclui Thank Page do numerador. O cta_click dispara em /obrigado/ e é
  *      clique pós-conversão.
@@ -141,7 +141,7 @@ export async function GET(req: NextRequest) {
   const [sessionsRes, eventsRes] = await Promise.all([
     runReport(propertyId, {
       dateRanges: [dateRange],
-      dimensions: [{ name: "hostName" }, { name: "landingPagePlusQueryString" }],
+      dimensions: [{ name: "hostName" }, { name: "landingPage" }],
       metrics: [
         { name: "sessions" },
         { name: "engagedSessions" },
@@ -158,7 +158,7 @@ export async function GET(req: NextRequest) {
           dateRanges: [dateRange],
           dimensions: [
             { name: "hostName" },
-            { name: "landingPagePlusQueryString" },
+            { name: "landingPage" },
             { name: "eventName" },
           ],
           metrics: [{ name: "eventCount" }],
@@ -201,6 +201,10 @@ export async function GET(req: NextRequest) {
     const host = r.dimensionValues?.[0]?.value || "(sem host)";
     if (isJunkHost(host)) continue;
     const path = r.dimensionValues?.[1]?.value || "/";
+    // "(not set)" aparece quando o GA4 não conseguiu resolver a página de
+    // entrada da sessão. Não é uma LP: exibir como linha sugeriria que existe
+    // uma página com aquele volume.
+    if (path === "(not set)" || path === "(other)") continue;
     if (pathContains && !path.toLowerCase().includes(pathContains)) continue;
 
     const thank = isThankPage(path);
