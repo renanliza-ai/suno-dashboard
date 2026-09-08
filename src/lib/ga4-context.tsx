@@ -1252,6 +1252,11 @@ export type LPPerfRow = {
   qualified: number | null; disqualified: number | null; qualificationRate: number | null;
   ctaClicks: number | null; checkoutStarts: number | null;
   connectRate: number | null; ctaRate: number | null; checkoutRate: number | null;
+  objective: "captacao" | "venda" | "indefinido";
+  objectiveFrom: "url" | "dado" | "nenhum";
+  primaryMetric: "leads" | "checkoutStarts" | "ambas";
+  primaryValue: number | null; primaryRate: number | null;
+  mismatch: string | null;
   isThankPage: boolean;
 };
 
@@ -1275,6 +1280,12 @@ export type LPPerfData = {
     checkoutStarts: number | null; checkoutRate: number | null;
   } | null;
   checkoutAttribution?: { event: string; method: string; caveat: string; matchedPaths: number } | null;
+  objectiveSummary?: {
+    captacao: number; venda: number; indefinido: number;
+    inferidoPorDado: number; comAlarme: number;
+    leadsDeCaptacao: number; sessoesDeCaptacao: number;
+    checkoutDeVenda: number; sessoesDeVenda: number;
+  } | null;
   range: { startDate: string; endDate: string };
   meta?: { eventsQueried: string[]; thankPagesExcluded: boolean; rowsReturnedByGa4: number; truncated: boolean };
   error?: string;
@@ -1332,8 +1343,9 @@ export function useLPPerformance(pathContains: string = "", daysOverride?: numbe
 export type SpaceRow = {
   space: string; rawMediums: string[]; kind: "banner" | "popup" | "outro";
   sessions: number; engagedSessions: number; engagementRate: number | null;
-  leads: number; leadsSource: string; purchases: number | null;
-  leadRate: number | null; purchaseRate: number | null;
+  leads: number; leadsSource: string;
+  checkoutStarts: number | null; purchases: number | null;
+  leadRate: number | null; checkoutRate: number | null; purchaseRate: number | null;
 };
 
 export type ImpressionPage = { path: string; views: number; clicks: number; ctr: number | null; implausible: boolean };
@@ -1354,7 +1366,8 @@ export type SpacesData = {
   creatives?: { rows: Creative[]; coveragePct: number | null; notSetSessions: number; note: string } | null;
   range: { startDate: string; endDate: string };
   spaces: SpaceRow[];
-  totals: { spaces: number; sessions: number; leads: number; purchases: number | null };
+  totals: { spaces: number; sessions: number; leads: number; checkoutStarts: number | null; purchases: number | null };
+  strategyNote?: string;
   impressions: {
     label: string; viewEvent: string; clickEvent: string;
     warning: string | null; ctrTrustworthy: boolean;

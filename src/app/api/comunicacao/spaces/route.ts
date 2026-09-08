@@ -59,9 +59,17 @@ type SpaceRow = {
   engagementRate: number | null;
   leads: number;
   leadsSource: string;
+  /**
+   * Estratégia B: chegada ao checkout (begin_checkout) atribuída ao espaço.
+   * Mesma âncora usada na aba de Landing Pages, para as duas telas não medirem
+   * venda de formas diferentes.
+   */
+  checkoutStarts: number | null;
   purchases: number | null;
   /** leads ÷ sessões geradas pelo espaço */
   leadRate: number | null;
+  /** chegadas ao checkout ÷ sessões geradas pelo espaço */
+  checkoutRate: number | null;
   /** compras ÷ sessões geradas pelo espaço */
   purchaseRate: number | null;
 };
@@ -117,7 +125,7 @@ export async function GET(req: NextRequest) {
         kind: kindParam,
         blocked: profile.blocked,
         spaces: [],
-        totals: { spaces: 0, sessions: 0, leads: 0, purchases: null },
+        totals: { spaces: 0, sessions: 0, leads: 0, checkoutStarts: null, purchases: null },
         impressions: null,
         limitations: [],
         caveats: profile.caveats,
@@ -140,7 +148,10 @@ export async function GET(req: NextRequest) {
   }
   // `purchase` só existe onde há checkout.
   const hasPurchase = profile.conversionModel === "captacao_venda";
-  if (hasPurchase) convEvents.push("purchase");
+  // Regra universal Suno: captação mede generate_lead, venda mede chegada ao
+  // checkout. Os dois entram aqui para a tela poder separar as ESTRATÉGIAS em
+  // vez de misturar tudo numa coluna de "conversão".
+  if (hasPurchase) convEvents.push("begin_checkout", "purchase");
 
   const pair = impressionPairFor(profile, kindParam);
 
@@ -275,6 +286,7 @@ export async function GET(req: NextRequest) {
         ctaCount: 0,
       });
       const purchases = hasPurchase ? bucket["purchase"] || 0 : null;
+      const checkoutStarts = hasPurchase ? bucket["begin_checkout"] || 0 : null;
       return {
         space,
         rawMediums: Array.from(v.raws).sort(),
@@ -284,8 +296,13 @@ export async function GET(req: NextRequest) {
         engagementRate: v.sessions > 0 ? Number(((v.engaged / v.sessions) * 100).toFixed(1)) : null,
         leads: conv.leads,
         leadsSource: conv.leadsSource,
+        checkoutStarts,
         purchases,
         leadRate: v.sessions > 0 ? Number(((conv.leads / v.sessions) * 100).toFixed(2)) : null,
+        checkoutRate:
+          checkoutStarts !== null && v.sessions > 0
+            ? Number(((checkoutStarts / v.sessions) * 100).toFixed(2))
+            : null,
         purchaseRate:
           purchases !== null && v.sessions > 0
             ? Number(((purchases / v.sessions) * 100).toFixed(2))
@@ -387,6 +404,7 @@ export async function GET(req: NextRequest) {
         spaces: spaces.length,
         sessions: spaces.reduce((s, r) => s + r.sessions, 0),
         leads: spaces.reduce((s, r) => s + r.leads, 0),
+        checkoutStarts: hasPurchase ? spaces.reduce((s, r) => s + (r.checkoutStarts || 0), 0) : null,
         purchases: hasPurchase ? spaces.reduce((s, r) => s + (r.purchases || 0), 0) : null,
       },
       impressions,

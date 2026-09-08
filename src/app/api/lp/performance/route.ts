@@ -3,8 +3,11 @@ import {
   computeLPConversion,
   isJunkHost,
   isThankPage,
+  objectiveMismatch,
   resolveBU,
+  resolveObjective,
   type BUProfile,
+  type LPObjective,
 } from "@/lib/bu";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -63,6 +66,19 @@ type LPRow = {
   ctaRate: number | null;
   /** begin_checkout ÷ sessões. */
   checkoutRate: number | null;
+  /**
+   * Objetivo da LP pela regra universal Suno (o padrão da URL diz qual é).
+   * captacao -> conversão é generate_lead. venda -> conversão é chegada ao checkout.
+   */
+  objective: LPObjective;
+  objectiveFrom: "url" | "dado" | "nenhum";
+  /** Métrica que DEVE ser lida como conversão desta linha. */
+  primaryMetric: "leads" | "checkoutStarts" | "ambas";
+  /** Valor da métrica primária, já resolvido, para ordenar e comparar. */
+  primaryValue: number | null;
+  primaryRate: number | null;
+  /** Preenchido quando o objetivo declarado não bate com o dado. É alarme. */
+  mismatch: string | null;
   isThankPage: boolean;
 };
 
@@ -322,6 +338,12 @@ export async function GET(req: NextRequest) {
       connectRate: conv.connectRate,
       ctaRate: conv.ctaRate,
       checkoutRate: null, // preenchido abaixo
+      objective: "indefinido", // resolvido abaixo, depois do begin_checkout
+      objectiveFrom: "nenhum",
+      primaryMetric: "ambas",
+      primaryValue: null,
+      primaryRate: null,
+      mismatch: null,
       isThankPage: thank,
     });
   }
@@ -404,6 +426,69 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  /**
+   * OBJETIVO DA LP E MÉTRICA PRIMÁRIA.
+   *
+   * Regra universal do Grupo Suno (material oficial do Growth Team): o padrão da
+   * URL declara o objetivo, e o objetivo declara qual evento é a conversão.
+   * `/lm/`, `/ebook-`, `/minicurso-`, `/planilha-`, `/whatsapp-`, `/lista-vip-`
+   * são captação (generate_lead). `/pv/`, `/nossas-assinaturas`, `/planos-`,
+   * `/combo-`, `/integracao-`, `/especial-` são venda (levar ao checkout).
+   *
+   * Roda AQUI, depois do begin_checkout, porque o `/ao/` só é captação quando
+   * tem formulário, e isso se desambigua pelo dado.
+   */
+  for (const row of rows) {
+    const { objective, inferredFrom } = resolveObjective(row.path, {
+      leads: row.leads,
+      checkoutStarts: row.checkoutStarts,
+    });
+    row.objective = objective;
+    row.objectiveFrom = inferredFrom;
+
+    if (objective === "captacao") {
+      row.primaryMetric = "leads";
+      row.primaryValue = row.leads;
+      row.primaryRate = row.connectRate;
+    } else if (objective === "venda") {
+      row.primaryMetric = "checkoutStarts";
+      row.primaryValue = row.checkoutStarts;
+      row.primaryRate = row.checkoutRate;
+    } else {
+      // Sem objetivo declarado nem inferível: NÃO elege primária. Mostrar as
+      // duas é honesto; escolher uma seria adivinhar qual métrica cobrar.
+      row.primaryMetric = "ambas";
+      row.primaryValue = null;
+      row.primaryRate = null;
+    }
+
+    row.mismatch = objectiveMismatch(objective, inferredFrom, {
+      sessions: row.sessions,
+      leads: row.leads,
+      checkoutStarts: row.checkoutStarts,
+    });
+  }
+
+  const objectiveSummary = {
+    captacao: rows.filter((r) => r.objective === "captacao").length,
+    venda: rows.filter((r) => r.objective === "venda").length,
+    indefinido: rows.filter((r) => r.objective === "indefinido").length,
+    inferidoPorDado: rows.filter((r) => r.objectiveFrom === "dado").length,
+    comAlarme: rows.filter((r) => r.mismatch).length,
+    // Conversão somada SÓ da métrica que importa em cada objetivo. É o número
+    // que o gestor deve olhar, em vez de somar lead e checkout de tudo junto.
+    leadsDeCaptacao: rows
+      .filter((r) => r.objective === "captacao")
+      .reduce((s, r) => s + r.leads, 0),
+    sessoesDeCaptacao: rows
+      .filter((r) => r.objective === "captacao")
+      .reduce((s, r) => s + r.sessions, 0),
+    checkoutDeVenda: rows
+      .filter((r) => r.objective === "venda")
+      .reduce((s, r) => s + (r.checkoutStarts || 0), 0),
+    sessoesDeVenda: rows.filter((r) => r.objective === "venda").reduce((s, r) => s + r.sessions, 0),
+  };
+
   // Totais recalculados a partir das linhas, não somando taxa (média de taxa mente).
   const sum = (f: (r: LPRow) => number) => rows.reduce((s, r) => s + f(r), 0);
   const tSessions = sum((r) => r.sessions);
@@ -447,6 +532,22 @@ export async function GET(req: NextRequest) {
       lpHosts: profile.lpHosts,
       caveats: profile.caveats,
       checkoutAttribution,
+      objectiveSummary,
+      objectiveRule: {
+        fonte: "Material oficial do Growth Team, slide 03. Regra universal do Grupo Suno.",
+        captacao: {
+          evento: "generate_lead",
+          objetivo: "Pegar contato para nutrir.",
+          padroes: ["/lm/", "/ebook-", "/minicurso-", "/planilha-", "/whatsapp-", "/lista-vip-"],
+        },
+        venda: {
+          evento: "cta_click (lido pela chegada ao checkout)",
+          objetivo: "Levar ao checkout.",
+          padroes: ["/pv/", "/nossas-assinaturas", "/planos-", "/combo-", "/integracao-", "/especial-"],
+        },
+        ambiguo:
+          "/ao/ só é captação QUANDO a página tem formulário. Não se decide pela URL: aqui é desambiguado pelo dado (se registra generate_lead, tem formulário).",
+      },
       blocked: null,
       rows,
       totals,

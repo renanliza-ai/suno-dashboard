@@ -31,6 +31,8 @@ type SortKey =
   | "ctaRate"
   | "checkoutStarts"
   | "checkoutRate"
+  | "primaryValue"
+  | "primaryRate"
   | "bounceRate";
 
 const nf = new Intl.NumberFormat("pt-BR");
@@ -56,6 +58,7 @@ export default function LandingPagesPage() {
     if (typeof window === "undefined") return "";
     return new URLSearchParams(window.location.search).get("q") || "";
   });
+  const [objFilter, setObjFilter] = useState<"todos" | "captacao" | "venda" | "indefinido" | "alarme">("todos");
   const [sortKey, setSortKey] = useState<SortKey>("sessions");
   const [sortDesc, setSortDesc] = useState(true);
 
@@ -66,7 +69,9 @@ export default function LandingPagesPage() {
   const rows = useMemo(() => {
     const base = data?.rows || [];
     const needle = q.trim().toLowerCase();
-    const filtered = needle ? base.filter((r) => r.path.toLowerCase().includes(needle)) : base;
+    let filtered = needle ? base.filter((r) => r.path.toLowerCase().includes(needle)) : base;
+    if (objFilter === "alarme") filtered = filtered.filter((r) => r.mismatch);
+    else if (objFilter !== "todos") filtered = filtered.filter((r) => r.objective === objFilter);
     const get = (r: LPPerfRow, k: SortKey): number => {
       const v = r[k];
       return typeof v === "number" ? v : -1;
@@ -75,7 +80,7 @@ export default function LandingPagesPage() {
       const d = get(a, sortKey) - get(b, sortKey);
       return sortDesc ? -d : d;
     });
-  }, [data, q, sortKey, sortDesc]);
+  }, [data, q, objFilter, sortKey, sortDesc]);
 
   const toggleSort = (k: SortKey) => {
     if (k === sortKey) setSortDesc((v) => !v);
@@ -263,6 +268,92 @@ export default function LandingPagesPage() {
             </div>
           )}
 
+          {/* REGRA DE OBJETIVO — o padrão da URL diz qual métrica cobrar */}
+          {data.objectiveSummary && (
+            <div className="rounded-2xl border border-[color:var(--border)] bg-white p-4 mb-5">
+              <p className="font-semibold text-sm mb-2">
+                Objetivo da LP define a conversão{" "}
+                <span className="font-normal text-xs text-[color:var(--muted-foreground)]">
+                  (regra universal Suno: o padrão da URL diz qual é)
+                </span>
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="rounded-xl border border-[color:var(--border)] p-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
+                    Estratégia A · Captação de lead
+                  </p>
+                  <p className="text-xs text-[color:var(--muted-foreground)] mb-1.5">
+                    Conversão = <code className="bg-[color:var(--muted)] px-1 rounded">generate_lead</code> ·
+                    /lm/ /ebook- /minicurso- /planilha- /whatsapp- /lista-vip-
+                  </p>
+                  <p className="text-sm">
+                    <b className="text-lg tabular-nums">{data.objectiveSummary.captacao}</b> LPs ·{" "}
+                    <b className="tabular-nums">{fmt(data.objectiveSummary.leadsDeCaptacao)}</b> leads em{" "}
+                    {fmt(data.objectiveSummary.sessoesDeCaptacao)} sessões
+                    {data.objectiveSummary.sessoesDeCaptacao > 0 && (
+                      <>
+                        {" "}
+                        ({pct(
+                          Number(
+                            (
+                              (data.objectiveSummary.leadsDeCaptacao /
+                                data.objectiveSummary.sessoesDeCaptacao) *
+                              100
+                            ).toFixed(2)
+                          )
+                        )})
+                      </>
+                    )}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-[color:var(--border)] p-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
+                    Estratégia B · Venda direta
+                  </p>
+                  <p className="text-xs text-[color:var(--muted-foreground)] mb-1.5">
+                    Conversão = levar ao checkout · /pv/ /nossas-assinaturas /planos- /combo- /integracao-
+                    /especial-
+                  </p>
+                  <p className="text-sm">
+                    <b className="text-lg tabular-nums">{data.objectiveSummary.venda}</b> LPs ·{" "}
+                    <b className="tabular-nums">{fmt(data.objectiveSummary.checkoutDeVenda)}</b> chegadas ao
+                    checkout em {fmt(data.objectiveSummary.sessoesDeVenda)} sessões
+                    {data.objectiveSummary.sessoesDeVenda > 0 && (
+                      <>
+                        {" "}
+                        ({pct(
+                          Number(
+                            (
+                              (data.objectiveSummary.checkoutDeVenda /
+                                data.objectiveSummary.sessoesDeVenda) *
+                              100
+                            ).toFixed(2)
+                          )
+                        )})
+                      </>
+                    )}
+                  </p>
+                </div>
+              </div>
+              <p className="text-[11px] text-[color:var(--muted-foreground)] mt-2.5">
+                {data.objectiveSummary.indefinido} LP{data.objectiveSummary.indefinido === 1 ? "" : "s"} com
+                padrão fora da lista oficial ficam sem métrica primária eleita, e a tabela mostra as duas.
+                {data.objectiveSummary.inferidoPorDado > 0 && (
+                  <> {data.objectiveSummary.inferidoPorDado} foram desambiguadas pelo dado (o /ao/ só é captação quando tem formulário).</>
+                )}
+                {data.objectiveSummary.comAlarme > 0 && (
+                  <>
+                    {" "}
+                    <b className="text-red-600">
+                      {data.objectiveSummary.comAlarme} LP{data.objectiveSummary.comAlarme === 1 ? "" : "s"} com
+                      objetivo declarado e conversão zerada.
+                    </b>
+                  </>
+                )}
+              </p>
+            </div>
+          )}
+
           {/* Filtros */}
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <div className="relative">
@@ -273,6 +364,29 @@ export default function LandingPagesPage() {
                 placeholder="Filtrar por caminho da LP"
                 className="pl-8 pr-3 py-2 text-sm rounded-xl border border-[color:var(--border)] bg-white w-[280px] outline-none focus:border-[#7c5cff]"
               />
+            </div>
+            <div className="flex items-center gap-1 rounded-xl border border-[color:var(--border)] bg-white p-0.5">
+              {([
+                ["todos", "Todas"],
+                ["captacao", "Captação"],
+                ["venda", "Venda"],
+                ["indefinido", "Indefinido"],
+                ["alarme", "⚠ Alarme"],
+              ] as const).map(([k, label]) => (
+                <button
+                  key={k}
+                  onClick={() => setObjFilter(k)}
+                  className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg transition ${
+                    objFilter === k
+                      ? k === "alarme"
+                        ? "bg-red-100 text-red-700"
+                        : "bg-[#ede9fe] text-[#7c5cff]"
+                      : "text-[color:var(--muted-foreground)] hover:bg-[color:var(--muted)]"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
             {isResearch && (
               <button
@@ -301,6 +415,9 @@ export default function LandingPagesPage() {
                     <th className="px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
                       Landing page
                     </th>
+                    <th className="px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
+                      Objetivo
+                    </th>
                     <Th k="sessions">Sessões</Th>
                     <Th k="engagedSessions">Engajadas</Th>
                     <Th k="engagementRate">% engaj.</Th>
@@ -320,6 +437,7 @@ export default function LandingPagesPage() {
                         <Th k="checkoutRate">% checkout</Th>
                       </>
                     )}
+                    <Th k="primaryRate">% da meta</Th>
                     <Th k="bounceRate">Rejeição</Th>
                     <th className="px-3 py-2.5 text-center text-[11px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
                       Clarity
@@ -350,6 +468,9 @@ export default function LandingPagesPage() {
                             <ExternalLink size={11} className="shrink-0 opacity-40" />
                           </a>
                           <span className="text-[10px] text-[color:var(--muted-foreground)]">{r.host}</span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <ObjectiveBadge row={r} />
                         </td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{fmt(r.sessions)}</td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{fmt(r.engagedSessions)}</td>
@@ -395,6 +516,24 @@ export default function LandingPagesPage() {
                             <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.checkoutRate)}</td>
                           </>
                         )}
+                        <td
+                          className="px-3 py-2.5 text-right tabular-nums font-bold"
+                          title={
+                            r.primaryMetric === "leads"
+                              ? "Meta desta LP: gerar lead. Taxa = generate_lead ÷ sessões."
+                              : r.primaryMetric === "checkoutStarts"
+                                ? "Meta desta LP: levar ao checkout. Taxa = chegadas ao checkout ÷ sessões."
+                                : "Objetivo não declarado pelo padrão da URL: nenhuma métrica foi eleita como meta."
+                          }
+                        >
+                          {r.primaryRate !== null ? (
+                            <span className={r.mismatch ? "text-red-600" : "text-[#7c5cff]"}>
+                              {pct(r.primaryRate)}
+                            </span>
+                          ) : (
+                            <span className="text-[color:var(--muted-foreground)] font-normal">-</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2.5 text-right tabular-nums text-[color:var(--muted-foreground)]">
                           {pct(r.bounceRate)}
                         </td>
@@ -446,6 +585,50 @@ export default function LandingPagesPage() {
         </>
       )}
     </main>
+  );
+}
+
+/**
+ * Badge de objetivo da LP.
+ *
+ * Regra universal Suno: o padrão da URL declara o objetivo, e o objetivo declara
+ * qual evento é a conversão. Mostrar as duas métricas com o mesmo peso para toda
+ * LP era o que confundia captação com venda.
+ */
+function ObjectiveBadge({ row }: { row: LPPerfRow }) {
+  const map = {
+    captacao: { label: "Captação", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+    venda: { label: "Venda", cls: "bg-[#ede9fe] text-[#7c5cff] border-[#7c5cff]/30" },
+    indefinido: {
+      label: "Indefinido",
+      cls: "bg-[color:var(--muted)] text-[color:var(--muted-foreground)] border-[color:var(--border)]",
+    },
+  } as const;
+  const m = map[row.objective];
+  return (
+    <div className="flex items-center gap-1.5">
+      <span
+        className={`text-[10px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${m.cls}`}
+        title={
+          row.objectiveFrom === "url"
+            ? "Objetivo declarado pelo padrão da URL."
+            : row.objectiveFrom === "dado"
+              ? "Padrão da URL não é conclusivo (ex: /ao/). Objetivo inferido pelo dado: registra generate_lead, então tem formulário."
+              : "Padrão da URL fora da lista oficial. Nenhuma métrica foi eleita como meta."
+        }
+      >
+        {m.label}
+        {row.objectiveFrom === "dado" && <span className="opacity-60"> ·dado</span>}
+      </span>
+      {row.mismatch && (
+        <span
+          className="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-red-50 text-red-700 border-red-200 cursor-help"
+          title={row.mismatch}
+        >
+          ⚠
+        </span>
+      )}
+    </div>
   );
 }
 

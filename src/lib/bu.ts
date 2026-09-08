@@ -102,6 +102,118 @@ export function isJunkHost(host: string): boolean {
   return JUNK_HOST_RE.test(host || "");
 }
 
+// =====================================================================
+// OBJETIVO DA LANDING PAGE — regra UNIVERSAL do Grupo Suno
+//
+// Material oficial do Growth Team, slide "03 · Research, Status Invest e Funds":
+//   "Têm checkout próprio. A âncora certa depende do OBJETIVO da página, e o
+//    padrão da URL já diz qual é."
+//
+// Vale para TODAS as B.U.s, não é específico de uma property.
+//
+//   Estratégia A · CAPTAÇÃO DE LEAD  → conversão = generate_lead
+//   Estratégia B · VENDA DIRETA      → conversão = cta_click (leva ao checkout)
+//
+// Por que isso importa: cobrar cta_click de uma LP /lm/ ou generate_lead de uma
+// /pv/ produz leitura falsa de fracasso. A aba usava as duas colunas com o mesmo
+// peso para toda LP, o que confundia objetivo com desempenho.
+// =====================================================================
+
+export type LPObjective = "captacao" | "venda" | "indefinido";
+
+/** Estratégia A: padrões oficiais de captação de lead. */
+const CAPTACAO_PATTERNS = [
+  "/lm/",
+  "/ebook-",
+  "/minicurso-",
+  "/planilha-",
+  "/whatsapp-",
+  "/lista-vip-",
+];
+
+/** Estratégia B: padrões oficiais de venda direta. */
+const VENDA_PATTERNS = [
+  "/pv/",
+  "/nossas-assinaturas",
+  "/planos-",
+  "/combo-",
+  "/integracao-",
+  "/especial-",
+];
+
+/**
+ * Classifica a LP pelo padrão da URL.
+ *
+ * ⚠️ O `/ao/` é ambíguo DE PROPÓSITO: pelo material oficial ele é captação
+ * SOMENTE quando a página tem formulário. Isso não se decide pela URL, então
+ * aqui ele sai como "indefinido" e quem chama pode desambiguar pelo dado
+ * (ver `resolveObjective`): se a página registra generate_lead, tem formulário.
+ *
+ * Padrões fora da lista oficial (`/cl/`, `/asset/`, `/redes/`, `/sessao-*`)
+ * também ficam indefinidos. Preferimos declarar "não sei" a adivinhar.
+ */
+export function lpObjective(path: string): LPObjective {
+  const p = (path || "").toLowerCase();
+  if (!p) return "indefinido";
+  if (VENDA_PATTERNS.some((v) => p.includes(v))) return "venda";
+  if (CAPTACAO_PATTERNS.some((c) => p.includes(c))) return "captacao";
+  return "indefinido";
+}
+
+/** true quando o caminho é do grupo `/ao/`, que só é captação se tiver formulário. */
+export function isAmbiguousAo(path: string): boolean {
+  return /\/ao\//i.test(path || "") && lpObjective(path) === "indefinido";
+}
+
+/**
+ * Objetivo final, desambiguando o `/ao/` (e qualquer indefinido) pelo dado.
+ *
+ * Regra de desempate, na ordem:
+ *   1. Padrão da URL, quando é conclusivo.
+ *   2. `/ao/` com generate_lead > 0 tem formulário, logo é captação.
+ *   3. Indefinido com chegada ao checkout e sem lead é venda.
+ *   4. Continua indefinido: a aba mostra as duas métricas sem eleger primária.
+ */
+export function resolveObjective(
+  path: string,
+  signals: { leads: number; checkoutStarts: number | null }
+): { objective: LPObjective; inferredFrom: "url" | "dado" | "nenhum" } {
+  const byUrl = lpObjective(path);
+  if (byUrl !== "indefinido") return { objective: byUrl, inferredFrom: "url" };
+
+  const leads = signals.leads || 0;
+  const chk = signals.checkoutStarts || 0;
+
+  if (isAmbiguousAo(path) && leads > 0) return { objective: "captacao", inferredFrom: "dado" };
+  if (leads > 0 && chk === 0) return { objective: "captacao", inferredFrom: "dado" };
+  if (chk > 0 && leads === 0) return { objective: "venda", inferredFrom: "dado" };
+  return { objective: "indefinido", inferredFrom: "nenhum" };
+}
+
+/**
+ * Desalinhamento entre o objetivo declarado pela URL e o que o dado mostra.
+ * Isso é ALARME, não resultado: LP de captação sem lead tem formulário quebrado,
+ * LP de venda sem chegada ao checkout tem âncora errada ou CTA quebrado.
+ * Devolve null quando não há nada a apontar.
+ */
+export function objectiveMismatch(
+  objective: LPObjective,
+  inferredFrom: "url" | "dado" | "nenhum",
+  signals: { sessions: number; leads: number; checkoutStarts: number | null }
+): string | null {
+  // Só acusa quando o objetivo vem da URL (declarado) e há volume suficiente
+  // para que zero seja informativo.
+  if (inferredFrom !== "url" || signals.sessions < 100) return null;
+
+  if (objective === "captacao" && signals.leads === 0) {
+    return "LP de captação sem nenhum generate_lead no período. Com esse volume de sessão, zero lead aponta formulário quebrado ou evento não disparando, não falta de interesse.";
+  }
+  if (objective === "venda" && (signals.checkoutStarts ?? 0) === 0) {
+    return "LP de venda sem nenhuma chegada ao checkout no período. Aponta CTA apontando para o lugar errado, ou o link do checkout quebrado.";
+  }
+  return null;
+}
+
 const PROFILES: Record<Exclude<BUKey, "desconhecida">, BUProfile> = {
   research: {
     key: "research",

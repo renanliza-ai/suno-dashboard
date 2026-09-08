@@ -22,7 +22,15 @@ import { DataStatus, PeriodBadge, SkeletonBlock, DataErrorCard } from "@/compone
  * fato, e sempre com o aviso de validação.
  */
 
-type SortKey = "sessions" | "engagementRate" | "leads" | "leadRate" | "purchases" | "purchaseRate";
+type SortKey =
+  | "sessions"
+  | "engagementRate"
+  | "leads"
+  | "leadRate"
+  | "checkoutStarts"
+  | "checkoutRate"
+  | "purchases"
+  | "purchaseRate";
 
 const nf = new Intl.NumberFormat("pt-BR");
 const fmt = (n: number | null | undefined) => (n === null || n === undefined ? "-" : nf.format(n));
@@ -191,11 +199,28 @@ export function SpacesView({
           </div>
 
           {/* KPIs */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+          {data.strategyNote && (
+            <div className="rounded-2xl border border-[color:var(--border)] bg-white p-3 mb-4">
+              <p className="text-xs text-[color:var(--muted-foreground)] leading-relaxed">
+                <b className="text-[color:var(--foreground)]">Duas estratégias, duas métricas.</b>{" "}
+                {data.strategyNote}
+              </p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
             <Kpi label="Espaços ativos" value={fmt(data.totals.spaces)} />
             <Kpi label="Sessões geradas" value={fmt(data.totals.sessions)} sub="entraram clicando" />
-            <Kpi label="Leads gerados" value={fmt(data.totals.leads)} accent />
-            {hasPurchase && <Kpi label="Compras geradas" value={fmt(data.totals.purchases)} accent />}
+            <Kpi label="Leads · estratégia A" value={fmt(data.totals.leads)} sub="captação" accent />
+            {hasPurchase && (
+              <Kpi
+                label="Checkout · estratégia B"
+                value={fmt(data.totals.checkoutStarts)}
+                sub="chegou ao checkout"
+                accent
+              />
+            )}
+            {hasPurchase && <Kpi label="Compras" value={fmt(data.totals.purchases)} sub="fim do funil" />}
           </div>
 
           {rows.length === 0 ? (
@@ -225,12 +250,13 @@ export function SpacesView({
                         </th>
                         <Th k="sessions">Sessões</Th>
                         <Th k="engagementRate">% engaj.</Th>
-                        <Th k="leads">Leads</Th>
+                        <Th k="leads">Leads (A)</Th>
                         <Th k="leadRate">% lead</Th>
                         {hasPurchase && (
                           <>
+                            <Th k="checkoutStarts">Checkout (B)</Th>
+                            <Th k="checkoutRate">% checkout</Th>
                             <Th k="purchases">Compras</Th>
-                            <Th k="purchaseRate">% compra</Th>
                           </>
                         )}
                       </tr>
@@ -254,14 +280,19 @@ export function SpacesView({
                           </td>
                           <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmt(r.sessions)}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.engagementRate)}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums">{fmt(r.leads)}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-emerald-700">
+                            {fmt(r.leads)}
+                          </td>
                           <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.leadRate)}</td>
                           {hasPurchase && (
                             <>
                               <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-[#7c5cff]">
+                                {fmt(r.checkoutStarts)}
+                              </td>
+                              <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.checkoutRate)}</td>
+                              <td className="px-3 py-2.5 text-right tabular-nums text-[color:var(--muted-foreground)]">
                                 {fmt(r.purchases)}
                               </td>
-                              <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.purchaseRate)}</td>
                             </>
                           )}
                         </tr>
@@ -271,8 +302,10 @@ export function SpacesView({
                 </div>
               </div>
               <p className="text-[11px] text-[color:var(--muted-foreground)] mt-3 leading-relaxed">
-                Leitura: a coluna Sessões é o CLIQUE, porque uma sessão com esse{" "}
-                <code>utm_medium</code> é uma sessão que entrou por aquele espaço. Não existe contagem de
+                Leitura: <b>Leads (A)</b> e <b>Checkout (B)</b> são as duas estratégias, e cada
+                espaço deve ser cobrado pela que ele serve. Espaço que manda gente para LP de captação
+                não converte em checkout, e isso não é falha dele. A coluna Sessões é o CLIQUE, porque
+                uma sessão com esse <code>utm_medium</code> é uma sessão que entrou por aquele espaço. Não existe contagem de
                 exibição nesse eixo, por isso não há CTR aqui. Ordene por % lead ou % compra para achar o
                 espaço que traz gente que converte, não só volume.
               </p>
