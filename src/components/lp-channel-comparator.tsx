@@ -121,8 +121,17 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
     initialUrls.map(() => null)
   );
   const [inputValue, setInputValue] = useState("");
+  /**
+   * Padrão é "Origem / Meio da sessão", não "Canal padrão".
+   *
+   * Pedido do Renan em 09/09/2026 era ver o MEIO da sessão ao lado da origem
+   * nesta tabela. O split em duas colunas só existe nesta dimensão, porque só
+   * ela carrega os dois eixos. Com o default em "channel" a tabela abria sem as
+   * duas colunas e parecia que a mudança não tinha subido: canal agrupa vários
+   * meios, então não há um meio por linha de canal.
+   */
   const [breakdownDimension, setBreakdownDimension] =
-    useState<LPBreakdownDimension>("channel");
+    useState<LPBreakdownDimension>("sourceMedium");
   const [showAudienceNote, setShowAudienceNote] = useState(false);
   /**
    * Quando a quebra é "Origem / Meio da sessão", o rótulo vem do GA4 como
