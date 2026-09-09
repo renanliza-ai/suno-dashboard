@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { FileText, AlertTriangle, Info, ExternalLink, Search } from "lucide-react";
-import { useGA4, useLPPerformance, type LPPerfRow, type TrafficSlice } from "@/lib/ga4-context";
+import { useGA4, useLPPerformance, type LPPerfRow } from "@/lib/ga4-context";
 import { DataStatus, PeriodBadge, SkeletonBlock, DataErrorCard } from "@/components/data-status";
 import { clarityLinksFor } from "@/lib/clarity";
 import { LPChannelComparator } from "@/components/lp-channel-comparator";
@@ -447,10 +447,6 @@ export default function LandingPagesPage() {
                       "Host",
                       "Objetivo",
                       "Origem do objetivo",
-                      "Origem (top)",
-                      "% origem",
-                      "Meio (top)",
-                      "% meio",
                       "Sessoes",
                       "Sessoes engajadas",
                       "% engajamento",
@@ -471,10 +467,6 @@ export default function LandingPagesPage() {
                       r.host,
                       r.objective,
                       r.objectiveFrom,
-                      r.topSource?.label ?? null,
-                      r.topSource?.sharePct ?? null,
-                      r.topMedium?.label ?? null,
-                      r.topMedium?.sharePct ?? null,
                       r.sessions,
                       r.engagedSessions,
                       r.engagementRate,
@@ -507,12 +499,6 @@ export default function LandingPagesPage() {
                     <th className="px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
                       Objetivo
                     </th>
-                    <th className="px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
-                      Origem
-                    </th>
-                    <th className="px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
-                      Meio
-                    </th>
                     <Th k="sessions">Sessões</Th>
                     <Th k="engagedSessions">Engajadas</Th>
                     <Th k="engagementRate">% engaj.</Th>
@@ -542,7 +528,7 @@ export default function LandingPagesPage() {
                 <tbody>
                   {rows.length === 0 && (
                     <tr>
-                      <td colSpan={16} className="px-3 py-10 text-center text-sm text-[color:var(--muted-foreground)]">
+                      <td colSpan={14} className="px-3 py-10 text-center text-sm text-[color:var(--muted-foreground)]">
                         Nenhuma landing page com sessão neste período.
                       </td>
                     </tr>
@@ -567,8 +553,6 @@ export default function LandingPagesPage() {
                         <td className="px-3 py-2.5">
                           <ObjectiveBadge row={r} />
                         </td>
-                        <TrafficCell top={r.topSource} todos={r.sources} eixo="origem" />
-                        <TrafficCell top={r.topMedium} todos={r.mediums} eixo="meio" />
                         <td className="px-3 py-2.5 text-right tabular-nums">{fmt(r.sessions)}</td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{fmt(r.engagedSessions)}</td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.engagementRate)}</td>
@@ -734,43 +718,6 @@ function ObjectiveBadge({ row }: { row: LPPerfRow }) {
         </span>
       )}
     </div>
-  );
-}
-
-/**
- * Célula de Origem ou Meio da sessão.
- *
- * Mostra o dominante com o share DENTRO do eixo e, no title, o top 5 completo.
- * O share é sobre o total daquele eixo na LP, não sobre as sessões da LP: assim
- * "google 62%" quer dizer 62% das sessões cuja origem foi identificada, e não
- * fica confundido com cobertura de UTM.
- */
-function TrafficCell({
-  top,
-  todos,
-  eixo,
-}: {
-  top: TrafficSlice | null;
-  todos: TrafficSlice[];
-  eixo: "origem" | "meio";
-}) {
-  if (!top) {
-    return <td className="px-3 py-2.5 text-xs text-[color:var(--muted-foreground)]">-</td>;
-  }
-  const detalhe = todos.map((t) => `${t.label}: ${t.sessions} (${t.sharePct}%)`).join(String.fromCharCode(10));
-  return (
-    <td className="px-3 py-2.5 max-w-[150px]">
-      <span
-        className="block text-xs font-medium truncate cursor-help"
-        title={`Top ${eixo} desta LP:` + String.fromCharCode(10) + detalhe}
-      >
-        {top.label}
-      </span>
-      <span className="block text-[10px] text-[color:var(--muted-foreground)]">
-        {top.sharePct.toString().replace(".", ",")}%
-        {todos.length > 1 && ` · +${todos.length - 1}`}
-      </span>
-    </td>
   );
 }
 

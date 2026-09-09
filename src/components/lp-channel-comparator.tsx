@@ -92,7 +92,11 @@ const DIMENSION_OPTIONS: {
   description: string;
 }[] = [
   { value: "channel", label: "Canal padrão", description: "Direct, Organic Search, Paid Search, etc." },
-  { value: "sourceMedium", label: "Fonte / Meio", description: "google / cpc, facebook / paid_social..." },
+  {
+    value: "sourceMedium",
+    label: "Origem / Meio da sessão",
+    description: "Duas colunas: origem (google, facebook) e meio da sessão (cpc, paid_social, email).",
+  },
   { value: "source", label: "Fonte", description: "google, facebook, instagram, direct..." },
   { value: "medium", label: "Meio", description: "cpc, organic, email, social..." },
   { value: "campaign", label: "Campanha", description: "Nome da campanha (utm_campaign)" },
@@ -120,6 +124,17 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
   const [breakdownDimension, setBreakdownDimension] =
     useState<LPBreakdownDimension>("channel");
   const [showAudienceNote, setShowAudienceNote] = useState(false);
+  /**
+   * Quando a quebra é "Origem / Meio da sessão", o rótulo vem do GA4 como
+   * "google / cpc" numa string só. Aqui ele é PARTIDO em duas colunas, porque o
+   * pedido era ver o meio da sessão ao lado da origem, não concatenado.
+   * As outras dimensões continuam com uma coluna de rótulo.
+   */
+  const splitOrigemMeio = breakdownDimension === "sourceMedium";
+  const partirRotulo = (lbl: string): [string, string] => {
+    const i = lbl.indexOf(" / ");
+    return i === -1 ? [lbl, "-"] : [lbl.slice(0, i), lbl.slice(i + 3)];
+  };
   const [exporting, setExporting] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   // Ref na raiz do componente — html-to-image captura tudo dentro daqui
@@ -1172,7 +1187,14 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-[color:var(--muted)]">
-                    <th className="text-left px-3 py-2 font-semibold">{dimMeta.label}</th>
+                    {splitOrigemMeio ? (
+                      <>
+                        <th className="text-left px-3 py-2 font-semibold">Origem</th>
+                        <th className="text-left px-3 py-2 font-semibold">Meio da sessão</th>
+                      </>
+                    ) : (
+                      <th className="text-left px-3 py-2 font-semibold">{dimMeta.label}</th>
+                    )}
                     {results.map((r) => (
                       <th
                         key={r.url}
@@ -1195,13 +1217,28 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
                 <tbody>
                   {allLabels.map((lbl) => (
                     <tr key={lbl} className="border-t border-[color:var(--border)]">
-                      <td className="px-3 py-2 font-medium">
-                        <span
-                          className="inline-block w-2 h-2 rounded-full mr-1.5"
-                          style={{ background: colorFor(lbl) }}
-                        />
-                        {lbl}
-                      </td>
+                      {splitOrigemMeio ? (
+                        <>
+                          <td className="px-3 py-2 font-medium whitespace-nowrap">
+                            <span
+                              className="inline-block w-2 h-2 rounded-full mr-1.5"
+                              style={{ background: colorFor(lbl) }}
+                            />
+                            {partirRotulo(lbl)[0]}
+                          </td>
+                          <td className="px-3 py-2 text-[color:var(--muted-foreground)] whitespace-nowrap">
+                            {partirRotulo(lbl)[1]}
+                          </td>
+                        </>
+                      ) : (
+                        <td className="px-3 py-2 font-medium">
+                          <span
+                            className="inline-block w-2 h-2 rounded-full mr-1.5"
+                            style={{ background: colorFor(lbl) }}
+                          />
+                          {lbl}
+                        </td>
+                      )}
                       {results.map((r) => {
                         const c = r.byChannel.find((x) => x.label === lbl);
                         return (
@@ -1233,7 +1270,9 @@ export function LPChannelComparator({ initialUrls = [] }: { initialUrls?: string
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-[color:var(--border)] bg-[color:var(--muted)]/40">
-                    <td className="px-3 py-2 font-bold">Total</td>
+                    <td className="px-3 py-2 font-bold" colSpan={splitOrigemMeio ? 2 : 1}>
+                      Total
+                    </td>
                     {results.map((r) => (
                       <td key={r.url} className="px-3 py-2 text-right tabular-nums font-bold">
                         {formatNumber(r.totalUsers)} users · {formatNumber(r.totalConversions)} conv
