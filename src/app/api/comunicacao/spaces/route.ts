@@ -306,7 +306,9 @@ export async function GET(req: NextRequest) {
     for (const r of res.data?.rows || []) {
       const med = normalizeSpace(r.dimensionValues?.[0]?.value || "");
       const label = r.dimensionValues?.[1]?.value || "";
-      if (!label || /^((not set|direct|other|empty))$/i.test(label)) continue;
+      // Escape dos parênteses: sem eles o regex casava "not set" cru e deixava
+      // passar "(not set)", que é justamente o valor que o GA4 devolve.
+      if (!label || /^\((not set|direct|other|empty|none)\)$/i.test(label)) continue;
       const n = Number(r.metricValues?.[0]?.value || 0);
       const arr = m.get(med) || [];
       arr.push({ label, sessions: n });
@@ -316,15 +318,31 @@ export async function GET(req: NextRequest) {
     return m;
   };
 
-  const promoOk = Boolean(!promoByMedRes.error && promoByMedRes.data?.rows?.length);
-  const promoNames = promoOk ? buildNameMap(promoByMedRes) : new Map();
+  /**
+   * ⚠️ POR QUE O NOME POR ESPAÇO VEM DA CAMPANHA, E NÃO DA PROMOÇÃO.
+   *
+   * A primeira versão usava `itemPromotionName` cruzado com `sessionMedium` e
+   * o resultado, medido em 09/09/2026 na Research, foi ENGANOSO: a mesma peça
+   * ("Novo banner - E-book como analisar ações - FIXO") aparecia em banner.home,
+   * banner.leadmagnet.home, banner.noticias e banner, com 75% a 89% de share em
+   * todas. Não é coincidência: `itemPromotionName` é ITEM-SCOPED e
+   * `sessionMedium` é SESSION-SCOPED. O cruzamento responde "qual promoção foi
+   * VISTA nas sessões que entraram por este espaço", não "qual peça roda neste
+   * espaço". Como quase toda sessão vê o mesmo bloco de promoção do site, o
+   * nome se repetia e dava a impressão de que todo espaço tem o mesmo banner.
+   *
+   * `sessionCampaignName` é do MESMO escopo do medium, então o cruzamento é
+   * coerente, e na convenção da Suno a campanha nomeia a peça dentro da UTM
+   * ("_SNCE74BC112_ao---suno-one---banner-lead-magnet"). É texto livre, e a
+   * tela declara isso, mas é o único nome por espaço que não mente.
+   *
+   * O ranking por promoção continua existindo no bloco "Criativas nomeadas",
+   * onde ele é honesto: lá o eixo é a própria promoção, sem cruzar escopo.
+   */
   const campNames = buildNameMap(campByMedRes);
-  const bannerNameSource: "promotion" | "campaign" | null = promoOk
-    ? "promotion"
-    : campNames.size > 0
-      ? "campaign"
-      : null;
-  const nameMap = bannerNameSource === "promotion" ? promoNames : campNames;
+  const promoNamesIgnored = Boolean(!promoByMedRes.error && promoByMedRes.data?.rows?.length);
+  const bannerNameSource: "promotion" | "campaign" | null = campNames.size > 0 ? "campaign" : null;
+  const nameMap = campNames;
 
   const nameSlices = (med: string, take = 4): BannerName[] => {
     const arr = nameMap.get(med);
@@ -507,11 +525,12 @@ export async function GET(req: NextRequest) {
        */
       bannerNameSource,
       bannerNameNote:
-        bannerNameSource === "promotion"
-          ? "Nome vindo de itemPromotionName do dataLayer de promoção. É o nome real da peça."
-          : bannerNameSource === "campaign"
-            ? "Nome vindo de sessionCampaignName, porque esta property não popula o dataLayer de promoção. É a CAMPANHA, que costuma nomear a peça dentro do utm_campaign, mas é texto livre e não garante uma peça por linha."
-            : "Não há nome de banner disponível nesta property: nem itemPromotionName nem sessionCampaignName trouxeram valor para estes espaços.",
+        bannerNameSource === "campaign"
+          ? "Nome vindo de sessionCampaignName, do MESMO escopo de sessão do espaço, então o cruzamento é coerente. Na convenção da Suno a campanha nomeia a peça dentro do utm_campaign. É texto livre: não garante exatamente uma peça por linha." +
+            (promoNamesIgnored
+              ? " O dataLayer de promoção existe nesta property, mas itemPromotionName é item-scoped: cruzado com o espaço ele devolvia a MESMA peça em todos os espaços, porque responde 'promoção vista na sessão', não 'peça do espaço'. O ranking por promoção fica no bloco Criativas nomeadas, onde é honesto."
+              : "")
+          : "Não há nome disponível: sessionCampaignName não trouxe valor para estes espaços no período.",
       strategyNote:
         "Captação de lead mede generate_lead. Venda direta mede chegada ao checkout. Cada espaço deve ser cobrado pela estratégia que ele serve: espaço que manda gente para LP de captação não converte em checkout, e isso não é falha dele.",
       limitations: [
