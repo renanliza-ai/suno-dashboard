@@ -470,6 +470,8 @@ export async function GET(req: NextRequest) {
     method: string;
     caveat: string;
     matchedPaths: number;
+    /** Linhas em que a atribuição foi descartada por ser aritmeticamente impossível. */
+    droppedRows: number;
   } | null = null;
 
   if (profile.conversionModel === "captacao_venda" && rows.length > 0) {
@@ -507,11 +509,46 @@ export async function GET(req: NextRequest) {
         if (ev === "purchase") puMap.set(pth, n);
         else bcMap.set(pth, n);
       }
+      /**
+       * GUARDA DE PLAUSIBILIDADE DA ATRIBUIÇÃO.
+       *
+       * A junção aqui é por CAMINHO, não por (host, caminho), porque estes
+       * eventos disparam no domínio de checkout e filtrar host os zeraria. O
+       * preço disso é colisão: se o portal serve um caminho com o mesmo texto
+       * de uma LP, os dois somam na mesma linha.
+       *
+       * Medido em 09/09/2026, primeira versão desta coluna no Status:
+       *   lp.statusinvest.com.br/  ->  2 sessões, 527 checkouts, 198 compras
+       * Absurdo. O `/` da LP colidiu com a home do portal e com a raiz do
+       * próprio checkout.
+       *
+       * Teste aritmético, o mesmo que a auditoria usou para achar as sessões
+       * fantasma: a COMPRA acontece dentro de uma sessão que entrou por aquela
+       * página, então `purchases` não pode passar de `sessions`. O
+       * `begin_checkout` pode passar um pouco (a mesma sessão abre o checkout
+       * mais de uma vez), mas não em ordem de grandeza. Fora desses limites a
+       * atribuição está contaminada e vira null, com o motivo declarado, em vez
+       * de número impossível na tela.
+       */
+      let atribuicaoDescartada = 0;
       for (const row of rows) {
         const bc = bcMap.get(row.path) ?? 0;
+        const pu = puMap.get(row.path) ?? 0;
+        const impossivel =
+          row.path === "/" || // a raiz colide entre host de LP, portal e checkout
+          pu > row.sessions ||
+          bc > row.sessions * 3;
+
+        if (impossivel && (bc > 0 || pu > 0)) {
+          row.checkoutStarts = null;
+          row.checkoutRate = null;
+          row.purchases = null;
+          atribuicaoDescartada++;
+          continue;
+        }
         row.checkoutStarts = bc;
         row.checkoutRate = row.sessions > 0 ? Number(((bc / row.sessions) * 100).toFixed(2)) : null;
-        row.purchases = puMap.get(row.path) ?? 0;
+        row.purchases = pu;
       }
       checkoutAttribution = {
         event: "begin_checkout + purchase",
@@ -520,6 +557,7 @@ export async function GET(req: NextRequest) {
         caveat:
           "Piso de influência, não total. Compra que acontece numa sessão POSTERIOR (entrou pela LP hoje, comprou amanhã por e-mail) é creditada à LP daquela outra sessão. Some a isso o problema conhecido do cookie _ga no checkout, que joga parte da atribuição em (not set). E como estes eventos disparam no domínio de checkout, não é possível filtrar host aqui: a junção é por caminho.",
         matchedPaths: bcMap.size,
+        droppedRows: atribuicaoDescartada,
       };
     }
   }

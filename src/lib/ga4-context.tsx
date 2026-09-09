@@ -1293,7 +1293,10 @@ export type LPPerfData = {
     ctaClicks: number | null; connectRate: number | null; ctaRate: number | null;
     checkoutStarts: number | null; checkoutRate: number | null; purchases: number | null;
   } | null;
-  checkoutAttribution?: { event: string; method: string; caveat: string; matchedPaths: number } | null;
+  checkoutAttribution?: {
+    event: string; method: string; caveat: string;
+    matchedPaths: number; droppedRows?: number;
+  } | null;
   objectiveSummary?: {
     captacao: number; venda: number; indefinido: number;
     inferidoPorDado: number; comAlarme: number;
