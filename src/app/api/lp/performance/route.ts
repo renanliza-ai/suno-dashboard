@@ -24,8 +24,18 @@ export const maxDuration = 60;
  *   1. Filtra host de LP NO SERVIDOR (`hostsIn`), antes do corte de linhas.
  *      Sem isso a agregação sai truncada: pagePath devolve exatamente 3.000
  *      linhas em Research e Status, e a cauda longa nunca chega.
- *   2. Usa `landingPage`, ou seja, a página de ENTRADA da sessão.
- *      `pagePath` contaria qualquer visualização e infla o denominador.
+ *   2. ESCOPO POR MÉTRICA, que é o coração da correção de 09/09/2026:
+ *      - Sessão e engajamento: `landingPage` (a ENTRADA). É o denominador
+ *        certo de uma LP: quem entrou por ela.
+ *      - generate_lead, MQL e cta_click: `pagePath` (onde o evento DISPAROU).
+ *        Medido: os três acontecem na própria LP, nunca na Thank Page.
+ *      - begin_checkout e purchase: `landingPage`, porque disparam no domínio
+ *        de checkout e não há alternativa.
+ *      Antes tudo vinha de landingPage, e o efeito foi lead aparecendo em LP
+ *      que não tem formulário: /nossas-assinaturas mostrava 5 leads sendo LP de
+ *      venda sem form. Eram sessões que entraram nela e converteram em outra
+ *      página. Na Research, 90 landing pages recebiam lead com só 45 páginas
+ *      disparando o evento.
  *   3. Exclui Thank Page do numerador. O cta_click dispara em /obrigado/ e é
  *      clique pós-conversão.
  *   4. Aplica a regra de conversão da B.U. via src/lib/bu.ts. Na Consultoria o
@@ -201,12 +211,32 @@ export async function GET(req: NextRequest) {
       limit,
       dimensionFilter: hostFilter,
     }),
+    /**
+     * ⚠️ `pagePath`, NÃO `landingPage`. Ler antes de mexer.
+     *
+     * generate_lead, os eventos de MQL e o cta_click acontecem NA PÁGINA. Foi
+     * medido em 09/09/2026: os três disparam na própria LP, nunca na Thank Page.
+     *
+     * A versão anterior contava esses eventos por `landingPage`, ou seja pela
+     * página de ENTRADA da sessão. Consequência real, apontada pelo Renan:
+     * `lp.suno.com.br/nossas-assinaturas` aparecia com 5 leads. Ela é LP de
+     * venda e NÃO TEM formulário. Os 5 eram sessões que entraram por ela e
+     * enviaram formulário em OUTRA página depois.
+     *
+     * O tamanho do erro: na Research, 90 landing pages recebiam lead enquanto
+     * só 45 páginas disparam o evento de fato. Metade das linhas com lead era
+     * crédito emprestado da página de entrada.
+     *
+     * Sessão continua vindo de `landingPage` (o denominador certo de LP é quem
+     * ENTROU por ela), e begin_checkout/purchase continuam por `landingPage`
+     * porque disparam no domínio de checkout e não há alternativa.
+     */
     events.length > 0
       ? runReport(propertyId, {
           dateRanges: [dateRange],
           dimensions: [
             { name: "hostName" },
-            { name: "landingPage" },
+            { name: "pagePath" },
             { name: "eventName" },
           ],
           metrics: [{ name: "eventCount" }],
@@ -279,14 +309,27 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Mapa (host|path) -> { evento: contagem }
+  /**
+   * Mapa (host|caminho normalizado) -> { evento: contagem }.
+   *
+   * ⚠️ Normalizar a barra final é obrigatório aqui: o GA4 devolve `pagePath`
+   * COM barra ("/cl/arsenal-independencia/") e `landingPage` SEM
+   * ("/cl/arsenal-independencia"). Sem normalizar, a junção falharia em quase
+   * toda linha e a tabela mostraria zero lead em tudo.
+   */
+  const normPath = (p: string) => (p.length > 1 ? p.replace(/\/+$/, "") : p);
+
   const evMap = new Map<string, Record<string, number>>();
+  /** Total por evento, para conferir quanto sobrou fora das landing pages. */
+  const evTotalMedido: Record<string, number> = {};
   for (const r of eventsRes.data?.rows || []) {
     const host = (r.dimensionValues?.[0]?.value || "").toLowerCase();
-    const path = r.dimensionValues?.[1]?.value ?? "";
-    if (!path) continue; // bucket vazio do GA4: nao e uma pagina
+    const rawPath = r.dimensionValues?.[1]?.value ?? "";
+    if (!rawPath) continue; // bucket vazio do GA4: nao e uma pagina
+    const path = normPath(rawPath);
     const ev = r.dimensionValues?.[2]?.value || "";
     const n = Number(r.metricValues?.[0]?.value || 0);
+    evTotalMedido[ev] = (evTotalMedido[ev] || 0) + n;
     const key = `${host}|${path}`;
     const bucket = evMap.get(key) || {};
     bucket[ev] = (bucket[ev] || 0) + n;
@@ -322,6 +365,8 @@ export async function GET(req: NextRequest) {
   }
   let crossHostDropped = 0;
   let crossHostDroppedSessions = 0;
+  /** Chaves do evMap que foram casadas com alguma linha de landing page. */
+  const evMapConsumido = new Set<string>();
 
   /** (host|path) -> [{label, sessions}] já ordenado por sessões. */
   const buildTrafficMap = (res: typeof sourceRes): Map<string, { label: string; sessions: number }[]> => {
@@ -389,7 +434,11 @@ export async function GET(req: NextRequest) {
     if (thank && !includeThankPages) continue;
 
     const chave = `${host.toLowerCase()}|${path}`;
-    const bucket = evMap.get(chave) || {};
+    // Eventos vêm de pagePath (com barra), a linha vem de landingPage (sem).
+    const chaveEvento = `${host.toLowerCase()}|${normPath(path)}`;
+    const bucket = evMap.get(chaveEvento) || {};
+    // Marca o bucket como consumido para saber o que sobrou fora das LPs.
+    if (evMap.has(chaveEvento)) evMapConsumido.add(chaveEvento);
     const srcSlices = slices(sourceMap.get(chave));
     const medSlices = slices(mediumMap.get(chave));
 
@@ -695,6 +744,22 @@ export async function GET(req: NextRequest) {
         thankPagesExcluded: !includeThankPages,
         crossHostDropped,
         crossHostDroppedSessions,
+        /**
+         * Eventos que aconteceram em páginas do host de LP que NÃO são página
+         * de entrada de nenhuma sessão do período (ex: segundo passo de um
+         * fluxo). Não somem por acidente: ficam declarados aqui, e a soma da
+         * coluna não bate com o total da property por isso.
+         */
+        eventosForaDeLandingPage: (() => {
+          const fora: Record<string, number> = {};
+          for (const [k, bucket] of evMap.entries()) {
+            if (evMapConsumido.has(k)) continue;
+            for (const [ev, n] of Object.entries(bucket)) fora[ev] = (fora[ev] || 0) + n;
+          }
+          return fora;
+        })(),
+        eventosTotalNaProperty: evTotalMedido,
+        atribuicaoDeEvento: "pagePath (onde o evento disparou), não landingPage",
         rowsReturnedByGa4: sessionsRes.data?.rows?.length || 0,
         truncated: (sessionsRes.data?.rows?.length || 0) >= limit,
       },
