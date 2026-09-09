@@ -1267,6 +1267,7 @@ export type LPPerfRow = {
   primaryMetric: "leads" | "checkoutStarts" | "ambas";
   primaryValue: number | null; primaryRate: number | null;
   mismatch: string | null;
+  rateCaveat: string | null;
   topSource: TrafficSlice | null;
   sources: TrafficSlice[];
   topMedium: TrafficSlice | null;

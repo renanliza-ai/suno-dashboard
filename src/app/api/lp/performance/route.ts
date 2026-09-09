@@ -105,6 +105,16 @@ type LPRow = {
   /** Preenchido quando o objetivo declarado não bate com o dado. É alarme. */
   mismatch: string | null;
   /**
+   * Preenchido quando a TAXA não pode ser calculada com honestidade.
+   *
+   * Efeito colateral legítimo do escopo misto: sessão vem da ENTRADA
+   * (landingPage) e o evento vem da PÁGINA onde disparou (pagePath). Se a
+   * pessoa entrou por outra página e converteu nesta, o numerador existe e o
+   * denominador não. Aí a taxa passaria de 100%, que é visivelmente errado.
+   * Nesse caso a taxa vira null e o motivo fica aqui.
+   */
+  rateCaveat: string | null;
+  /**
    * De onde vem o tráfego DESTA LP. `sessionSource` e `sessionMedium` são
    * dimensões de SESSÃO, o mesmo escopo de `landingPage`, então a junção é
    * coerente: a origem é a da sessão que ENTROU por esta página.
@@ -450,6 +460,14 @@ export async function GET(req: NextRequest) {
       ctaCount: profile.ctaEvent ? bucket[profile.ctaEvent] || 0 : 0,
     });
 
+    // Taxa impossível: mais conversão que sessão de entrada.
+    let rateCaveat: string | null = null;
+    if (conv.leads > sessions) {
+      rateCaveat =
+        "Taxa não calculada: esta página registrou mais conversões que sessões de ENTRADA. Isso acontece quando a pessoa chega aqui vindo de outra página do mesmo site, então o evento é desta página mas a sessão foi creditada à página de entrada. O número absoluto de conversões está correto.";
+      conv.connectRate = null;
+    }
+
     rows.push({
       host,
       path,
@@ -480,6 +498,7 @@ export async function GET(req: NextRequest) {
       primaryValue: null,
       primaryRate: null,
       mismatch: null,
+      rateCaveat,
       topSource: srcSlices[0] || null,
       sources: srcSlices,
       topMedium: medSlices[0] || null,

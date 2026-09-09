@@ -577,7 +577,18 @@ export default function LandingPagesPage() {
                             </td>
                           </>
                         ) : (
-                          <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.connectRate)}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">
+                          {r.rateCaveat ? (
+                            <span
+                              className="text-[color:var(--muted-foreground)] cursor-help"
+                              title={r.rateCaveat}
+                            >
+                              n/d
+                            </span>
+                          ) : (
+                            pct(r.connectRate)
+                          )}
+                        </td>
                         )}
                         {hasCta && (
                           <>
