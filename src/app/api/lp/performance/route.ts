@@ -62,6 +62,21 @@ type LPRow = {
   ctaClicks: number | null;
   /** begin_checkout atribuído a esta LP: quem REALMENTE chegou ao checkout. */
   checkoutStarts: number | null;
+  /**
+   * COMPRAS atribuídas a esta LP.
+   *
+   * Pedido do Renan em 09/09/2026: "faça um cruzamento se aquela LP teve alguma
+   * influência no purchase". A âncora é a mesma do checkout: o `purchase`
+   * atribuído à landing page de ENTRADA da sessão. Ou seja, a sessão que
+   * começou naquela LP terminou comprando.
+   *
+   * ⚠️ É influência de ÚLTIMA SESSÃO, não modelo multi-toque. Compra que
+   * acontece numa sessão POSTERIOR (a pessoa entrou pela LP hoje e comprou
+   * amanhã por e-mail) não aparece aqui, aparece na LP daquela outra sessão.
+   * Some a isso o problema conhecido do cookie _ga no checkout, que joga parte
+   * da atribuição em (not set). Ou seja: este número é PISO de influência.
+   */
+  purchases: number | null;
   connectRate: number | null;
   ctaRate: number | null;
   /** begin_checkout ÷ sessões. */
@@ -406,6 +421,7 @@ export async function GET(req: NextRequest) {
       qualificationRate: conv.qualificationRate,
       ctaClicks: conv.ctaClicks,
       checkoutStarts: null, // preenchido abaixo
+      purchases: null, // preenchido abaixo
       connectRate: conv.connectRate,
       ctaRate: conv.ctaRate,
       checkoutRate: null, // preenchido abaixo
@@ -458,19 +474,21 @@ export async function GET(req: NextRequest) {
 
   if (profile.conversionModel === "captacao_venda" && rows.length > 0) {
     const paths = Array.from(new Set(rows.map((r) => r.path))).slice(0, 300);
+    // Uma query só para os DOIS eventos, quebrada por eventName. Evita uma
+    // segunda ida ao GA4 e garante que checkout e compra saiam do mesmo corte.
     const bcRes = await runReport(propertyId, {
       dateRanges: [dateRange],
-      dimensions: [{ name: "landingPage" }],
+      dimensions: [{ name: "landingPage" }, { name: "eventName" }],
       metrics: [{ name: "eventCount" }],
       orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
-      limit: 500,
+      limit: 1000,
       dimensionFilter: {
         andGroup: {
           expressions: [
             {
               filter: {
                 fieldName: "eventName",
-                stringFilter: { matchType: "EXACT" as const, value: "begin_checkout" },
+                inListFilter: { values: ["begin_checkout", "purchase"] },
               },
             },
             { filter: { fieldName: "landingPage", inListFilter: { values: paths } } },
@@ -480,22 +498,27 @@ export async function GET(req: NextRequest) {
     });
     if (!bcRes.error) {
       const bcMap = new Map<string, number>();
+      const puMap = new Map<string, number>();
       for (const r of bcRes.data?.rows || []) {
         const pth = r.dimensionValues?.[0]?.value ?? "";
         if (!pth) continue;
-        bcMap.set(pth, Number(r.metricValues?.[0]?.value || 0));
+        const ev = r.dimensionValues?.[1]?.value || "";
+        const n = Number(r.metricValues?.[0]?.value || 0);
+        if (ev === "purchase") puMap.set(pth, n);
+        else bcMap.set(pth, n);
       }
       for (const row of rows) {
         const bc = bcMap.get(row.path) ?? 0;
         row.checkoutStarts = bc;
         row.checkoutRate = row.sessions > 0 ? Number(((bc / row.sessions) * 100).toFixed(2)) : null;
+        row.purchases = puMap.get(row.path) ?? 0;
       }
       checkoutAttribution = {
-        event: "begin_checkout",
+        event: "begin_checkout + purchase",
         method:
-          "Atribuído pela landing page de entrada da sessão. É a medição de quem CHEGOU ao checkout, não de quem clicou com intenção de ir.",
+          "Atribuídos pela landing page de ENTRADA da sessão. Chegou ao checkout mede quem abriu o checkout; Compras mede quem fechou. É influência de ÚLTIMA SESSÃO: a sessão que começou nesta LP terminou comprando.",
         caveat:
-          "O begin_checkout dispara no domínio de checkout, então não é possível filtrar por host aqui. A junção é por caminho: se o portal servir um caminho com o mesmo texto de uma LP, os dois somam na mesma linha.",
+          "Piso de influência, não total. Compra que acontece numa sessão POSTERIOR (entrou pela LP hoje, comprou amanhã por e-mail) é creditada à LP daquela outra sessão. Some a isso o problema conhecido do cookie _ga no checkout, que joga parte da atribuição em (not set). E como estes eventos disparam no domínio de checkout, não é possível filtrar host aqui: a junção é por caminho.",
         matchedPaths: bcMap.size,
       };
     }
@@ -573,6 +596,7 @@ export async function GET(req: NextRequest) {
   const tDisq = profile.mqlEvents ? sum((r) => r.disqualified || 0) : null;
   const tCta = profile.ctaEvent ? sum((r) => r.ctaClicks || 0) : null;
   const tCheckout = checkoutAttribution ? sum((r) => r.checkoutStarts || 0) : null;
+  const tPurchases = checkoutAttribution ? sum((r) => r.purchases || 0) : null;
 
   const totals = {
     landingPages: rows.length,
@@ -588,6 +612,7 @@ export async function GET(req: NextRequest) {
     connectRate: tSessions > 0 ? Number(((tLeads / tSessions) * 100).toFixed(2)) : null,
     ctaRate: tCta !== null && tSessions > 0 ? Number(((tCta / tSessions) * 100).toFixed(2)) : null,
     checkoutStarts: tCheckout,
+    purchases: tPurchases,
     checkoutRate:
       tCheckout !== null && tSessions > 0 ? Number(((tCheckout / tSessions) * 100).toFixed(2)) : null,
   };

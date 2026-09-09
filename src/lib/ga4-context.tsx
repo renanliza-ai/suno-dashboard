@@ -1260,7 +1260,7 @@ export type LPPerfRow = {
   users: number; avgSessionDuration: number; bounceRate: number;
   leads: number; leadsSource: string;
   qualified: number | null; disqualified: number | null; qualificationRate: number | null;
-  ctaClicks: number | null; checkoutStarts: number | null;
+  ctaClicks: number | null; checkoutStarts: number | null; purchases: number | null;
   connectRate: number | null; ctaRate: number | null; checkoutRate: number | null;
   objective: "captacao" | "venda" | "indefinido";
   objectiveFrom: "url" | "dado" | "nenhum";
@@ -1291,7 +1291,7 @@ export type LPPerfData = {
     engagementRate: number | null; leads: number;
     qualified: number | null; disqualified: number | null; qualificationRate: number | null;
     ctaClicks: number | null; connectRate: number | null; ctaRate: number | null;
-    checkoutStarts: number | null; checkoutRate: number | null;
+    checkoutStarts: number | null; checkoutRate: number | null; purchases: number | null;
   } | null;
   checkoutAttribution?: { event: string; method: string; caveat: string; matchedPaths: number } | null;
   objectiveSummary?: {

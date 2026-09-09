@@ -29,12 +29,8 @@ type SortKey =
   | "qualified"
   | "qualificationRate"
   | "ctaClicks"
-  | "ctaRate"
   | "checkoutStarts"
-  | "checkoutRate"
-  | "primaryValue"
-  | "primaryRate"
-  | "bounceRate";
+  | "purchases";
 
 const nf = new Intl.NumberFormat("pt-BR");
 const fmt = (n: number | null | undefined) => (n === null || n === undefined ? "-" : nf.format(n));
@@ -457,6 +453,7 @@ export default function LandingPagesPage() {
                       "Cliques CTA",
                       "Chegou ao checkout",
                       "% checkout",
+                      "Compras",
                       "% da meta",
                       "% rejeicao",
                       "Alarme",
@@ -477,6 +474,7 @@ export default function LandingPagesPage() {
                       r.ctaClicks,
                       r.checkoutStarts,
                       r.checkoutRate,
+                      r.purchases,
                       r.primaryRate,
                       r.bounceRate,
                       r.mismatch,
@@ -509,17 +507,15 @@ export default function LandingPagesPage() {
                         <Th k="qualificationRate">% qualif.</Th>
                       </>
                     ) : (
-                      <Th k="connectRate">Connect</Th>
+                      <Th k="connectRate">Connect Rate</Th>
                     )}
                     {hasCta && (
                       <>
                         <Th k="ctaClicks">Cliques CTA</Th>
                         <Th k="checkoutStarts">Chegou checkout</Th>
-                        <Th k="checkoutRate">% checkout</Th>
+                        <Th k="purchases">Compras</Th>
                       </>
                     )}
-                    <Th k="primaryRate">% da meta</Th>
-                    <Th k="bounceRate">Rejeição</Th>
                     <th className="px-3 py-2.5 text-center text-[11px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
                       Clarity
                     </th>
@@ -528,7 +524,7 @@ export default function LandingPagesPage() {
                 <tbody>
                   {rows.length === 0 && (
                     <tr>
-                      <td colSpan={14} className="px-3 py-10 text-center text-sm text-[color:var(--muted-foreground)]">
+                      <td colSpan={11} className="px-3 py-10 text-center text-sm text-[color:var(--muted-foreground)]">
                         Nenhuma landing page com sessão neste período.
                       </td>
                     </tr>
@@ -594,30 +590,18 @@ export default function LandingPagesPage() {
                             <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-[#7c5cff]">
                               {fmt(r.checkoutStarts)}
                             </td>
-                            <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.checkoutRate)}</td>
+                            <td
+                              className="px-3 py-2.5 text-right tabular-nums font-bold"
+                              title="Compras atribuídas à sessão que ENTROU por esta LP. É influência de última sessão: compra feita numa sessão posterior é creditada à LP daquela sessão. Piso de influência, não total."
+                            >
+                              {r.purchases ? (
+                                <span className="text-emerald-700">{fmt(r.purchases)}</span>
+                              ) : (
+                                <span className="text-[color:var(--muted-foreground)] font-normal">0</span>
+                              )}
+                            </td>
                           </>
                         )}
-                        <td
-                          className="px-3 py-2.5 text-right tabular-nums font-bold"
-                          title={
-                            r.primaryMetric === "leads"
-                              ? "Meta desta LP: gerar lead. Taxa = generate_lead ÷ sessões."
-                              : r.primaryMetric === "checkoutStarts"
-                                ? "Meta desta LP: levar ao checkout. Taxa = chegadas ao checkout ÷ sessões."
-                                : "Objetivo não declarado pelo padrão da URL: nenhuma métrica foi eleita como meta."
-                          }
-                        >
-                          {r.primaryRate !== null ? (
-                            <span className={r.mismatch ? "text-red-600" : "text-[#7c5cff]"}>
-                              {pct(r.primaryRate)}
-                            </span>
-                          ) : (
-                            <span className="text-[color:var(--muted-foreground)] font-normal">-</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 text-right tabular-nums text-[color:var(--muted-foreground)]">
-                          {pct(r.bounceRate)}
-                        </td>
                         <td className="px-3 py-2.5 text-center">
                           {cl.heatmaps ? (
                             <a
