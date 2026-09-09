@@ -54,6 +54,18 @@ type SpaceRow = {
   space: string;
   rawMediums: string[];
   kind: SpaceKind;
+  /**
+   * Nome do banner/pop-up que roda NESTE espaço.
+   *
+   * Pedido do Renan em 09/09/2026. A fonte varia e o payload DECLARA qual foi
+   * usada em `bannerNameSource`, porque a confiança muda:
+   *   promotion -> itemPromotionName do dataLayer. É o nome de verdade.
+   *   campaign  -> sessionCampaignName. É a campanha, que muitas vezes nomeia
+   *                a peça ("...banner-lead-magnet"), mas é texto livre.
+   * Sem nenhuma das duas o campo vem null e a tela mostra o motivo.
+   */
+  topBannerName: BannerName | null;
+  bannerNames: BannerName[];
   sessions: number;
   engagedSessions: number;
   engagementRate: number | null;
@@ -73,6 +85,8 @@ type SpaceRow = {
   /** compras ÷ sessões geradas pelo espaço */
   purchaseRate: number | null;
 };
+
+type BannerName = { label: string; sessions: number; sharePct: number };
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -171,7 +185,7 @@ export async function GET(req: NextRequest) {
    */
   const wantsCreatives = profile.key === "research" || profile.key === "asset";
 
-  const [medRes, convRes, viewRes, clickRes, creativeRes] = await Promise.all([
+  const [medRes, convRes, viewRes, clickRes, creativeRes, promoByMedRes, campByMedRes] = await Promise.all([
     // 1. Sessões por medium. É o clique: a sessão entrou por aquele espaço.
     runReport(propertyId, {
       dateRanges: [dateRange],
@@ -233,6 +247,36 @@ export async function GET(req: NextRequest) {
           limit: 100,
         })
       : Promise.resolve({ data: null, error: null }),
+    /**
+     * NOME DO BANNER POR ESPAÇO — tentativa 1: o nome real da promoção.
+     *
+     * `itemPromotionName` é item-scoped e `sessionMedium` é session-scoped.
+     * A combinação pode ser recusada pelo GA4; nesse caso o erro fica aqui
+     * dentro e cai no fallback de campanha, sem derrubar a rota.
+     * Métrica `sessions` de propósito: com `eventCount` o GA4 recusa dimensão
+     * de promoção ("Please remove eventCount to make the request compatible").
+     */
+    wantsCreatives
+      ? runReport(propertyId, {
+          dateRanges: [dateRange],
+          dimensions: [{ name: "sessionMedium" }, { name: "itemPromotionName" }],
+          metrics: [{ name: "sessions" }],
+          orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+          limit: 2000,
+        })
+      : Promise.resolve({ data: null, error: null }),
+    /**
+     * Tentativa 2, fallback universal: a campanha. Na prática o time nomeia a
+     * peça dentro do utm_campaign ("_SNCE74BC112_ao---suno-one---banner-lead-magnet"),
+     * então é o mais próximo de nome de banner que existe fora da Research.
+     */
+    runReport(propertyId, {
+      dateRanges: [dateRange],
+      dimensions: [{ name: "sessionMedium" }, { name: "sessionCampaignName" }],
+      metrics: [{ name: "sessions" }],
+      orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+      limit: 3000,
+    }),
   ]);
 
   if (medRes.error) {
@@ -252,6 +296,46 @@ export async function GET(req: NextRequest) {
     b[ev] = (b[ev] || 0) + n;
     convByMedium.set(med, b);
   }
+
+  /**
+   * medium normalizado -> nomes de banner ordenados por sessão.
+   * Descarta "(not set)" e "(direct)": não são nome de peça.
+   */
+  const buildNameMap = (res: typeof campByMedRes) => {
+    const m = new Map<string, { label: string; sessions: number }[]>();
+    for (const r of res.data?.rows || []) {
+      const med = normalizeSpace(r.dimensionValues?.[0]?.value || "");
+      const label = r.dimensionValues?.[1]?.value || "";
+      if (!label || /^((not set|direct|other|empty))$/i.test(label)) continue;
+      const n = Number(r.metricValues?.[0]?.value || 0);
+      const arr = m.get(med) || [];
+      arr.push({ label, sessions: n });
+      m.set(med, arr);
+    }
+    for (const arr of m.values()) arr.sort((a, b) => b.sessions - a.sessions);
+    return m;
+  };
+
+  const promoOk = Boolean(!promoByMedRes.error && promoByMedRes.data?.rows?.length);
+  const promoNames = promoOk ? buildNameMap(promoByMedRes) : new Map();
+  const campNames = buildNameMap(campByMedRes);
+  const bannerNameSource: "promotion" | "campaign" | null = promoOk
+    ? "promotion"
+    : campNames.size > 0
+      ? "campaign"
+      : null;
+  const nameMap = bannerNameSource === "promotion" ? promoNames : campNames;
+
+  const nameSlices = (med: string, take = 4): BannerName[] => {
+    const arr = nameMap.get(med);
+    if (!arr || arr.length === 0) return [];
+    const total = arr.reduce((s2: number, x: { sessions: number }) => s2 + x.sessions, 0);
+    return arr.slice(0, take).map((x: { label: string; sessions: number }) => ({
+      label: x.label,
+      sessions: x.sessions,
+      sharePct: total > 0 ? Number(((x.sessions / total) * 100).toFixed(1)) : 0,
+    }));
+  };
 
   // Agrega por espaço normalizado. Guarda as grafias cruas para a UI poder
   // mostrar que `bannergam` e `bannerGAM` foram somados, em vez de esconder.
@@ -287,9 +371,12 @@ export async function GET(req: NextRequest) {
       });
       const purchases = hasPurchase ? bucket["purchase"] || 0 : null;
       const checkoutStarts = hasPurchase ? bucket["begin_checkout"] || 0 : null;
+      const nomes = nameSlices(space);
       return {
         space,
         rawMediums: Array.from(v.raws).sort(),
+        topBannerName: nomes[0] || null,
+        bannerNames: nomes,
         kind: v.kind,
         sessions: v.sessions,
         engagedSessions: v.engaged,
@@ -418,6 +505,13 @@ export async function GET(req: NextRequest) {
        * por estratégia DE PROPÓSITO, senão um espaço que alimenta LP de captação
        * apareceria como fracasso por não gerar checkout.
        */
+      bannerNameSource,
+      bannerNameNote:
+        bannerNameSource === "promotion"
+          ? "Nome vindo de itemPromotionName do dataLayer de promoção. É o nome real da peça."
+          : bannerNameSource === "campaign"
+            ? "Nome vindo de sessionCampaignName, porque esta property não popula o dataLayer de promoção. É a CAMPANHA, que costuma nomear a peça dentro do utm_campaign, mas é texto livre e não garante uma peça por linha."
+            : "Não há nome de banner disponível nesta property: nem itemPromotionName nem sessionCampaignName trouxeram valor para estes espaços.",
       strategyNote:
         "Captação de lead mede generate_lead. Venda direta mede chegada ao checkout. Cada espaço deve ser cobrado pela estratégia que ele serve: espaço que manda gente para LP de captação não converte em checkout, e isso não é falha dele.",
       limitations: [

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { AlertTriangle, Info, Ban } from "lucide-react";
-import { useGA4, useComunicacaoSpaces, type SpaceRow } from "@/lib/ga4-context";
+import { useGA4, useComunicacaoSpaces, type SpaceRow, type BannerName } from "@/lib/ga4-context";
 import { DataStatus, PeriodBadge, SkeletonBlock, DataErrorCard } from "@/components/data-status";
 import { CollapsibleNote, ShowMore, BotaoExportar, baixarCsv } from "@/components/ui-collapse";
 
@@ -252,8 +252,8 @@ export function SpacesView({
                     onClick={() =>
                       baixarCsv(
                         `espacos-${kind}-${data.bu.key}-${data.range.startDate}-a-${data.range.endDate}`,
-                        ["Espaco","Grafias somadas","Tipo","Sessoes","Sessoes engajadas","% engajamento","Leads (A)","% lead","Chegou ao checkout (B)","% checkout","Compras","% compra"],
-                        rows.map((r) => [r.space, r.rawMediums.join(" | "), r.kind, r.sessions, r.engagedSessions, r.engagementRate, r.leads, r.leadRate, r.checkoutStarts, r.checkoutRate, r.purchases, r.purchaseRate])
+                        ["Espaco","Nome da peca","Fonte do nome","Outras pecas no espaco","Grafias somadas","Tipo","Sessoes","Sessoes engajadas","% engajamento","Leads (A)","% lead","Chegou ao checkout (B)","% checkout","Compras","% compra"],
+                        rows.map((r) => [r.space, r.topBannerName?.label ?? null, data.bannerNameSource ?? null, r.bannerNames.slice(1).map((b) => b.label).join(" | "), r.rawMediums.join(" | "), r.kind, r.sessions, r.engagedSessions, r.engagementRate, r.leads, r.leadRate, r.checkoutStarts, r.checkoutRate, r.purchases, r.purchaseRate])
                       )
                     }
                   />
@@ -266,6 +266,17 @@ export function SpacesView({
                       <tr>
                         <th className="px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
                           Espaço
+                        </th>
+                        <th className="px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
+                          <span
+                            className="cursor-help"
+                            title={data.bannerNameNote || "Nome da peça que roda neste espaço."}
+                          >
+                            Nome do {kind === "banner" ? "banner" : "pop-up"}
+                            {data.bannerNameSource === "campaign" && (
+                              <span className="ml-1 normal-case font-normal text-amber-600">(campanha)</span>
+                            )}
+                          </span>
                         </th>
                         <Th k="sessions">Sessões</Th>
                         <Th k="engagementRate">% engaj.</Th>
@@ -297,6 +308,7 @@ export function SpacesView({
                               </span>
                             )}
                           </td>
+                          <BannerNameCell top={r.topBannerName} todos={r.bannerNames} />
                           <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmt(r.sessions)}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.engagementRate)}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-emerald-700">
@@ -435,6 +447,44 @@ export function SpacesView({
         </>
       )}
     </main>
+  );
+}
+
+/**
+ * Célula com o nome da peça que roda no espaço.
+ *
+ * Quando o espaço serve mais de uma peça, mostra a dominante com o share e o
+ * contador do resto, e o title lista todas. Nunca inventa "a" criativa: um
+ * espaço rotativo tem várias, e esconder isso daria a impressão de peça única.
+ */
+function BannerNameCell({ top, todos }: { top: BannerName | null; todos: BannerName[] }) {
+  if (!top) {
+    return (
+      <td className="px-3 py-2.5">
+        <span
+          className="text-xs text-[color:var(--muted-foreground)] cursor-help"
+          title="Nenhuma peça nomeada chegou ao GA4 para este espaço no período."
+        >
+          sem nome
+        </span>
+      </td>
+    );
+  }
+  const detalhe = todos
+    .map((t) => `${t.label}: ${t.sessions} (${t.sharePct}%)`)
+    .join(String.fromCharCode(10));
+  return (
+    <td className="px-3 py-2.5 max-w-[260px]">
+      <span className="block text-xs font-medium truncate cursor-help" title={detalhe}>
+        {top.label}
+      </span>
+      {todos.length > 1 && (
+        <span className="block text-[10px] text-[color:var(--muted-foreground)]">
+          {top.sharePct.toString().replace(".", ",")}% · +{todos.length - 1} peça
+          {todos.length - 1 === 1 ? "" : "s"} neste espaço
+        </span>
+      )}
+    </td>
   );
 }
 

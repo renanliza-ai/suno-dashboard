@@ -1251,6 +1251,9 @@ export function useGA4Audience(daysOverride?: number) {
 // a rota recusa a requisição em vez de adivinhar qual evento é conversão.
 // =====================================================================
 
+/** Fatia de origem ou meio de uma LP, com share dentro do próprio eixo. */
+export type TrafficSlice = { label: string; sessions: number; sharePct: number };
+
 export type LPPerfRow = {
   host: string; path: string; url: string;
   sessions: number; engagedSessions: number; engagementRate: number | null;
@@ -1264,6 +1267,10 @@ export type LPPerfRow = {
   primaryMetric: "leads" | "checkoutStarts" | "ambas";
   primaryValue: number | null; primaryRate: number | null;
   mismatch: string | null;
+  topSource: TrafficSlice | null;
+  sources: TrafficSlice[];
+  topMedium: TrafficSlice | null;
+  mediums: TrafficSlice[];
   isThankPage: boolean;
 };
 
@@ -1347,8 +1354,11 @@ export function useLPPerformance(pathContains: string = "", daysOverride?: numbe
   return { data, meta, error, loading: meta.status === "loading" };
 }
 
+export type BannerName = { label: string; sessions: number; sharePct: number };
+
 export type SpaceRow = {
   space: string; rawMediums: string[]; kind: "banner" | "popup" | "outro";
+  topBannerName: BannerName | null; bannerNames: BannerName[];
   sessions: number; engagedSessions: number; engagementRate: number | null;
   leads: number; leadsSource: string;
   checkoutStarts: number | null; purchases: number | null;
@@ -1375,6 +1385,8 @@ export type SpacesData = {
   spaces: SpaceRow[];
   totals: { spaces: number; sessions: number; leads: number; checkoutStarts: number | null; purchases: number | null };
   strategyNote?: string;
+  bannerNameSource?: "promotion" | "campaign" | null;
+  bannerNameNote?: string;
   impressions: {
     label: string; viewEvent: string; clickEvent: string;
     warning: string | null; ctrTrustworthy: boolean;

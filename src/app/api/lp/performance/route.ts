@@ -79,8 +79,20 @@ type LPRow = {
   primaryRate: number | null;
   /** Preenchido quando o objetivo declarado não bate com o dado. É alarme. */
   mismatch: string | null;
+  /**
+   * De onde vem o tráfego DESTA LP. `sessionSource` e `sessionMedium` são
+   * dimensões de SESSÃO, o mesmo escopo de `landingPage`, então a junção é
+   * coerente: a origem é a da sessão que ENTROU por esta página.
+   */
+  topSource: TrafficSlice | null;
+  sources: TrafficSlice[];
+  topMedium: TrafficSlice | null;
+  mediums: TrafficSlice[];
   isThankPage: boolean;
 };
+
+/** Uma fatia de origem ou meio, já com share dentro da própria LP. */
+type TrafficSlice = { label: string; sessions: number; sharePct: number };
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -159,7 +171,7 @@ export async function GET(req: NextRequest) {
         }
       : hostFilter;
 
-  const [sessionsRes, eventsRes, servedRes] = await Promise.all([
+  const [sessionsRes, eventsRes, servedRes, sourceRes, mediumRes] = await Promise.all([
     runReport(propertyId, {
       dateRanges: [dateRange],
       dimensions: [{ name: "hostName" }, { name: "landingPage" }],
@@ -208,6 +220,31 @@ export async function GET(req: NextRequest) {
       dimensions: [{ name: "hostName" }, { name: "pagePath" }],
       metrics: [{ name: "screenPageViews" }],
       orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }],
+      limit: 3000,
+      dimensionFilter: hostFilter,
+    }),
+    /**
+     * ORIGEM e MEIO por landing page.
+     *
+     * Duas queries separadas em vez de uma com as duas dimensões: com
+     * sessionSource E sessionMedium juntos o GA4 devolve o produto cartesiano
+     * (google/cpc, google/organic, google/none...), e aí o "top" de cada eixo
+     * sairia do par mais frequente, não do eixo. Separado, cada ranking é o
+     * ranking daquele eixo.
+     */
+    runReport(propertyId, {
+      dateRanges: [dateRange],
+      dimensions: [{ name: "hostName" }, { name: "landingPage" }, { name: "sessionSource" }],
+      metrics: [{ name: "sessions" }],
+      orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+      limit: 3000,
+      dimensionFilter: hostFilter,
+    }),
+    runReport(propertyId, {
+      dateRanges: [dateRange],
+      dimensions: [{ name: "hostName" }, { name: "landingPage" }, { name: "sessionMedium" }],
+      metrics: [{ name: "sessions" }],
+      orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
       limit: 3000,
       dimensionFilter: hostFilter,
     }),
@@ -271,6 +308,37 @@ export async function GET(req: NextRequest) {
   let crossHostDropped = 0;
   let crossHostDroppedSessions = 0;
 
+  /** (host|path) -> [{label, sessions}] já ordenado por sessões. */
+  const buildTrafficMap = (res: typeof sourceRes): Map<string, { label: string; sessions: number }[]> => {
+    const m = new Map<string, { label: string; sessions: number }[]>();
+    for (const r of res.data?.rows || []) {
+      const h = (r.dimensionValues?.[0]?.value || "").toLowerCase();
+      const pth = r.dimensionValues?.[1]?.value ?? "";
+      if (!pth) continue;
+      const label = r.dimensionValues?.[2]?.value || "(not set)";
+      const n = Number(r.metricValues?.[0]?.value || 0);
+      const key = `${h}|${pth}`;
+      const arr = m.get(key) || [];
+      arr.push({ label, sessions: n });
+      m.set(key, arr);
+    }
+    for (const arr of m.values()) arr.sort((a, b) => b.sessions - a.sessions);
+    return m;
+  };
+  const sourceMap = buildTrafficMap(sourceRes);
+  const mediumMap = buildTrafficMap(mediumRes);
+
+  /** Share calculado sobre o total DAQUELE eixo na LP, não sobre as sessões da LP. */
+  const slices = (arr: { label: string; sessions: number }[] | undefined, take = 5): TrafficSlice[] => {
+    if (!arr || arr.length === 0) return [];
+    const total = arr.reduce((s2, x) => s2 + x.sessions, 0);
+    return arr.slice(0, take).map((x) => ({
+      label: x.label,
+      sessions: x.sessions,
+      sharePct: total > 0 ? Number(((x.sessions / total) * 100).toFixed(1)) : 0,
+    }));
+  };
+
   const rows: LPRow[] = [];
   for (const r of sessionsRes.data?.rows || []) {
     const host = r.dimensionValues?.[0]?.value || "(sem host)";
@@ -305,7 +373,10 @@ export async function GET(req: NextRequest) {
     const thank = isThankPage(path);
     if (thank && !includeThankPages) continue;
 
-    const bucket = evMap.get(`${host.toLowerCase()}|${path}`) || {};
+    const chave = `${host.toLowerCase()}|${path}`;
+    const bucket = evMap.get(chave) || {};
+    const srcSlices = slices(sourceMap.get(chave));
+    const medSlices = slices(mediumMap.get(chave));
 
     const conv = computeLPConversion(profile, {
       sessions,
@@ -344,6 +415,10 @@ export async function GET(req: NextRequest) {
       primaryValue: null,
       primaryRate: null,
       mismatch: null,
+      topSource: srcSlices[0] || null,
+      sources: srcSlices,
+      topMedium: medSlices[0] || null,
+      mediums: medSlices,
       isThankPage: thank,
     });
   }
