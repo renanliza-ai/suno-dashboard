@@ -100,6 +100,13 @@ const ALLOWED_METRICS = [
   "bounceRate",
   "screenPageViews",
   "userEngagementDuration",
+  // Receita: necessárias para reconciliar a CONTAGEM do GA4 com o VALOR real
+  // dos pedidos no Zeus. Contagem sozinha não separa "GA4 duplicou o evento"
+  // de "GA4 está vendo um pedido que o checkout não gerou".
+  "purchaseRevenue",
+  "totalRevenue",
+  "transactions",
+  "itemRevenue",
 ];
 
 /**
