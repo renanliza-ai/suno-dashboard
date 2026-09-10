@@ -2035,7 +2035,28 @@ export async function getCheckoutFunnel(
 
   // Calcula ticket médio com base nos purchases reais (não no count do funnel)
   const purchaseStep = resolvedSteps.find((s) => s.stage === "purchase");
-  const avgTicket = purchaseStep && purchaseStep.count > 0 ? totalRevenue / purchaseStep.count : 0;
+  let avgTicket = purchaseStep && purchaseStep.count > 0 ? totalRevenue / purchaseStep.count : 0;
+
+  /**
+   * GUARDA DE PLAUSIBILIDADE DO TICKET (10/09/2026)
+   *
+   * O purchase da Suno chega no GA4 sem `value` e sem `transaction_id`. Em
+   * agosto/2026, mês fechado: 1.891 eventos na Research para R$ 284,35 de
+   * receita, contra R$ 1,2 milhão registrado no Zeus. O fallback para
+   * `eventValue` logo acima não salva, ele só troca uma fonte vazia por outra
+   * quase vazia, e o ticket saía em R$ 0,15.
+   *
+   * O menor ticket real da Suno é R$ 37 (start combo). Ticket abaixo de R$ 1
+   * com volume não é produto barato, é valor ausente no evento. Deixar passar
+   * contamina `abandonedRevenueLost`, que a tela apresenta como dinheiro
+   * perdido no checkout: abandono x R$ 0,15 é um número inventado com cara de
+   * cálculo.
+   */
+  if (avgTicket > 0 && avgTicket < 1) {
+    avgTicket = 0;
+    totalRevenue = 0;
+    revenueSource = "none";
+  }
 
   // Constrói os steps com dropFromPrev + dropAbsolute
   const top = resolvedSteps[0]?.count || 0;
