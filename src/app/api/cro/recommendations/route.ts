@@ -149,7 +149,7 @@ export async function GET(req: NextRequest) {
     pagesCurRes, pagesPrevRes,
     campCurRes, campPrevRes,
     anomaliesResult, checkoutResult, journeyResult, revenueRes, mqlRes,
-    origemRes,
+    origemRes, purchaseCountRes,
   ] = await Promise.all([
     runReport(propertyId, { dateRanges: [curWeek], dimensions: pageDims, metrics: pageMetrics, orderBys: pageOrder, limit: 60 }),
     runReport(propertyId, { dateRanges: [prevWeek], dimensions: pageDims, metrics: pageMetrics, orderBys: pageOrder, limit: 60 }),
@@ -187,6 +187,18 @@ export async function GET(req: NextRequest) {
       orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
       limit: 1000,
     }).catch((e) => ({ data: null, error: (e as Error).message })),
+    // Quantos eventos purchase o GA4 recebeu na MESMA janela da receita.
+    // Serve de denominador para saber se a receita do GA4 e utilizavel, ver
+    // a guarda de ticket medio logo abaixo.
+    runReport(propertyId, {
+      dateRanges: [analysisRange],
+      dimensions: [{ name: "eventName" }],
+      metrics: [{ name: "eventCount" }],
+      dimensionFilter: {
+        filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "purchase" } },
+      },
+      limit: 5,
+    }).catch((e) => ({ data: null, error: (e as Error).message })),
   ]);
 
   // Mapa pagePath -> linhas de origem, para o veredicto de composicao.
@@ -209,7 +221,48 @@ export async function GET(req: NextRequest) {
   // Contexto de receita
   const totalRevenue = Number(revenueRes.data?.rows?.[0]?.metricValues?.[2]?.value || revenueRes.data?.totals?.[0]?.metricValues?.[2]?.value || 0);
   const totalTransactions = Number(revenueRes.data?.rows?.[0]?.metricValues?.[1]?.value || revenueRes.data?.totals?.[0]?.metricValues?.[1]?.value || 0);
-  const avgTicket = totalTransactions > 0 ? totalRevenue / totalTransactions : 0;
+  const purchaseEvents = Number(purchaseCountRes.data?.rows?.[0]?.metricValues?.[0]?.value || 0);
+
+  /**
+   * GUARDA DE TICKET MEDIO (10/09/2026)
+   *
+   * O ticket saia de purchaseRevenue / transactions sem nenhuma verificacao, e
+   * o resultado ia para tres lugares que o time le como dinheiro: o texto de
+   * impacto de cada proposta, o alerta de "cada dia parado" e o _iceScore, que
+   * ORDENA a lista. Numero errado ali nao fica so errado, ele reordena a fila
+   * de trabalho.
+   *
+   * Medido em agosto/2026 contra o Zeus, mes fechado:
+   *   Suno Research   1.891 eventos purchase ->     1 transacao, R$    284,35
+   *   Status Invest   1.777 eventos purchase ->     0 transacao, R$      0,00
+   *   Zeus, mesmo mes: R$ 1.201.338 na Suno e R$ 204.620 no Status
+   *
+   * Ou seja o purchase chega no GA4 sem `value` e sem `transaction_id`. O
+   * ticket da Research virava R$ 284,35 tirado de UMA transacao, tratado como
+   * se fosse a media de 1.891. Nao e ticket, e ruido de uma amostra de 1.
+   *
+   * A guarda: a receita do GA4 so vale se a maior parte dos purchase virou
+   * transacao. Abaixo disso o ticket vira 0, que e o caminho que o codigo ja
+   * tinha para "sem receita": o impacto passa a ser contado em CONVERSOES e o
+   * _iceScore perde o termo de dinheiro, em vez de rankear por um valor falso.
+   * O motivo vai no meta para a tela poder declarar por que sumiu o R$.
+   */
+  const COBERTURA_MINIMA = 0.5;
+  const cobertura = purchaseEvents > 0 ? totalTransactions / purchaseEvents : null;
+  const receitaConfiavel =
+    totalTransactions > 0 &&
+    totalRevenue > 0 &&
+    (cobertura === null || cobertura >= COBERTURA_MINIMA);
+
+  const avgTicket = receitaConfiavel ? totalRevenue / totalTransactions : 0;
+
+  const avgTicketMotivo = receitaConfiavel
+    ? null
+    : purchaseEvents > 0 && totalTransactions === 0
+      ? `O GA4 recebeu ${purchaseEvents} eventos purchase e registrou 0 transacao no periodo: o evento chega sem value e sem transaction_id. Impacto calculado em conversoes, nao em R$.`
+      : cobertura !== null && cobertura < COBERTURA_MINIMA
+        ? `Receita do GA4 descartada: ${totalTransactions} transacao(oes) para ${purchaseEvents} eventos purchase (${(cobertura * 100).toFixed(1)}% de cobertura). Um ticket tirado dessa amostra nao representa a media. Impacto calculado em conversoes.`
+        : "Sem receita registrada no GA4 no periodo. Impacto calculado em conversoes.";
 
   // ============================================================
   // Sinais por PÁGINA (semana atual) + WoW vs semana anterior → 1 rec/página
@@ -658,6 +711,14 @@ export async function GET(req: NextRequest) {
       meta: {
         totalCandidates: recs.length, returnedTop: top.length,
         oppCount: top.length, impactTotal, avgTicket, worseningCount: worsening,
+        receita: {
+          confiavel: receitaConfiavel,
+          motivo: avgTicketMotivo,
+          purchaseEvents,
+          transactions: totalTransactions,
+          purchaseRevenue: totalRevenue,
+          coberturaTransacao: cobertura,
+        },
         sources: {
           pagesCur: pageSigs.length, pagesEligible: eligible.length,
           campaigns: campaigns.length,

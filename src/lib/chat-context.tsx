@@ -1414,6 +1414,31 @@ function handleIntent(
       // ZERO MOCK (30/06): fallback que fabricava vendas/ticket por seed foi
       // removido - sem evento purchase real, reportamos zero honesto.
 
+      /**
+       * GUARDA DE RECEITA (10/09/2026)
+       *
+       * A CONTAGEM de purchase no GA4 e boa: conferida contra o Zeus em
+       * agosto/2026, o Status Invest fechou em 98,3% (GA4 1.777 x Zeus 1.807).
+       * O VALOR nao existe. No mesmo mes a Research registrou 1.891 eventos
+       * purchase e R$ 284,35 de receita, contra R$ 1,2 milhao no Zeus. O evento
+       * chega sem `value` e sem `transaction_id`.
+       *
+       * Sem guarda esta resposta dizia, com o selo "Dado real do GA4":
+       *   "1,9 mil compras, receita total de R$ 284, ticket medio R$ 0,15"
+       *
+       * Nenhum produto da Suno custa R$ 0,15. O menor ticket real medido no
+       * Zeus e R$ 37 (start combo). Entao ticket abaixo de R$ 1 com volume nao
+       * e ticket barato, e valor ausente. Nesse caso a resposta passa a dar so
+       * a contagem, que esta certa, e diz onde o valor vive.
+       */
+      const receitaUsavel = salesCount > 0 && salesRevenue > 0 && avgTicket >= 1;
+      const receitaNota =
+        salesCount > 0 && !receitaUsavel
+          ? salesRevenue > 0
+            ? ` O GA4 registrou apenas R$ ${salesRevenue.toFixed(2)} de valor para essas ${formatCompact(salesCount)} compras, o que daria um ticket de R$ ${avgTicket.toFixed(2)}. Isso e valor ausente no evento, nao venda barata: o \`purchase\` esta chegando sem \`value\` e sem \`transaction_id\`. **A receita real esta no Zeus, nao no GA4.**`
+            : ` O GA4 nao registrou nenhum valor para essas compras: o \`purchase\` chega sem \`value\` e sem \`transaction_id\`. **A receita real esta no Zeus, nao no GA4.**`
+          : "";
+
       // Top campanhas que mais converteram em VENDAS — DA PROPRIEDADE selecionada
       const salesPropertyCampaigns = ([] as ChatCampaignRow[]) // ZERO MOCK 30/06: campanhas fabricadas removidas; usar dado real via Gemini/APIs;
       const salesByCampaign = [...salesPropertyCampaigns]
@@ -1450,23 +1475,25 @@ function handleIntent(
       return {
         reply: `🛒 Vendas (evento \`${eventName}\`) nas **${timeframeLabel}** em ${propertyDisplay}: **${formatCompact(
           salesCount
-        )} compras** · receita total de **R$ ${formatCompact(salesRevenue)}** · ticket médio **R$ ${avgTicket.toFixed(
-          2
-        )}**.${salesRangeNote} ${
+        )} compras**${
+          receitaUsavel
+            ? ` · receita total de **R$ ${formatCompact(salesRevenue)}** · ticket médio **R$ ${avgTicket.toFixed(2)}**`
+            : " · receita **não disponível no GA4**"
+        }.${salesRangeNote} ${
           isReal
-            ? "📡 Dado real do GA4."
+            ? "📡 Contagem real do GA4."
             : live.propertyName
               ? "📡 Sem evento `purchase` disparado no período — estimativa abaixo (verifique configuração de e-commerce no GA4)."
               : "🎭 Modo demo — selecione uma propriedade no header."
-        }`,
+        }${receitaNota}`,
         newHighlight: "events",
         rich: [
           {
             type: "metrics",
             items: [
               { label: "Vendas (purchase)", value: formatCompact(salesCount) },
-              { label: "Receita total", value: `R$ ${formatCompact(salesRevenue)}` },
-              { label: "Ticket médio", value: `R$ ${avgTicket.toFixed(2)}` },
+              { label: "Receita total", value: receitaUsavel ? `R$ ${formatCompact(salesRevenue)}` : "n/d no GA4" },
+              { label: "Ticket médio", value: receitaUsavel ? `R$ ${avgTicket.toFixed(2)}` : "n/d no GA4" },
               { label: "Período", value: timeframeLabel },
             ],
           },
