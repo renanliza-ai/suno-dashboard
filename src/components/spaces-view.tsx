@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { AlertTriangle, Info, Ban } from "lucide-react";
-import { useGA4, useComunicacaoSpaces, type SpaceRow, type BannerName } from "@/lib/ga4-context";
+import { useGA4, useComunicacaoSpaces, type SpaceRow } from "@/lib/ga4-context";
 import { DataStatus, PeriodBadge, SkeletonBlock, DataErrorCard } from "@/components/data-status";
 import { CollapsibleNote, ShowMore, BotaoExportar, baixarCsv } from "@/components/ui-collapse";
 
@@ -27,11 +27,9 @@ type SortKey =
   | "sessions"
   | "engagementRate"
   | "leads"
-  | "leadRate"
+  | "accounts"
   | "checkoutStarts"
-  | "checkoutRate"
-  | "purchases"
-  | "purchaseRate";
+  | "purchases";
 
 const nf = new Intl.NumberFormat("pt-BR");
 const fmt = (n: number | null | undefined) => (n === null || n === undefined ? "-" : nf.format(n));
@@ -57,6 +55,9 @@ export function SpacesView({
   const [visiveis, setVisiveis] = useState(PASSO);
 
   const hasPurchase = data?.bu.conversionModel === "captacao_venda";
+  // Só mostra a coluna de conta criada onde o evento existe de verdade na
+  // property. Coluna zerada por ausência de evento parece desempenho ruim.
+  const temConta = Boolean(data?.eventos?.contaCriada);
 
   const rows = useMemo(() => {
     const base = data?.spaces || [];
@@ -80,9 +81,10 @@ export function SpacesView({
     }
   };
 
-  const Th = ({ k, children }: { k: SortKey; children: React.ReactNode }) => (
+  const Th = ({ k, children, hint }: { k: SortKey; children: React.ReactNode; hint?: string }) => (
     <th
       onClick={() => toggleSort(k)}
+      title={hint}
       className="px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)] cursor-pointer select-none hover:text-[color:var(--foreground)] whitespace-nowrap"
     >
       {children}
@@ -215,14 +217,26 @@ export function SpacesView({
 
           <div
             className="grid grid-cols-2 md:grid-cols-3 lg:[grid-template-columns:repeat(var(--kpis),minmax(0,1fr))] gap-3 mb-5"
-            style={{ ["--kpis" as string]: hasPurchase ? 5 : 3 }}
+            style={{ ["--kpis" as string]: 3 + (temConta ? 1 : 0) + (hasPurchase ? 2 : 0) }}
           >
-            <Kpi label="Espaços ativos" value={fmt(data.totals.spaces)} />
-            <Kpi label="Sessões geradas" value={fmt(data.totals.sessions)} sub="entraram clicando" />
-            <Kpi label="Leads · estratégia A" value={fmt(data.totals.leads)} sub="captação" accent />
+            <Kpi
+              label="Espaços ativos"
+              value={fmt(data.totals.spaces)}
+              sub={data.totals.pecas ? `${nf.format(data.totals.pecas)} peças` : undefined}
+            />
+            <Kpi label="Cliques" value={fmt(data.totals.sessions)} sub="entraram clicando" />
+            <Kpi label="Leads" value={fmt(data.totals.leads)} sub="generate_lead" accent />
+            {temConta && (
+              <Kpi
+                label="Conta criada"
+                value={fmt(data.totals.accounts)}
+                sub={data.eventos?.contaCriada || undefined}
+                accent
+              />
+            )}
             {hasPurchase && (
               <Kpi
-                label="Checkout · estratégia B"
+                label="Checkout"
                 value={fmt(data.totals.checkoutStarts)}
                 sub="chegou ao checkout"
                 accent
@@ -230,6 +244,21 @@ export function SpacesView({
             )}
             {hasPurchase && <Kpi label="Compras" value={fmt(data.totals.purchases)} sub="fim do funil" />}
           </div>
+
+          {/* Integridade da quebra por peça. Só aparece quando NÃO fecha: se a
+              soma das peças perder sessão para corte de linha do GA4, a tela
+              diz quanto, em vez de mostrar uma tabela silenciosamente menor. */}
+          {data.integridade && !data.integridade.fecha && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 mb-4">
+              <p className="text-xs text-amber-900 leading-relaxed">
+                <b>A quebra por peça não fecha com o total por espaço.</b> Os espaços somam{" "}
+                {fmt(data.integridade.sessoesPorEspaco)} cliques e a soma das peças dá{" "}
+                {fmt(data.integridade.sessoesPorPeca)}, diferença de{" "}
+                {fmt(Math.abs(data.integridade.diferenca))}. Isso é corte de linha na API do GA4, não
+                queda de tráfego. Use o total do KPI como número oficial e a tabela para ranquear.
+              </p>
+            </div>
+          )}
 
           {rows.length === 0 ? (
             <div className="rounded-2xl border border-[color:var(--border)] bg-white p-8 text-center">
@@ -245,15 +274,15 @@ export function SpacesView({
           ) : (
             <>
               <div className="flex items-center justify-between mb-3">
-                <h2 className="font-bold">Cliques e conversão por espaço</h2>
+                <h2 className="font-bold">Desempenho por peça</h2>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-[color:var(--muted-foreground)]">{periodLabel}</span>
                   <BotaoExportar
                     onClick={() =>
                       baixarCsv(
-                        `espacos-${kind}-${data.bu.key}-${data.range.startDate}-a-${data.range.endDate}`,
-                        ["Espaco","Nome da peca","Fonte do nome","Outras pecas no espaco","Grafias somadas","Tipo","Sessoes","Sessoes engajadas","% engajamento","Leads (A)","% lead","Chegou ao checkout (B)","% checkout","Compras","% compra"],
-                        rows.map((r) => [r.space, r.topBannerName?.label ?? null, data.bannerNameSource ?? null, r.bannerNames.slice(1).map((b) => b.label).join(" | "), r.rawMediums.join(" | "), r.kind, r.sessions, r.engagedSessions, r.engagementRate, r.leads, r.leadRate, r.checkoutStarts, r.checkoutRate, r.purchases, r.purchaseRate])
+                        `pecas-${kind}-${data.bu.key}-${data.range.startDate}-a-${data.range.endDate}`,
+                        ["Espaco","Nome da peca","Tem nome","% do espaco","Pecas no espaco","Grafias somadas","Tipo","Cliques","Sessoes engajadas","% engajamento","Leads","Conta criada","Chegou ao checkout","Cliques de CTA (todos os destinos)","Compras"],
+                        rows.map((r) => [r.space, r.bannerName, r.named ? "sim" : "nao", r.sharePct, r.pecasNoEspaco, r.rawMediums.join(" | "), r.kind, r.sessions, r.engagedSessions, r.engagementRate, r.leads, r.accounts, r.checkoutStarts, r.ctaClicksAll, r.purchases])
                       )
                     }
                   />
@@ -278,15 +307,34 @@ export function SpacesView({
                             )}
                           </span>
                         </th>
-                        <Th k="sessions">Sessões</Th>
-                        <Th k="engagementRate">% engaj.</Th>
-                        <Th k="leads">Leads (A)</Th>
-                        <Th k="leadRate">% lead</Th>
+                        <Th k="sessions" hint="Sessões que entraram por este espaço com esta peça. É o clique que levou para a LP: quem clicou e não carregou a página não entra.">
+                          Cliques
+                        </Th>
+                        <Th k="engagementRate" hint="Sessões engajadas sobre cliques.">
+                          % engaj.
+                        </Th>
+                        <Th k="leads" hint={`Captação de lead. Evento ${data.eventos?.leads || "generate_lead"}.`}>
+                          Leads
+                        </Th>
+                        {temConta && (
+                          <Th k="accounts" hint={`Evento ${data.eventos?.contaCriada || "lead_create_account"}.`}>
+                            Conta criada
+                          </Th>
+                        )}
                         {hasPurchase && (
                           <>
-                            <Th k="checkoutStarts">Checkout (B)</Th>
-                            <Th k="checkoutRate">% checkout</Th>
-                            <Th k="purchases">Compras</Th>
+                            <Th
+                              k="checkoutStarts"
+                              hint={
+                                data.eventos?.ctaClickObservacao ||
+                                "Chegada ao checkout (begin_checkout)."
+                              }
+                            >
+                              Checkout
+                            </Th>
+                            <Th k="purchases" hint="Evento purchase na sessão que entrou por esta peça.">
+                              Compras
+                            </Th>
                           </>
                         )}
                       </tr>
@@ -294,11 +342,19 @@ export function SpacesView({
                     <tbody>
                       {rowsVisiveis.map((r) => (
                         <tr
-                          key={r.space}
+                          key={`${r.space}||${r.bannerName}`}
                           className="border-b border-[color:var(--border)] last:border-0 hover:bg-[color:var(--muted)]/40"
                         >
                           <td className="px-3 py-2.5">
                             <span className="font-medium">{r.space}</span>
+                            {r.pecasNoEspaco > 1 && (
+                              <span
+                                className="ml-2 text-[10px] text-[color:var(--muted-foreground)]"
+                                title={`Este espaço rodou ${r.pecasNoEspaco} peças distintas no período. Cada uma tem a própria linha.`}
+                              >
+                                {r.pecasNoEspaco} peças
+                              </span>
+                            )}
                             {r.rawMediums.length > 1 && (
                               <span
                                 className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold"
@@ -308,19 +364,29 @@ export function SpacesView({
                               </span>
                             )}
                           </td>
-                          <BannerNameCell top={r.topBannerName} todos={r.bannerNames} />
+                          <PecaCell row={r} />
                           <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmt(r.sessions)}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.engagementRate)}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-emerald-700">
                             {fmt(r.leads)}
                           </td>
-                          <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.leadRate)}</td>
+                          {temConta && (
+                            <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-sky-700">
+                              {fmt(r.accounts)}
+                            </td>
+                          )}
                           {hasPurchase && (
                             <>
-                              <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-[#7c5cff]">
+                              <td
+                                className="px-3 py-2.5 text-right tabular-nums font-semibold text-[#7c5cff]"
+                                title={
+                                  r.ctaClicksAll !== null
+                                    ? `Chegada medida por begin_checkout. Nesta peça houve ${nf.format(r.ctaClicksAll)} cliques de CTA no total, mas o GA4 não permite separar os que iam para o checkout dos que iam para WhatsApp, download ou formulário.`
+                                    : undefined
+                                }
+                              >
                                 {fmt(r.checkoutStarts)}
                               </td>
-                              <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.checkoutRate)}</td>
                               <td className="px-3 py-2.5 text-right tabular-nums text-[color:var(--muted-foreground)]">
                                 {fmt(r.purchases)}
                               </td>
@@ -341,12 +407,20 @@ export function SpacesView({
                 />
               </div>
               <p className="text-[11px] text-[color:var(--muted-foreground)] mt-3 leading-relaxed">
-                Leitura: <b>Leads (A)</b> e <b>Checkout (B)</b> são as duas estratégias, e cada
-                espaço deve ser cobrado pela que ele serve. Espaço que manda gente para LP de captação
-                não converte em checkout, e isso não é falha dele. A coluna Sessões é o CLIQUE, porque
-                uma sessão com esse <code>utm_medium</code> é uma sessão que entrou por aquele espaço. Não existe contagem de
-                exibição nesse eixo, por isso não há CTR aqui. Ordene por % lead ou % compra para achar o
-                espaço que traz gente que converte, não só volume.
+                Cada linha é uma <b>peça dentro de um espaço</b>, então duas peças do mesmo espaço
+                aparecem separadas e dá para ver qual puxa o resultado. <b>Cliques</b> é a sessão que
+                entrou por aquele espaço com aquela UTM: não existe contagem de exibição nesse eixo, por
+                isso não há CTR aqui.{" "}
+                {data.eventos?.checkout && (
+                  <>
+                    <b>Checkout</b> mede <code>{data.eventos.checkout}</code>, ou seja quem CHEGOU no
+                    checkout, e não o <code>cta_click</code> filtrado por destino: esse filtro não existe
+                    no GA4 hoje, e o <code>cta_click</code> mistura checkout com WhatsApp, download e
+                    formulário. O total bruto de cliques de CTA está no tooltip de cada linha e no CSV.
+                  </>
+                )}{" "}
+                Espaço que manda gente para LP de captação não converte em checkout, e isso não é falha
+                dele: cobre cada peça pela estratégia que ela serve.
               </p>
             </>
           )}
@@ -451,37 +525,32 @@ export function SpacesView({
 }
 
 /**
- * Célula com o nome da peça que roda no espaço.
+ * Célula com o nome da peça. Agora cada peça é uma LINHA, então aqui não há
+ * mais "dominante e o resto escondido no title": o que aparece é o nome desta
+ * linha e o peso dela dentro do espaço.
  *
- * Quando o espaço serve mais de uma peça, mostra a dominante com o share e o
- * contador do resto, e o title lista todas. Nunca inventa "a" criativa: um
- * espaço rotativo tem várias, e esconder isso daria a impressão de peça única.
+ * A linha sem nome de campanha é marcada visualmente em vez de escondida. Um
+ * espaço cujo tráfego é quase todo "sem nome" é um espaço com UTM mal marcada,
+ * e isso é informação acionável, não sujeira.
  */
-function BannerNameCell({ top, todos }: { top: BannerName | null; todos: BannerName[] }) {
-  if (!top) {
-    return (
-      <td className="px-3 py-2.5">
-        <span
-          className="text-xs text-[color:var(--muted-foreground)] cursor-help"
-          title="Nenhuma peça nomeada chegou ao GA4 para este espaço no período."
-        >
-          sem nome
-        </span>
-      </td>
-    );
-  }
-  const detalhe = todos
-    .map((t) => `${t.label}: ${t.sessions} (${t.sharePct}%)`)
-    .join(String.fromCharCode(10));
+function PecaCell({ row }: { row: SpaceRow }) {
   return (
-    <td className="px-3 py-2.5 max-w-[260px]">
-      <span className="block text-xs font-medium truncate cursor-help" title={detalhe}>
-        {top.label}
-      </span>
-      {todos.length > 1 && (
+    <td className="px-3 py-2.5 max-w-[300px]">
+      {row.named ? (
+        <span className="block text-xs font-medium truncate cursor-help" title={row.bannerName}>
+          {row.bannerName}
+        </span>
+      ) : (
+        <span
+          className="block text-xs italic text-amber-700 cursor-help"
+          title="Sessões que entraram por este espaço sem utm_campaign marcada. Continuam na tabela para o somatório fechar com o total do espaço, mas não há como saber qual peça as gerou."
+        >
+          sem nome de campanha
+        </span>
+      )}
+      {row.sharePct !== null && (
         <span className="block text-[10px] text-[color:var(--muted-foreground)]">
-          {top.sharePct.toString().replace(".", ",")}% · +{todos.length - 1} peça
-          {todos.length - 1 === 1 ? "" : "s"} neste espaço
+          {row.sharePct.toString().replace(".", ",")}% do espaço
         </span>
       )}
     </td>

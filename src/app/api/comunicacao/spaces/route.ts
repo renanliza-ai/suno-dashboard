@@ -50,43 +50,58 @@ export const maxDuration = 60;
  *   startDate / endDate (YYYY-MM-DD) ou days (default 30)
  */
 
+/**
+ * GRÃO DA LINHA: 1 espaço × 1 peça (11/09/2026).
+ *
+ * Antes era 1 linha por ESPAÇO, com o nome da peça dominante numa coluna e o
+ * resto escondido no title. O Renan apontou que ficava confuso: um espaço que
+ * roda quatro banners mostrava o desempenho somado dos quatro debaixo do nome
+ * de um só, então a peça boa e a peça ruim viravam a mesma linha.
+ *
+ * Agora cada peça tem a própria linha e o próprio desempenho, e o espaço fica
+ * na primeira coluna como agrupador.
+ */
 type SpaceRow = {
   space: string;
   rawMediums: string[];
   kind: SpaceKind;
   /**
-   * Nome do banner/pop-up que roda NESTE espaço.
-   *
-   * Pedido do Renan em 09/09/2026. A fonte varia e o payload DECLARA qual foi
-   * usada em `bannerNameSource`, porque a confiança muda:
-   *   promotion -> itemPromotionName do dataLayer. É o nome de verdade.
-   *   campaign  -> sessionCampaignName. É a campanha, que muitas vezes nomeia
-   *                a peça ("...banner-lead-magnet"), mas é texto livre.
-   * Sem nenhuma das duas o campo vem null e a tela mostra o motivo.
+   * Nome da peça. Vem de `sessionCampaignName`, que é do MESMO escopo de sessão
+   * que o espaço (ver o comentário longo sobre itemPromotionName mais abaixo).
+   * Quando a sessão chegou sem campanha, a linha continua existindo com
+   * `named: false`, para o somatório das peças fechar com o total do espaço em
+   * vez de sumir com tráfego.
    */
-  topBannerName: BannerName | null;
-  bannerNames: BannerName[];
+  bannerName: string;
+  named: boolean;
+  /** Sessões que entraram por este espaço com esta peça. É o CLIQUE. */
   sessions: number;
   engagedSessions: number;
   engagementRate: number | null;
   leads: number;
   leadsSource: string;
+  /** Conta criada: `lead_create_account`. null quando a B.U. não tem o evento. */
+  accounts: number | null;
   /**
-   * Estratégia B: chegada ao checkout (begin_checkout) atribuída ao espaço.
-   * Mesma âncora usada na aba de Landing Pages, para as duas telas não medirem
-   * venda de formas diferentes.
+   * Chegada ao checkout (`begin_checkout`) atribuída a esta peça.
+   *
+   * ⚠️ NÃO é `cta_click` filtrado por destino, que foi o pedido literal. Isso
+   * não é possível no GA4 hoje: `customEvent:cta_destino` é recusado pela API
+   * nas duas properties (reconferido em 11/09/2026), e o Status não tem
+   * NENHUMA dimensão cta_* registrada. Como o `cta_click` mistura checkout com
+   * WhatsApp, download e formulário, filtrá-lo era impossível e somá-lo inteiro
+   * seria mentira. `begin_checkout` mede quem CHEGOU no checkout, que é mais
+   * forte que a intenção do clique, e é a mesma âncora da aba de Landing Pages.
    */
   checkoutStarts: number | null;
+  /** `cta_click` bruto, TODOS os destinos. Só para contexto no tooltip. */
+  ctaClicksAll: number | null;
   purchases: number | null;
-  /** leads ÷ sessões geradas pelo espaço */
-  leadRate: number | null;
-  /** chegadas ao checkout ÷ sessões geradas pelo espaço */
-  checkoutRate: number | null;
-  /** compras ÷ sessões geradas pelo espaço */
-  purchaseRate: number | null;
+  /** Peso desta peça dentro do espaço, em sessões. */
+  sharePct: number | null;
+  /** Quantas peças distintas rodaram neste espaço no período. */
+  pecasNoEspaco: number;
 };
-
-type BannerName = { label: string; sessions: number; sharePct: number };
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -160,14 +175,48 @@ export async function GET(req: NextRequest) {
   } else if (profile.leadEvent) {
     convEvents.push(profile.leadEvent);
   }
+  // Conta criada. Um nome só: no Status `lead_create_account` e `sign_up` têm
+  // eventCount idêntico, somar os dois dobraria o cadastro.
+  const accountEvent = profile.accountEvent || null;
+  if (accountEvent) convEvents.push(accountEvent);
   // `purchase` só existe onde há checkout.
   const hasPurchase = profile.conversionModel === "captacao_venda";
   // Regra universal Suno: captação mede generate_lead, venda mede chegada ao
   // checkout. Os dois entram aqui para a tela poder separar as ESTRATÉGIAS em
   // vez de misturar tudo numa coluna de "conversão".
   if (hasPurchase) convEvents.push("begin_checkout", "purchase");
+  // cta_click entra só como CONTEXTO do tooltip da coluna de checkout, nunca
+  // como a coluna em si: ele mistura destino de checkout com WhatsApp,
+  // download e formulário, e não há dimensão de destino para separar.
+  if (profile.ctaEvent) convEvents.push(profile.ctaEvent);
 
   const pair = impressionPairFor(profile, kindParam);
+
+  /**
+   * PRÉ-FILTRO DE MEDIUM. Existe por causa de TRUNCAMENTO, não de elegância.
+   *
+   * Com o grão novo (espaço × peça) a query passa a competir com `organic`,
+   * `cpc` e `email`, que têm milhares de campanhas cada. O GA4 ordena por
+   * sessão e corta no `limit`, então sem este filtro os espaços de banner, que
+   * têm menos sessão, seriam simplesmente cortados da resposta e a tabela
+   * apareceria incompleta sem nenhum erro.
+   *
+   * Ele é deliberadamente MAIS LARGO que `spaceKind` (superset): o corte fino
+   * continua sendo feito por `spaceKind` em memória, com a taxonomia oficial.
+   * Filtro largo demais custa linha; filtro estreito demais perde espaço.
+   */
+  const medFiltro = {
+    orGroup: {
+      expressions: ["banner", "popup", "modal", "lightbox", "interstitial", "blur", "nai"].map(
+        (v) => ({
+          filter: {
+            fieldName: "sessionMedium",
+            stringFilter: { matchType: "CONTAINS" as const, value: v, caseSensitive: false },
+          },
+        })
+      ),
+    },
+  };
 
   /**
    * RANKING DE CRIATIVA — só onde o dataLayer de promoção está populado.
@@ -187,6 +236,8 @@ export async function GET(req: NextRequest) {
 
   const [medRes, convRes, viewRes, clickRes, creativeRes, promoByMedRes, campByMedRes] = await Promise.all([
     // 1. Sessões por medium. É o clique: a sessão entrou por aquele espaço.
+    //    Fica como TOTAL DE CONTROLE do espaço: a soma das peças tem que bater
+    //    com ele, e a diferença vai declarada no meta.
     runReport(propertyId, {
       dateRanges: [dateRange],
       dimensions: [{ name: "sessionMedium" }],
@@ -194,16 +245,28 @@ export async function GET(req: NextRequest) {
       orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
       limit: 1000,
     }),
-    // 2. Conversão a jusante por medium.
+    // 2. Conversão a jusante por medium E PEÇA. As três dimensões são do mesmo
+    //    escopo de sessão, exceto eventName que é de evento: o cruzamento
+    //    responde "evento disparado em sessão que entrou por este espaço com
+    //    esta campanha", que é exatamente a pergunta da tela.
     convEvents.length > 0
       ? runReport(propertyId, {
           dateRanges: [dateRange],
-          dimensions: [{ name: "sessionMedium" }, { name: "eventName" }],
+          dimensions: [
+            { name: "sessionMedium" },
+            { name: "sessionCampaignName" },
+            { name: "eventName" },
+          ],
           metrics: [{ name: "eventCount" }],
           orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
-          limit: 2000,
+          limit: 20000,
           dimensionFilter: {
-            filter: { fieldName: "eventName", inListFilter: { values: convEvents } },
+            andGroup: {
+              expressions: [
+                { filter: { fieldName: "eventName", inListFilter: { values: convEvents } } },
+                medFiltro,
+              ],
+            },
           },
         })
       : Promise.resolve({ data: null, error: null }),
@@ -273,9 +336,10 @@ export async function GET(req: NextRequest) {
     runReport(propertyId, {
       dateRanges: [dateRange],
       dimensions: [{ name: "sessionMedium" }, { name: "sessionCampaignName" }],
-      metrics: [{ name: "sessions" }],
+      metrics: [{ name: "sessions" }, { name: "engagedSessions" }],
       orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
-      limit: 3000,
+      limit: 20000,
+      dimensionFilter: medFiltro,
     }),
   ]);
 
@@ -286,40 +350,44 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Conversão por medium normalizado
-  const convByMedium = new Map<string, Record<string, number>>();
+  // Chave do grão novo: o par espaço + peça.
+  const chave = (med: string, camp: string) => med + "||" + camp;
+
+  /**
+   * Rótulo da peça. Campanha vazia ou placeholder do GA4 vira UM bucket só por
+   * espaço, em vez de três linhas de lixo separadas.
+   *
+   * O bucket CONTINUA aparecendo na tabela de propósito: sem ele a soma das
+   * peças não fecharia com o total do espaço, e a tela perderia tráfego sem
+   * avisar ninguém. Um espaço cujo tráfego é quase todo "sem nome" é um espaço
+   * com UTM mal marcada, e isso é informação, não sujeira para esconder.
+   */
+  const SEM_NOME = "(sem nome de campanha)";
+  const rotuloPeca = (raw: string): { label: string; named: boolean } => {
+    const v = (raw || "").trim();
+    // Escape dos parênteses: sem eles o regex casava "not set" cru e deixava
+    // passar "(not set)", que é justamente o valor que o GA4 devolve.
+    if (!v || /^((not set|direct|other|empty|none|organic|referral))$/i.test(v)) {
+      return { label: SEM_NOME, named: false };
+    }
+    return { label: v, named: true };
+  };
+
+  // Conversão por espaço × peça × evento.
+  const convByPeca = new Map<string, Record<string, number>>();
   for (const r of convRes.data?.rows || []) {
     const med = normalizeSpace(r.dimensionValues?.[0]?.value || "");
-    const ev = r.dimensionValues?.[1]?.value || "";
+    const { label } = rotuloPeca(r.dimensionValues?.[1]?.value || "");
+    const ev = r.dimensionValues?.[2]?.value || "";
     const n = Number(r.metricValues?.[0]?.value || 0);
-    const b = convByMedium.get(med) || {};
+    const k = chave(med, label);
+    const b = convByPeca.get(k) || {};
     b[ev] = (b[ev] || 0) + n;
-    convByMedium.set(med, b);
+    convByPeca.set(k, b);
   }
 
   /**
-   * medium normalizado -> nomes de banner ordenados por sessão.
-   * Descarta "(not set)" e "(direct)": não são nome de peça.
-   */
-  const buildNameMap = (res: typeof campByMedRes) => {
-    const m = new Map<string, { label: string; sessions: number }[]>();
-    for (const r of res.data?.rows || []) {
-      const med = normalizeSpace(r.dimensionValues?.[0]?.value || "");
-      const label = r.dimensionValues?.[1]?.value || "";
-      // Escape dos parênteses: sem eles o regex casava "not set" cru e deixava
-      // passar "(not set)", que é justamente o valor que o GA4 devolve.
-      if (!label || /^\((not set|direct|other|empty|none)\)$/i.test(label)) continue;
-      const n = Number(r.metricValues?.[0]?.value || 0);
-      const arr = m.get(med) || [];
-      arr.push({ label, sessions: n });
-      m.set(med, arr);
-    }
-    for (const arr of m.values()) arr.sort((a, b) => b.sessions - a.sessions);
-    return m;
-  };
-
-  /**
-   * ⚠️ POR QUE O NOME POR ESPAÇO VEM DA CAMPANHA, E NÃO DA PROMOÇÃO.
+   * ⚠️ POR QUE O NOME DA PEÇA VEM DA CAMPANHA, E NÃO DA PROMOÇÃO.
    *
    * A primeira versão usava `itemPromotionName` cruzado com `sessionMedium` e
    * o resultado, medido em 09/09/2026 na Research, foi ENGANOSO: a mesma peça
@@ -339,47 +407,66 @@ export async function GET(req: NextRequest) {
    * O ranking por promoção continua existindo no bloco "Criativas nomeadas",
    * onde ele é honesto: lá o eixo é a própria promoção, sem cruzar escopo.
    */
-  const campNames = buildNameMap(campByMedRes);
   const promoNamesIgnored = Boolean(!promoByMedRes.error && promoByMedRes.data?.rows?.length);
-  const bannerNameSource: "promotion" | "campaign" | null = campNames.size > 0 ? "campaign" : null;
-  const nameMap = campNames;
 
-  const nameSlices = (med: string, take = 4): BannerName[] => {
-    const arr = nameMap.get(med);
-    if (!arr || arr.length === 0) return [];
-    const total = arr.reduce((s2: number, x: { sessions: number }) => s2 + x.sessions, 0);
-    return arr.slice(0, take).map((x: { label: string; sessions: number }) => ({
-      label: x.label,
-      sessions: x.sessions,
-      sharePct: total > 0 ? Number(((x.sessions / total) * 100).toFixed(1)) : 0,
-    }));
+  // Sessões por espaço × peça. Este é o esqueleto das linhas.
+  type PecaAgg = {
+    space: string;
+    kind: SpaceKind;
+    label: string;
+    named: boolean;
+    sessions: number;
+    engaged: number;
+    raws: Set<string>;
   };
-
-  // Agrega por espaço normalizado. Guarda as grafias cruas para a UI poder
-  // mostrar que `bannergam` e `bannerGAM` foram somados, em vez de esconder.
-  const agg = new Map<
-    string,
-    { kind: SpaceKind; sessions: number; engaged: number; raws: Set<string> }
-  >();
-
-  for (const r of medRes.data?.rows || []) {
+  const pecas = new Map<string, PecaAgg>();
+  for (const r of campByMedRes.data?.rows || []) {
     const raw = r.dimensionValues?.[0]?.value || "(none)";
     const kind = spaceKind(raw);
     if (kind === "outro") continue; // não é banner nem pop-up
     if (kindParam !== "todos" && kind !== kindParam) continue;
 
     const space = normalizeSpace(raw);
+    const { label, named } = rotuloPeca(r.dimensionValues?.[1]?.value || "");
+    const k = chave(space, label);
     const cur =
-      agg.get(space) || { kind, sessions: 0, engaged: 0, raws: new Set<string>() };
+      pecas.get(k) ||
+      { space, kind, label, named, sessions: 0, engaged: 0, raws: new Set<string>() };
     cur.sessions += Number(r.metricValues?.[0]?.value || 0);
-    cur.engaged += Number(r.metricValues?.[2]?.value || 0);
+    cur.engaged += Number(r.metricValues?.[1]?.value || 0);
     cur.raws.add(raw);
-    agg.set(space, cur);
+    pecas.set(k, cur);
   }
 
-  const spaces: SpaceRow[] = Array.from(agg.entries())
-    .map(([space, v]) => {
-      const bucket = convByMedium.get(space) || {};
+  /**
+   * TOTAL DE CONTROLE por espaço, vindo da query que só quebra por medium.
+   *
+   * Serve para duas coisas: o share de cada peça dentro do espaço, e a
+   * verificação de integridade. Se a soma das peças não bater com o total do
+   * espaço, houve corte de linha no GA4 e a tela precisa dizer isso em vez de
+   * apresentar uma tabela que não fecha.
+   */
+  const totalPorEspaco = new Map<string, number>();
+  for (const r of medRes.data?.rows || []) {
+    const raw = r.dimensionValues?.[0]?.value || "(none)";
+    const kind = spaceKind(raw);
+    if (kind === "outro") continue;
+    if (kindParam !== "todos" && kind !== kindParam) continue;
+    const space = normalizeSpace(raw);
+    totalPorEspaco.set(
+      space,
+      (totalPorEspaco.get(space) || 0) + Number(r.metricValues?.[0]?.value || 0)
+    );
+  }
+
+  const pecasPorEspaco = new Map<string, number>();
+  for (const v of pecas.values()) {
+    pecasPorEspaco.set(v.space, (pecasPorEspaco.get(v.space) || 0) + 1);
+  }
+
+  const spaces: SpaceRow[] = Array.from(pecas.values())
+    .map((v) => {
+      const bucket = convByPeca.get(chave(v.space, v.label)) || {};
       const conv = computeLPConversion(profile, {
         sessions: v.sessions,
         leadEventCount: profile.leadEvent ? bucket[profile.leadEvent] || 0 : 0,
@@ -387,34 +474,38 @@ export async function GET(req: NextRequest) {
         disqualified: profile.mqlEvents ? bucket[profile.mqlEvents.disqualified] || 0 : 0,
         ctaCount: 0,
       });
-      const purchases = hasPurchase ? bucket["purchase"] || 0 : null;
-      const checkoutStarts = hasPurchase ? bucket["begin_checkout"] || 0 : null;
-      const nomes = nameSlices(space);
+      const totalEspaco = totalPorEspaco.get(v.space) || 0;
       return {
-        space,
+        space: v.space,
         rawMediums: Array.from(v.raws).sort(),
-        topBannerName: nomes[0] || null,
-        bannerNames: nomes,
         kind: v.kind,
+        bannerName: v.label,
+        named: v.named,
         sessions: v.sessions,
         engagedSessions: v.engaged,
-        engagementRate: v.sessions > 0 ? Number(((v.engaged / v.sessions) * 100).toFixed(1)) : null,
+        engagementRate:
+          v.sessions > 0 ? Number(((v.engaged / v.sessions) * 100).toFixed(1)) : null,
         leads: conv.leads,
         leadsSource: conv.leadsSource,
-        checkoutStarts,
-        purchases,
-        leadRate: v.sessions > 0 ? Number(((conv.leads / v.sessions) * 100).toFixed(2)) : null,
-        checkoutRate:
-          checkoutStarts !== null && v.sessions > 0
-            ? Number(((checkoutStarts / v.sessions) * 100).toFixed(2))
-            : null,
-        purchaseRate:
-          purchases !== null && v.sessions > 0
-            ? Number(((purchases / v.sessions) * 100).toFixed(2))
-            : null,
+        accounts: accountEvent ? bucket[accountEvent] || 0 : null,
+        checkoutStarts: hasPurchase ? bucket["begin_checkout"] || 0 : null,
+        ctaClicksAll: profile.ctaEvent ? bucket[profile.ctaEvent] || 0 : null,
+        purchases: hasPurchase ? bucket["purchase"] || 0 : null,
+        sharePct:
+          totalEspaco > 0 ? Number(((v.sessions / totalEspaco) * 100).toFixed(1)) : null,
+        pecasNoEspaco: pecasPorEspaco.get(v.space) || 1,
       };
     })
     .sort((a, b) => b.sessions - a.sessions);
+
+  const bannerNameSource: "promotion" | "campaign" | null = spaces.some((r) => r.named)
+    ? "campaign"
+    : null;
+
+  // Integridade: a soma das peças tem que bater com o total por espaço.
+  const sessoesPorPeca = spaces.reduce((s2, r) => s2 + r.sessions, 0);
+  const sessoesPorEspaco = Array.from(totalPorEspaco.values()).reduce((s2, n) => s2 + n, 0);
+  const diferencaQuebra = sessoesPorEspaco - sessoesPorPeca;
 
   // Par view/click por página. O CTR só é calculado quando o par existe, e
   // vem sempre acompanhado de `warning` e da flag `ctrTrustworthy`.
@@ -506,11 +597,40 @@ export async function GET(req: NextRequest) {
       spaces,
       creatives,
       totals: {
-        spaces: spaces.length,
-        sessions: spaces.reduce((s, r) => s + r.sessions, 0),
+        // `spaces` continua sendo ESPAÇO distinto, não linha: o KPI "espaços
+        // ativos" perderia o sentido se virasse contagem de peça.
+        spaces: totalPorEspaco.size,
+        pecas: spaces.length,
+        pecasNomeadas: spaces.filter((r) => r.named).length,
+        sessions: sessoesPorPeca,
         leads: spaces.reduce((s, r) => s + r.leads, 0),
+        accounts: accountEvent ? spaces.reduce((s, r) => s + (r.accounts || 0), 0) : null,
         checkoutStarts: hasPurchase ? spaces.reduce((s, r) => s + (r.checkoutStarts || 0), 0) : null,
         purchases: hasPurchase ? spaces.reduce((s, r) => s + (r.purchases || 0), 0) : null,
+      },
+      /**
+       * Verificação de integridade da quebra por peça, exposta de propósito.
+       * Se a soma das peças não bate com o total por espaço, houve corte de
+       * linha no GA4 e a tela precisa dizer, em vez de mostrar uma tabela que
+       * não fecha e deixar o leitor descobrir sozinho.
+       */
+      integridade: {
+        sessoesPorEspaco,
+        sessoesPorPeca,
+        diferenca: diferencaQuebra,
+        fecha: Math.abs(diferencaQuebra) <= Math.max(1, sessoesPorEspaco * 0.005),
+      },
+      eventos: {
+        cliques: "sessões com este utm_medium (a sessão entrou clicando no espaço)",
+        leads: profile.mqlEvents
+          ? `${profile.mqlEvents.qualified} + ${profile.mqlEvents.disqualified}`
+          : profile.leadEvent,
+        contaCriada: accountEvent,
+        checkout: hasPurchase ? "begin_checkout" : null,
+        compras: hasPurchase ? "purchase" : null,
+        ctaClickObservacao: profile.ctaEvent
+          ? `A coluna Checkout mede ${"begin_checkout"}, não ${profile.ctaEvent} filtrado por destino. Filtrar o ${profile.ctaEvent} por destino é impossível no GA4 hoje: customEvent:cta_destino é recusado pela API. O total bruto de ${profile.ctaEvent} vem no campo ctaClicksAll de cada linha, para contexto, e inclui WhatsApp, download e formulário além de checkout.`
+          : null,
       },
       impressions,
       /**
@@ -539,6 +659,10 @@ export async function GET(req: NextRequest) {
           : "Não há ranking de criativa nesta B.U.: as dimensões de promoção do GA4 (itemPromotionName, itemPromotionCreativeName) vêm apenas como (not set), porque o dataLayer de banner não envia o objeto promotion. O identificador mais fino disponível aqui é o ESPAÇO.",
         "CTR por espaço não é calculável: sessionMedium é dimensão de sessão e conta apenas quem ENTROU clicando. Não existe contagem de impressão nesse eixo. Por isso esta tela mostra cliques e conversão por espaço, e não CTR.",
         "A taxonomia de medium está fatiada por grafia (bannergam e bannerGAM, bannerfino e banner.fino e banner.thin, banner e banners). Os valores aqui já vêm normalizados e somados; a coluna de origem mostra quais grafias entraram em cada linha.",
+        profile.ctaEvent
+          ? `A coluna Checkout mede begin_checkout, ou seja quem CHEGOU no checkout, e não ${profile.ctaEvent} filtrado por destino. O filtro por destino não existe: customEvent:cta_destino é recusado pela API do GA4 nas duas properties (reconferido em 11/09/2026) e o Status não tem nenhuma dimensão cta_* registrada. Como o ${profile.ctaEvent} mistura checkout com WhatsApp, download e formulário, usá-lo inteiro nessa coluna infla o número. Registrar cta_destino em Admin > Definições personalizadas destrava a leitura pedida.`
+          : "Esta B.U. não tem evento de clique em CTA registrado no GA4.",
+        `O nome da peça vem de sessionCampaignName. Sessão que chegou pelo espaço sem campanha marcada aparece na linha "${"(sem nome de campanha)"}" em vez de sumir, porque somar só o que tem nome esconderia tráfego real e a tabela não fecharia com o total do espaço.`,
       ],
       caveats: profile.caveats,
     },

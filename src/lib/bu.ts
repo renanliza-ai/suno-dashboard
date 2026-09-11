@@ -68,6 +68,18 @@ export type BUProfile = {
   mqlEvents: { qualified: string; disqualified: string } | null;
   /** Evento de clique pro checkout, quando existe E é confiável no escopo de LP. */
   ctaEvent: string | null;
+  /**
+   * Evento de CONTA CRIADA, quando existe. Pedido do Renan em 11/09/2026 para
+   * a aba de banners: entre o lead e a compra existe o cadastro, e ele some
+   * quando a tela só mostra lead e checkout.
+   *
+   * Medido em 12/08 a 10/09/2026: Research 530, Status 7.615.
+   *
+   * ⚠️ No Status, `lead_create_account` e `sign_up` têm eventCount IDÊNTICO
+   * (7.615): é o mesmo disparo com dois nomes. Por isso aqui entra UM nome só,
+   * nunca os dois. Somar dobraria o cadastro do Status.
+   */
+  accountEvent?: string | null;
   /** Ressalvas que a UI é obrigada a mostrar junto do número. */
   caveats: string[];
   /** Quando preenchido, a aba mostra estado vazio explicando o que falta em vez de número. */
@@ -249,6 +261,7 @@ const PROFILES: Record<Exclude<BUKey, "desconhecida">, BUProfile> = {
     leadDivisorProven: true, // 1,04 evento por sessão: limpo
     mqlEvents: null,
     ctaEvent: "cta_click",
+    accountEvent: "lead_create_account",
     caveats: [
       "O cta_click da Research é 100% de landing page (31.530 em lp + 4.285 em lp2, zero no portal e zero no checkout).",
       "⚠️ O cta_click NÃO é só clique para checkout. Sondando customEvent:cta_name dentro do próprio evento aparecem entrar_na_comunidade (826 sessões), entrar_no_grupo_vip_agora (659), entre_na_comunidade (643), baixar_agora (476) e preencha_o_formulário (449), que são WhatsApp, download e formulário. Existe uma segunda tag disparando cta_click genérico além do motor da LP, que esse sim só dispara para destino de checkout. Use a coluna Chegou ao checkout para ler intenção de compra.",
@@ -271,6 +284,7 @@ const PROFILES: Record<Exclude<BUKey, "desconhecida">, BUProfile> = {
     leadDivisorProven: true,
     mqlEvents: null,
     ctaEvent: "cta_click",
+    accountEvent: "lead_create_account",
     caveats: [
       "Asset não tem property GA4 separada. O corte é por caminho (/asset/*) dentro da Suno Research.",
     ],
@@ -287,6 +301,7 @@ const PROFILES: Record<Exclude<BUKey, "desconhecida">, BUProfile> = {
     leadDivisorProven: true, // 1,09 evento por sessão: limpo
     mqlEvents: null,
     ctaEvent: "cta_click",
+    accountEvent: "lead_create_account",
     caveats: [
       "ATENÇÃO: 97,6% do cta_click do Status vem de statusinvest.com.br (78,8% só na home), não da LP. Sem filtro de host o número infla cerca de 40x. Esta aba conta apenas o cta_click de sessão que ATERRISSOU numa LP deste host, o que é menos que o total do host: o resto veio de sessão que entrou pelo portal e passou pela LP depois.",
       "Nunca somar lead_create_account com sign_up: os dois têm eventCount idêntico (7.385), é o mesmo disparo com dois nomes.",

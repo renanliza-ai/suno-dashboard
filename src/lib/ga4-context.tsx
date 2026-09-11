@@ -1358,15 +1358,18 @@ export function useLPPerformance(pathContains: string = "", daysOverride?: numbe
   return { data, meta, error, loading: meta.status === "loading" };
 }
 
-export type BannerName = { label: string; sessions: number; sharePct: number };
-
+/**
+ * 1 linha = 1 ESPAÇO × 1 PEÇA (11/09/2026). Antes era 1 linha por espaço, com
+ * o desempenho das peças somado debaixo do nome de uma só.
+ */
 export type SpaceRow = {
   space: string; rawMediums: string[]; kind: "banner" | "popup" | "outro";
-  topBannerName: BannerName | null; bannerNames: BannerName[];
+  bannerName: string; named: boolean;
   sessions: number; engagedSessions: number; engagementRate: number | null;
   leads: number; leadsSource: string;
-  checkoutStarts: number | null; purchases: number | null;
-  leadRate: number | null; checkoutRate: number | null; purchaseRate: number | null;
+  accounts: number | null;
+  checkoutStarts: number | null; ctaClicksAll: number | null; purchases: number | null;
+  sharePct: number | null; pecasNoEspaco: number;
 };
 
 export type ImpressionPage = { path: string; views: number; clicks: number; ctr: number | null; implausible: boolean };
@@ -1387,7 +1390,18 @@ export type SpacesData = {
   creatives?: { rows: Creative[]; coveragePct: number | null; notSetSessions: number; note: string } | null;
   range: { startDate: string; endDate: string };
   spaces: SpaceRow[];
-  totals: { spaces: number; sessions: number; leads: number; checkoutStarts: number | null; purchases: number | null };
+  totals: {
+    spaces: number; pecas?: number; pecasNomeadas?: number;
+    sessions: number; leads: number; accounts?: number | null;
+    checkoutStarts: number | null; purchases: number | null;
+  };
+  integridade?: {
+    sessoesPorEspaco: number; sessoesPorPeca: number; diferenca: number; fecha: boolean;
+  };
+  eventos?: {
+    cliques: string; leads: string | null; contaCriada: string | null;
+    checkout: string | null; compras: string | null; ctaClickObservacao: string | null;
+  };
   strategyNote?: string;
   bannerNameSource?: "promotion" | "campaign" | null;
   bannerNameNote?: string;
