@@ -227,11 +227,54 @@ export async function GET(req: NextRequest) {
       ? { filter: { fieldName: "hostName", inListFilter: { values: hostsIn, caseSensitive: false } } }
       : undefined;
 
+  /**
+   * Filtro de país (`countryIn=Brazil` ou `countryNotIn=China,Singapore`).
+   *
+   * Criado em 14/09/2026 para investigar a enxurrada de tráfego automatizado na
+   * Suno Research, onde o Brasil caiu de 90% para 22% das sessões. Sem poder
+   * recortar por país no servidor não havia como caracterizar o tráfego
+   * estrangeiro (que página ele bate, que hora, que navegador) nem produzir a
+   * leitura limpa da property.
+   *
+   * Os dois são exclusivos entre si: pedir os dois ao mesmo tempo é erro, não
+   * uma interseção silenciosa que ninguém entenderia depois.
+   */
+  const countryIn = (req.nextUrl.searchParams.get("countryIn") || "")
+    .split(",").map((c) => c.trim()).filter(Boolean);
+  const countryNotIn = (req.nextUrl.searchParams.get("countryNotIn") || "")
+    .split(",").map((c) => c.trim()).filter(Boolean);
+
+  if (countryIn.length > 0 && countryNotIn.length > 0) {
+    return NextResponse.json(
+      {
+        error: "invalid_country_filter",
+        detail: "Use countryIn OU countryNotIn, nunca os dois na mesma chamada.",
+      },
+      { status: 400 }
+    );
+  }
+
+  const buildCountryFilter = () => {
+    if (countryIn.length > 0) {
+      return { filter: { fieldName: "country", inListFilter: { values: countryIn } } };
+    }
+    if (countryNotIn.length > 0) {
+      return {
+        notExpression: {
+          filter: { fieldName: "country", inListFilter: { values: countryNotIn } },
+        },
+      };
+    }
+    return undefined;
+  };
+
   const evF = buildFilter();
   const hostF = buildHostFilter();
-  // Combina os dois com AND quando ambos existem.
+  const ctryF = buildCountryFilter();
+  // Combina com AND os que existirem.
+  const partes = [evF, hostF, ctryF].filter(Boolean);
   const dimensionFilter =
-    evF && hostF ? { andGroup: { expressions: [evF, hostF] } } : evF || hostF;
+    partes.length === 0 ? undefined : partes.length === 1 ? partes[0] : { andGroup: { expressions: partes } };
 
   // ============================================================
   // 2 queries paralelas: tabela (por dimension) + timeline (por date)
@@ -305,7 +348,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(
     {
       propertyId,
-      query: { dimension, metric, metric2: metric2Safe, days, dateRange, eventFilter, hostsIn },
+      query: { dimension, metric, metric2: metric2Safe, days, dateRange, eventFilter, hostsIn, countryIn, countryNotIn },
       rows,
       timeline,
       totals: { metric: totalMetric, metric2: totalMetric2 },
