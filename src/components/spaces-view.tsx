@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { AlertTriangle, Info, Ban } from "lucide-react";
 import { useGA4, useComunicacaoSpaces, type SpaceRow } from "@/lib/ga4-context";
 import { DataStatus, PeriodBadge, SkeletonBlock, DataErrorCard } from "@/components/data-status";
@@ -72,6 +72,67 @@ export function SpacesView({
   }, [data, sortKey, sortDesc]);
 
   const rowsVisiveis = useMemo(() => rows.slice(0, visiveis), [rows, visiveis]);
+
+  /**
+   * ESPAÇO EXPANDIDO (11/09/2026).
+   *
+   * O grão por peça resolveu a leitura individual mas criou um problema novo:
+   * as 33 peças do banner.home ficam espalhadas pela ordenação global e pela
+   * paginação de 10 em 10, então o badge "33 peças" prometia uma informação
+   * que a tela não entregava. Clicar na linha agora abre o espaço INTEIRO.
+   *
+   * Tudo client-side de propósito: a rota já devolve todas as peças, então
+   * abrir o detalhe não custa uma ida ao GA4.
+   */
+  const [espacoAberto, setEspacoAberto] = useState<string | null>(null);
+
+  /** espaço -> todas as peças dele, já ordenadas por clique. */
+  const pecasPorEspaco = useMemo(() => {
+    const m = new Map<string, SpaceRow[]>();
+    for (const r of data?.spaces || []) {
+      const arr = m.get(r.space) || [];
+      arr.push(r);
+      m.set(r.space, arr);
+    }
+    for (const arr of m.values()) arr.sort((a, b) => b.sessions - a.sessions);
+    return m;
+  }, [data]);
+
+  /** Soma do espaço, para o cabeçalho do detalhe. */
+  const totalDoEspaco = (espaco: string) => {
+    const arr = pecasPorEspaco.get(espaco) || [];
+    return arr.reduce(
+      (acc, r) => ({
+        pecas: acc.pecas + 1,
+        sessions: acc.sessions + r.sessions,
+        engaged: acc.engaged + r.engagedSessions,
+        leads: acc.leads + r.leads,
+        accounts: acc.accounts + (r.accounts || 0),
+        checkoutStarts: acc.checkoutStarts + (r.checkoutStarts || 0),
+        ctaClicksAll: acc.ctaClicksAll + (r.ctaClicksAll || 0),
+        purchases: acc.purchases + (r.purchases || 0),
+      }),
+      { pecas: 0, sessions: 0, engaged: 0, leads: 0, accounts: 0, checkoutStarts: 0, ctaClicksAll: 0, purchases: 0 }
+    );
+  };
+
+  /** Colunas da tabela, para o colSpan do painel de detalhe não desalinhar. */
+  const totalColunas = 5 + (temConta ? 1 : 0) + (hasPurchase ? 2 : 0);
+
+  /**
+   * Âncora do painel: a PRIMEIRA linha visível de cada espaço.
+   *
+   * Sem isso, um espaço que aparece em duas linhas visíveis (banner.leadmagnet
+   * .home aparece duas vezes no topo, por exemplo) renderizaria o painel de
+   * detalhe DUAS vezes, com o mesmo conteúdo, uma embaixo de cada linha.
+   */
+  const ancoraDoEspaco = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of rowsVisiveis) {
+      if (!m.has(r.space)) m.set(r.space, r.bannerName);
+    }
+    return m;
+  }, [rowsVisiveis]);
 
   const toggleSort = (k: SortKey) => {
     if (k === sortKey) setSortDesc((v) => !v);
@@ -341,16 +402,29 @@ export function SpacesView({
                     </thead>
                     <tbody>
                       {rowsVisiveis.map((r) => (
+                        <Fragment key={`${r.space}||${r.bannerName}`}>
                         <tr
-                          key={`${r.space}||${r.bannerName}`}
-                          className="border-b border-[color:var(--border)] last:border-0 hover:bg-[color:var(--muted)]/40"
+                          onClick={() => setEspacoAberto((v) => (v === r.space ? null : r.space))}
+                          title={`Ver as ${r.pecasNoEspaco} peças de ${r.space}`}
+                          className={`border-b border-[color:var(--border)] last:border-0 cursor-pointer ${
+                            espacoAberto === r.space
+                              ? "bg-[#7c5cff]/[0.06]"
+                              : "hover:bg-[color:var(--muted)]/40"
+                          }`}
                         >
                           <td className="px-3 py-2.5">
+                            <span
+                              className={`inline-block mr-1.5 text-[10px] text-[color:var(--muted-foreground)] transition-transform ${
+                                espacoAberto === r.space ? "rotate-90" : ""
+                              }`}
+                            >
+                              ▶
+                            </span>
                             <span className="font-medium">{r.space}</span>
                             {r.pecasNoEspaco > 1 && (
                               <span
-                                className="ml-2 text-[10px] text-[color:var(--muted-foreground)]"
-                                title={`Este espaço rodou ${r.pecasNoEspaco} peças distintas no período. Cada uma tem a própria linha.`}
+                                className="ml-2 text-[10px] text-[color:var(--muted-foreground)] underline decoration-dotted"
+                                title={`Este espaço rodou ${r.pecasNoEspaco} peças distintas no período. Clique para ver todas.`}
                               >
                                 {r.pecasNoEspaco} peças
                               </span>
@@ -393,6 +467,22 @@ export function SpacesView({
                             </>
                           )}
                         </tr>
+                        {espacoAberto === r.space && ancoraDoEspaco.get(r.space) === r.bannerName && (
+                          <tr className="border-b border-[color:var(--border)]">
+                            <td colSpan={totalColunas} className="p-0">
+                              <DetalheEspaco
+                                espaco={r.space}
+                                pecas={pecasPorEspaco.get(r.space) || []}
+                                total={totalDoEspaco(r.space)}
+                                temConta={temConta}
+                                hasPurchase={hasPurchase}
+                                pecaAtual={r.bannerName}
+                                onFechar={() => setEspacoAberto(null)}
+                              />
+                            </td>
+                          </tr>
+                        )}
+                        </Fragment>
                       ))}
                     </tbody>
                   </table>
@@ -407,8 +497,9 @@ export function SpacesView({
                 />
               </div>
               <p className="text-[11px] text-[color:var(--muted-foreground)] mt-3 leading-relaxed">
-                Cada linha é uma <b>peça dentro de um espaço</b>, então duas peças do mesmo espaço
-                aparecem separadas e dá para ver qual puxa o resultado. <b>Cliques</b> é a sessão que
+Cada linha é uma <b>peça dentro de um espaço</b>, então duas peças do mesmo espaço
+                aparecem separadas e dá para ver qual puxa o resultado.{" "}
+                <b>Clique na linha</b> para abrir o espaço inteiro, com todas as peças dele e o total. <b>Cliques</b> é a sessão que
                 entrou por aquele espaço com aquela UTM: não existe contagem de exibição nesse eixo, por
                 isso não há CTR aqui.{" "}
                 {data.eventos?.checkout && (
@@ -521,6 +612,204 @@ export function SpacesView({
         </>
       )}
     </main>
+  );
+}
+
+/**
+ * Painel do espaço inteiro, aberto ao clicar na linha.
+ *
+ * Existe porque o grão por peça, sozinho, quebrou a leitura de ESPAÇO: as 33
+ * peças do banner.home ficam espalhadas pela ordenação global e pela paginação,
+ * então o badge "33 peças" prometia algo que a tela não mostrava.
+ *
+ * Aqui o espaço aparece fechado: o total dele, todas as peças ordenadas por
+ * clique, e o peso de cada uma. A peça da linha clicada fica destacada para não
+ * perder a referência de onde a pessoa veio.
+ */
+function DetalheEspaco({
+  espaco,
+  pecas,
+  total,
+  temConta,
+  hasPurchase,
+  pecaAtual,
+  onFechar,
+}: {
+  espaco: string;
+  pecas: SpaceRow[];
+  total: {
+    pecas: number; sessions: number; engaged: number; leads: number;
+    accounts: number; checkoutStarts: number; ctaClicksAll: number; purchases: number;
+  };
+  temConta: boolean;
+  hasPurchase: boolean;
+  pecaAtual: string;
+  onFechar: () => void;
+}) {
+  const engajTotal = total.sessions > 0 ? Number(((total.engaged / total.sessions) * 100).toFixed(1)) : null;
+  // Quanto do espaço chegou sem utm_campaign. É diagnóstico de marcação, não ruído.
+  const semNome = pecas.filter((p) => !p.named).reduce((s, p) => s + p.sessions, 0);
+  // União das grafias de TODAS as peças do espaço: peças diferentes podem ter
+  // chegado com grafias diferentes do mesmo medium (bannergam e bannerGAM).
+  const rawMediums = Array.from(new Set(pecas.flatMap((p) => p.rawMediums))).sort();
+  const pctSemNome = total.sessions > 0 ? Number(((semNome / total.sessions) * 100).toFixed(1)) : 0;
+
+  return (
+    <div className="bg-[#7c5cff]/[0.04] border-t border-[#7c5cff]/20 px-4 py-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+        <div>
+          <h3 className="font-bold text-sm">
+            {espaco} · {total.pecas} peça{total.pecas === 1 ? "" : "s"} no período
+          </h3>
+          <p className="text-[11px] text-[color:var(--muted-foreground)] mt-0.5">
+            {nf.format(total.sessions)} cliques · {pct(engajTotal)} engaj. · {nf.format(total.leads)} leads
+            {temConta && <> · {nf.format(total.accounts)} contas</>}
+            {hasPurchase && (
+              <>
+                {" "}· {nf.format(total.checkoutStarts)} checkout · {nf.format(total.purchases)} compras
+              </>
+            )}
+            {rawMediums.length > 1 && <> · grafias somadas: {rawMediums.join(", ")}</>}
+          </p>
+        </div>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onFechar();
+          }}
+          className="text-[11px] font-semibold text-[#7c5cff] hover:underline"
+        >
+          fechar
+        </button>
+      </div>
+
+      {pctSemNome > 0 && (
+        <p className="text-[11px] text-amber-700 mb-2">
+          {pct(pctSemNome)} dos cliques deste espaço chegaram sem <code>utm_campaign</code>{" "}
+          ({nf.format(semNome)}), então não dá para saber qual peça os gerou. Marcar a UTM resolve.
+        </p>
+      )}
+
+      <div className="rounded-xl bg-white border border-[color:var(--border)] overflow-hidden">
+        <div className="overflow-x-auto max-h-[420px]">
+          <table className="w-full text-sm">
+            <thead className="bg-[color:var(--muted)] sticky top-0">
+              <tr>
+                <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
+                  Peça
+                </th>
+                <th className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
+                  Cliques
+                </th>
+                <th className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
+                  % do espaço
+                </th>
+                <th className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
+                  % engaj.
+                </th>
+                <th className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
+                  Leads
+                </th>
+                {temConta && (
+                  <th className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
+                    Conta criada
+                  </th>
+                )}
+                {hasPurchase && (
+                  <>
+                    <th className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
+                      Checkout
+                    </th>
+                    <th
+                      className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]"
+                      title="Todos os cliques de CTA, de qualquer destino. O GA4 não permite isolar os que iam para o checkout."
+                    >
+                      Cliques CTA
+                    </th>
+                    <th className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-[color:var(--muted-foreground)]">
+                      Compras
+                    </th>
+                  </>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {pecas.map((p) => (
+                <tr
+                  key={p.bannerName}
+                  className={`border-t border-[color:var(--border)] ${
+                    p.bannerName === pecaAtual ? "bg-[#7c5cff]/[0.07]" : ""
+                  }`}
+                >
+                  <td className="px-3 py-2 max-w-[420px]">
+                    {p.named ? (
+                      <span className="block text-xs truncate" title={p.bannerName}>
+                        {p.bannerName}
+                      </span>
+                    ) : (
+                      <span className="block text-xs italic text-amber-700">sem nome de campanha</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums font-semibold">{fmt(p.sessions)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-[color:var(--muted-foreground)]">
+                    {pct(p.sharePct)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">{pct(p.engagementRate)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-semibold text-emerald-700">
+                    {fmt(p.leads)}
+                  </td>
+                  {temConta && (
+                    <td className="px-3 py-2 text-right tabular-nums font-semibold text-sky-700">
+                      {fmt(p.accounts)}
+                    </td>
+                  )}
+                  {hasPurchase && (
+                    <>
+                      <td className="px-3 py-2 text-right tabular-nums font-semibold text-[#7c5cff]">
+                        {fmt(p.checkoutStarts)}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-[color:var(--muted-foreground)]">
+                        {fmt(p.ctaClicksAll)}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-[color:var(--muted-foreground)]">
+                        {fmt(p.purchases)}
+                      </td>
+                    </>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="bg-[color:var(--muted)]/60">
+              <tr className="border-t-2 border-[color:var(--border)]">
+                <td className="px-3 py-2 text-[11px] font-bold uppercase tracking-wider">Total do espaço</td>
+                <td className="px-3 py-2 text-right tabular-nums font-bold">{fmt(total.sessions)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-[color:var(--muted-foreground)]">100%</td>
+                <td className="px-3 py-2 text-right tabular-nums">{pct(engajTotal)}</td>
+                <td className="px-3 py-2 text-right tabular-nums font-bold text-emerald-700">
+                  {fmt(total.leads)}
+                </td>
+                {temConta && (
+                  <td className="px-3 py-2 text-right tabular-nums font-bold text-sky-700">
+                    {fmt(total.accounts)}
+                  </td>
+                )}
+                {hasPurchase && (
+                  <>
+                    <td className="px-3 py-2 text-right tabular-nums font-bold text-[#7c5cff]">
+                      {fmt(total.checkoutStarts)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-[color:var(--muted-foreground)]">
+                      {fmt(total.ctaClicksAll)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums font-bold">{fmt(total.purchases)}</td>
+                  </>
+                )}
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
   );
 }
 
