@@ -191,8 +191,49 @@ export async function GET(req: NextRequest) {
     endDate = isoDate(end);
   }
 
+  /**
+   * MODO GEOGRÁFICO (`?geo=1`), criado em 15/09/2026.
+   *
+   * Motivo: o GA4 da Research mostrava 106.584 sessões com `sessionSource =
+   * GoogleAds` vindas de Singapura, quase 5x o volume do Brasil. Antes de
+   * pedir bloqueio no Cloudflare era obrigatório saber se o Google Ads SERVIU e
+   * COBROU esses cliques, porque bloquear na borda não desfaz cobrança: o
+   * clique é faturado no leilão, antes de a pessoa chegar no site.
+   *
+   * `geographic_view` com `location_type = LOCATION_OF_PRESENCE` responde onde
+   * a pessoa ESTAVA, que é a pergunta certa. O padrão do Google Ads mistura
+   * presença com interesse, e "interesse" traz gente de fora buscando sobre o
+   * Brasil, o que confundiria a leitura.
+   */
+  const geoMode = req.nextUrl.searchParams.get("geo") === "1";
+
+  /** country_criterion_id -> nome. Só os que importam para esta investigação. */
+  const GEO_ID: Record<string, string> = {
+    "2076": "Brazil", "2156": "China", "2702": "Singapore", "2840": "United States",
+    "2032": "Argentina", "2586": "Pakistan", "2620": "Portugal", "2724": "Spain",
+    "2356": "India", "2360": "Indonesia", "2704": "Vietnam", "2392": "Japan",
+    "2410": "South Korea", "2344": "Hong Kong", "2158": "Taiwan", "2643": "Russia",
+    "2484": "Mexico", "2170": "Colombia", "2152": "Chile", "2858": "Uruguay",
+    "2600": "Paraguay", "2068": "Bolivia", "2604": "Peru", "2276": "Germany",
+    "2250": "France", "2826": "United Kingdom", "2380": "Italy", "2528": "Netherlands",
+    "2124": "Canada", "2036": "Australia", "2710": "South Africa", "2566": "Nigeria",
+  };
+
+  const geoQuery = `
+    SELECT
+      geographic_view.country_criterion_id,
+      geographic_view.location_type,
+      metrics.impressions,
+      metrics.clicks,
+      metrics.cost_micros,
+      metrics.conversions
+    FROM geographic_view
+    WHERE segments.date BETWEEN '${startDate}' AND '${endDate}'
+    AND geographic_view.location_type = 'LOCATION_OF_PRESENCE'
+  `.replace(/\s+/g, " ").trim();
+
   // GAQL — Google Ads Query Language
-  const query = `
+  const queryCampanha = `
     SELECT
       campaign.id,
       campaign.name,
@@ -209,6 +250,8 @@ export async function GET(req: NextRequest) {
     WHERE segments.date BETWEEN '${startDate}' AND '${endDate}'
     AND campaign.status IN ('ENABLED', 'PAUSED')
   `.replace(/\s+/g, " ").trim();
+
+  const query = geoMode ? geoQuery : queryCampanha;
 
   type GAdsRow = {
     campaign?: { id?: string; name?: string; status?: string };
@@ -336,6 +379,49 @@ export async function GET(req: NextRequest) {
   const rows: GAdsRow[] = [];
   for (const chunk of Array.isArray(streamData) ? streamData : []) {
     if (chunk.results) rows.push(...chunk.results);
+  }
+
+  /**
+   * Saída do modo geográfico. Agrega por país e devolve cedo, sem passar pelo
+   * agregador de campanha, que espera outro formato de linha.
+   */
+  if (geoMode) {
+    type GeoRow = { geographicView?: { countryCriterionId?: string } } & GAdsRow;
+    const porPais = new Map<string, { impressions: number; clicks: number; spend: number; conversions: number }>();
+    for (const r of rows as GeoRow[]) {
+      const id = String(r.geographicView?.countryCriterionId || "").replace(/^.*\//, "");
+      const nome = GEO_ID[id] || `geo:${id || "desconhecido"}`;
+      const a = porPais.get(nome) || { impressions: 0, clicks: 0, spend: 0, conversions: 0 };
+      a.impressions += Number(r.metrics?.impressions || 0);
+      a.clicks += Number(r.metrics?.clicks || 0);
+      a.spend += Number(r.metrics?.costMicros || 0) / 1_000_000;
+      a.conversions += Number(r.metrics?.conversions || 0);
+      porPais.set(nome, a);
+    }
+    const lista = Array.from(porPais.entries())
+      .map(([country, v]) => ({
+        country,
+        ...v,
+        spend: Number(v.spend.toFixed(2)),
+        cpc: v.clicks > 0 ? Number((v.spend / v.clicks).toFixed(2)) : null,
+      }))
+      .sort((a, b) => b.clicks - a.clicks);
+    const totalClicks = lista.reduce((s, r) => s + r.clicks, 0);
+    const totalSpend = lista.reduce((s, r) => s + r.spend, 0);
+    return NextResponse.json(
+      {
+        ok: true,
+        mode: "geo",
+        apiVersion: usedVersion,
+        range: { startDate, endDate },
+        locationType: "LOCATION_OF_PRESENCE",
+        countries: lista,
+        totals: { clicks: totalClicks, spend: Number(totalSpend.toFixed(2)), rows: rows.length },
+        nota:
+          "LOCATION_OF_PRESENCE = onde a pessoa estava fisicamente, não onde ela demonstrou interesse. É a leitura certa para decidir bloqueio por país, porque o padrão do Google Ads mistura os dois.",
+      },
+      { status: 200 }
+    );
   }
 
   type Campaign = {
