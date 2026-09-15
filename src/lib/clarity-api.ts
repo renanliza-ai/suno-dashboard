@@ -42,13 +42,18 @@ export type ClarityPageRow = {
   /** Pageviews (a API chama de Traffic / totalSessionCount por dimensão). */
   pageViews: number;
   sessions: number;
+  /** Sessões que o próprio Clarity classificou como bot. */
+  botSessions: number;
   rageClicks: number;
   deadClicks: number;
   excessiveScrolls: number;
   quickbacks: number;
   scriptErrors: number;
   errorClicks: number;
-  /** Taxas em %, calculadas sobre pageViews. null quando não há denominador. */
+  /**
+   * Taxas em %, vindas PRONTAS da API (`sessionsWithMetricPercentage`).
+   * null quando a métrica não trouxe linha para esta URL.
+   */
   rageRate: number | null;
   deadRate: number | null;
   quickbackRate: number | null;
@@ -140,43 +145,46 @@ export async function fetchClarityPages(
     return { ok: false, reason: "erro_api", status: resp.status, detail: `JSON inválido: ${(e as Error).message}`, bu };
   }
 
-  // Transpõe métrica -> URL para URL -> métricas.
+  /**
+   * ⚠️ SEMÂNTICA REAL DOS CAMPOS, OBSERVADA em 15/09/2026 via ?debug=1.
+   *
+   * Eu errei isto DUAS vezes supondo, então aqui vai o que a API devolve de
+   * fato, com exemplo medido de cada campo:
+   *
+   *   Traffic          totalSessionCount, totalBotSessionCount, distinctUserCount,
+   *                    pagesPerSessionPercentage   (NÃO tem campo de pageview)
+   *                    ex.: www.suno.com.br/ -> 2966 sessões, 339 de bot, 1,16 pág/sessão
+   *
+   *   Fricção          sessionsCount, sessionsWithMetricPercentage,
+   *                    sessionsWithoutMetricPercentage, pagesViews, subTotal
+   *                    ex.: /minha-carteira/transacoes -> 57 sessões, 33,33% com
+   *                         quickback, 29 pageviews AFETADOS, 29 ocorrências
+   *
+   * As duas armadilhas que me pegaram:
+   *
+   *   1. `pagesViews` é pageview AFETADO pela fricção, não o total da página.
+   *      Usá-lo como denominador dá taxa acima de 100% por construção. Foi o que
+   *      produziu "dead 230,77%" e "quickback 100,28%" na tela.
+   *   2. `sessionsWithMetricPercentage` JÁ É A TAXA. Não precisa calcular nada,
+   *      e calcular por cima só introduz erro.
+   *
+   * Regra que fica: quando a API já entrega a taxa, use a taxa dela. Recalcular
+   * a partir de campos cuja semântica você supôs é onde o erro mora.
+   */
   const porUrl = new Map<string, ClarityPageRow>();
   const zero = (u: string): ClarityPageRow => ({
     url: u,
-    pageViews: 0, sessions: 0, rageClicks: 0, deadClicks: 0,
-    excessiveScrolls: 0, quickbacks: 0, scriptErrors: 0, errorClicks: 0,
+    pageViews: 0, sessions: 0, botSessions: 0,
+    rageClicks: 0, deadClicks: 0, excessiveScrolls: 0,
+    quickbacks: 0, scriptErrors: 0, errorClicks: 0,
     rageRate: null, deadRate: null, quickbackRate: null,
   });
 
   /**
-   * ⚠️ A CONTAGEM VEM EM CAMPO DIFERENTE POR MÉTRICA.
-   *
-   * `Traffic` traz o volume em `totalSessionCount`; as métricas de fricção
-   * (RageClickCount, DeadClickCount e companhia) trazem em `subTotal`, com
-   * `sessionsCount` do lado dizendo em quantas sessões aquilo aconteceu.
-   *
-   * Ler `subTotal` para tudo, que foi a primeira versão deste arquivo, zera o
-   * `pageViews` de todas as linhas. E `pageViews` é o denominador de toda taxa
-   * e o piso de volume: zerado, nenhuma página passa do piso e a aba fica vazia
-   * sem erro nenhum. Defeito silencioso da pior espécie.
-   */
-  /**
-   * ⚠️ A URL VEM COM A QUERY STRING INTEIRA, E ISSO ESTILHAÇA TUDO.
-   *
-   * Observado em 15/09/2026 via ?debug=1: a Data Export API devolve
-   *   https://lp.suno.com.br/cl/aniversario-premium-2026/?utm_campaign=_SNC...&utm_source=...
-   * como uma linha, e a mesma página sem UTM como OUTRA. Resultado medido: 2.872
-   * URLs na Research, a maioria com 1 ou 2 pageviews, e a home aparecendo com
-   * 2.959 pageviews aqui contra 9.061 pela camada de linguagem natural do MCP,
-   * que normaliza.
-   *
-   * Sem juntar por caminho, nenhuma página passa do piso de volume e a aba fica
-   * vazia. É o mesmo desfecho do zero silencioso, por outro caminho.
-   *
-   * Juntamos por origem + caminho. A query string é descartada de propósito:
-   * para fricção de usabilidade, a página é a mesma independente da UTM que
-   * trouxe a pessoa.
+   * A URL vem com a query string inteira: a mesma página com e sem UTM são
+   * linhas separadas. Medido: 2.872 URLs na Research, a maioria com 1 ou 2
+   * pageviews. Sem juntar por caminho nenhuma página passa do piso de volume e
+   * a aba fica vazia, que é o mesmo desfecho do zero silencioso por outra porta.
    */
   const normalizarUrl = (bruta: string): string | null => {
     try {
@@ -190,18 +198,13 @@ export async function fetchClarityPages(
     }
   };
 
-  /**
-   * ⚠️ E O CAMPO DE PAGEVIEWS É `pagesViews`, COM "s" NO MEIO.
-   *
-   * Cada métrica de fricção já traz o denominador da própria linha em
-   * `pagesViews`, e o numerador em `subTotal`. A versão anterior deste parser
-   * só lia `totalSessionCount` da métrica `Traffic`, então 2.701 das 2.872 URLs
-   * ficavam com denominador zero e toda taxa saía nula.
-   */
+  /** Taxa por URL e por métrica, vinda pronta da API. */
+  const taxas = new Map<string, Record<string, number>>();
+
   for (const m of Array.isArray(raw) ? raw : []) {
     const nome = String(m.metricName || "");
     const campo = METRIC_MAP[nome];
-    if (!campo) continue;
+    if (!campo && nome !== "Traffic") continue;
 
     for (const linha of m.information || []) {
       const u = normalizarUrl(String(linha.Url ?? linha.URL ?? linha.url ?? "").trim());
@@ -209,18 +212,24 @@ export async function fetchClarityPages(
       const atual = porUrl.get(u) || zero(u);
 
       if (nome === "Traffic") {
-        atual.sessions += num(linha.totalSessionCount ?? linha.TotalSessionCount);
-        atual.pageViews += num(linha.pagesViews ?? linha.PagesViews ?? linha.pageViews);
-      } else {
-        // Numerador da fricção.
-        atual[campo] += num(linha.subTotal ?? linha.SubTotal ?? linha.count);
-        // Denominador: cada métrica repete o pageviews da URL. Somar entre
-        // métricas multiplicaria o denominador pelo número de métricas, então
-        // ficamos com o MAIOR visto.
-        const pv = num(linha.pagesViews ?? linha.PagesViews ?? linha.pageViews);
-        if (pv > atual.pageViews) atual.pageViews = pv;
-        const s = num(linha.sessionsCount ?? linha.SessionsCount);
-        if (s > atual.sessions) atual.sessions = s;
+        const sess = num(linha.totalSessionCount);
+        const porSessao = num(linha.pagesPerSessionPercentage) || 1;
+        atual.sessions += sess;
+        atual.botSessions += num(linha.totalBotSessionCount);
+        // A API não devolve pageview direto; ela dá sessões e páginas por sessão.
+        atual.pageViews += Math.round(sess * porSessao);
+      } else if (campo) {
+        atual[campo] += num(linha.subTotal);
+        // Denominador de reserva, para URL que só aparece nas métricas de
+        // fricção e não na lista do Traffic (cada métrica vem capada em 1.000).
+        const sessTotal = num(linha.sessionsCount);
+        if (atual.sessions === 0 && sessTotal > atual.sessions) atual.sessions = sessTotal;
+        if (atual.pageViews === 0 && sessTotal > 0) atual.pageViews = sessTotal;
+
+        const t = taxas.get(u) || {};
+        const pct = num(linha.sessionsWithMetricPercentage);
+        if (pct > (t[nome] || 0)) t[nome] = pct;
+        taxas.set(u, t);
       }
 
       porUrl.set(u, atual);
@@ -228,12 +237,13 @@ export async function fetchClarityPages(
   }
 
   const rows = Array.from(porUrl.values()).map((r) => {
-    const base = r.pageViews > 0 ? r.pageViews : null;
+    const t = taxas.get(r.url) || {};
+    const ou = (v: number | undefined) => (v === undefined ? null : Number(v.toFixed(2)));
     return {
       ...r,
-      rageRate: base ? Number(((r.rageClicks / base) * 100).toFixed(2)) : null,
-      deadRate: base ? Number(((r.deadClicks / base) * 100).toFixed(2)) : null,
-      quickbackRate: base ? Number(((r.quickbacks / base) * 100).toFixed(2)) : null,
+      rageRate: ou(t.RageClickCount),
+      deadRate: ou(t.DeadClickCount),
+      quickbackRate: ou(t.QuickbackClick),
     };
   });
 
