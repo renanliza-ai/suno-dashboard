@@ -48,6 +48,21 @@ type CreateItemResp = {
 };
 
 // Cache leve do group_id resolvido por nome — evita chamada extra a cada item
+/**
+ * @forma-observada: 15/09/2026, parcialmente.
+ *
+ * OBSERVADO de verdade nesta sessão, via `?action=list-groups&boardId=`:
+ *   a query de grupos responde e `boards[0].groups[]` traz `{ id, title }`.
+ *   Conferido nos dois boards: 18408120880 e 18407955812 (8 grupos).
+ *
+ * NÃO OBSERVADO: a resposta de `create_item` e de `create_update`. O código
+ * abaixo lê `data.create_item.{id,name,board.id}` a partir da documentação do
+ * Monday, não de uma resposta vista. Na primeira tarefa criada de verdade,
+ * confirmar esses três campos e trocar esta nota por observação completa.
+ *
+ * Distinguir os dois é o ponto da anotação: "eu vi" e "a doc diz" não são a
+ * mesma coisa, e misturar os dois foi a origem dos erros de 15/09/2026.
+ */
 let __cachedGroupId: { boardId: string; groupName: string; groupId: string } | null = null;
 // Cache da lista de grupos pra mostrar no erro quando nenhum casa
 let __cachedGroups: { boardId: string; groups: { id: string; title: string }[] } | null = null;

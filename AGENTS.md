@@ -67,6 +67,27 @@ Portão que sempre falha ensina a ignorar portão. O lint continua disponível e
 `npm run guarda:lint` e o passivo é dívida a pagar à parte, não desculpa para
 código novo sujo.
 
+### ⚠️ Nunca canalize o portão para `grep`
+
+```bash
+npm run guarda | grep -i "error"   &&  git push     # ERRADO
+```
+
+O código de saída de um pipe é o do ÚLTIMO comando. O `grep` acha o texto,
+devolve 0, e o `&&` empurra o push mesmo com a guarda REPROVANDO. Aconteceu em
+15/09/2026: a guarda barrou `monday/create-task/route.ts` por falta de prova de
+forma, imprimiu o erro, e o push passou assim mesmo.
+
+Use uma destas:
+
+```bash
+npm run guarda && git push                       # sem pipe, a forma certa
+set -o pipefail; npm run guarda | tail -5 && git push
+```
+
+Portão contornado por acidente de shell é pior que portão nenhum: ele dá a
+sensação de proteção sem a proteção.
+
 ## A pergunta de revisão
 
 A guarda de contrato imprime, com os arquivos na mão:
