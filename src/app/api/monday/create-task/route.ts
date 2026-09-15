@@ -649,8 +649,11 @@ export async function GET(req: NextRequest) {
     );
   }
   const apiToken = process.env.MONDAY_API_TOKEN;
-  const boardId = process.env.MONDAY_BOARD_ID;
-  const groupName = process.env.MONDAY_GROUP_NAME;
+  // ?boardId=... permite inspecionar QUALQUER board, nao so o padrao. Sem isso
+  // nao ha como conferir os grupos do board de destino antes de mandar a
+  // primeira tarefa, e ela cai no fallback sem ninguem perceber.
+  const boardId = req.nextUrl.searchParams.get("boardId") || process.env.MONDAY_BOARD_ID;
+  const groupName = req.nextUrl.searchParams.get("groupName") || process.env.MONDAY_GROUP_NAME;
   const groupIdFallback = process.env.MONDAY_GROUP_ID || "topics";
 
   if (!apiToken || !boardId) {
