@@ -37,7 +37,7 @@ export async function GET() {
        * Preview", que de fora são indistinguíveis.
        */
       integracoesVistas: Object.keys(process.env)
-        .filter((k) => /^(CLARITY|META|GOOGLE_ADS|GA4|ZEUS|WP)_/i.test(k))
+        .filter((k) => /^(CLARITY|META|GOOGLE_ADS|GA4|ZEUS|WP|MONDAY)_/i.test(k))
         .sort(),
 
       /**

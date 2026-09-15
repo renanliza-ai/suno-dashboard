@@ -39,6 +39,10 @@ type Achado = {
   evidencias: Evidencia[]; hipotese: string;
   classificacao: Classificacao; porque: string;
   proximoPasso: string[]; prioridade: number;
+  teste?: {
+    baseline: number; efeitoMinimoPp: number; amostraPorVariante: number;
+    sessoesPorDia: number; diasNecessarios: number; viavel: boolean; motivo: string;
+  } | null;
 };
 type Resposta = {
   bu: { key: string; label: string };
@@ -92,6 +96,21 @@ export default function CROPage() {
   const [filtro, setFiltro] = useState<Classificacao | "todos">("todos");
   const [aberto, setAberto] = useState<string | null>(null);
 
+  /**
+   * Tarefas no Monday, por achado.
+   *
+   * Voltou a pedido do Renan em 15/09/2026. A versão anterior da aba tinha
+   * isso, mas amarrado em cards cujo impacto e ROI eram gerados por hash do
+   * nome da property. Religado aqui em cima de achado medido.
+   *
+   * ⚠️ O payload NÃO preenche iceScore, impacto em R$ nem esforço. A rota do
+   * Monday aceita os três, e a versão antiga os mandava inventados. Não medimos
+   * nenhum deles, então vão vazios: campo ausente na tarefa é honesto, campo
+   * preenchido com palpite vira decisão de prioridade errada duas semanas
+   * depois.
+   */
+  const [tarefas, setTarefas] = useState<Record<string, { estado: "criando" | "ok" | "erro"; url?: string; msg?: string }>>({});
+
   useEffect(() => {
     if (!useRealData || !selectedId || !propertyName) {
       setData(null);
@@ -110,6 +129,21 @@ export default function CROPage() {
       })
       .catch((e) => { if (!cancelado) setErro((e as Error).message); })
       .finally(() => { if (!cancelado) setLoading(false); });
+
+    // Tarefas já criadas nesta property, para o botão não oferecer duplicata
+    // depois de um F5.
+    fetch(`/api/cro/proposal-state?propertyId=${selectedId}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d: { entries?: { proposalKey: string; state?: { mondayUrl?: string } }[] }) => {
+        if (cancelado || !d.entries) return;
+        const m: Record<string, { estado: "ok"; url?: string }> = {};
+        for (const e of d.entries) {
+          if (e.state?.mondayUrl) m[e.proposalKey] = { estado: "ok", url: e.state.mondayUrl };
+        }
+        if (Object.keys(m).length) setTarefas((t) => ({ ...m, ...t }));
+      })
+      .catch(() => { /* sem persistência não impede criar tarefa */ });
+
     return () => { cancelado = true; };
   }, [selectedId, propertyName, useRealData]);
 
@@ -117,6 +151,90 @@ export default function CROPage() {
     () => (data?.achados || []).filter((a) => filtro === "todos" || a.classificacao === filtro),
     [data, filtro]
   );
+
+  /**
+   * Cria a tarefa no Monday a partir do achado.
+   *
+   * O payload é fiel ao que foi medido e NADA além. Em particular ficam de fora
+   * iceScore, impact e effort, que a rota aceita e a versão antiga da aba
+   * mandava inventados (o ICE saía de hash do nome da property). Campo ausente
+   * na tarefa é honesto; campo com palpite vira prioridade errada duas semanas
+   * depois, quando ninguém lembra de onde o número veio.
+   */
+  async function criarTarefa(a: Achado) {
+    if (!selectedId) return;
+    const atual = tarefas[a.id]?.estado;
+    if (atual === "criando" || atual === "ok") return;
+    setTarefas((t) => ({ ...t, [a.id]: { estado: "criando" } }));
+
+    const est = ESTILO[a.classificacao];
+    const lk = clarityLinksFor(propertyName, a.pagina);
+
+    // A classificação define a urgência: defeito medido vem antes de hipótese.
+    const priority =
+      a.classificacao === "corrigir" || a.classificacao === "validar_medicao"
+        ? ("Alta" as const)
+        : ("Média" as const);
+
+    const evidencia = a.evidencias
+      .map((ev) => `${ev.fonte} · ${ev.janela} · ${ev.amostra} → ${ev.valor}`)
+      .join("\n");
+
+    const insight = {
+      title: `[${est.rotulo}] ${a.titulo}`,
+      pageUrl: a.pagina,
+      pageRef: a.pagina.replace(/^https?:\/\//, ""),
+      framework: `Triagem CRO · ${est.rotulo}`,
+      description: a.porque,
+      hypothesis: a.hipotese,
+      evidence: evidencia,
+      steps: a.proximoPasso,
+      priority,
+      propertyName,
+      primaryKPI: a.teste
+        ? `Conversão da página, hoje em ${a.teste.baseline.toFixed(2).replace(".", ",")}%`
+        : undefined,
+      testWindow: a.teste
+        ? `${a.teste.diasNecessarios} dias, ${nf.format(a.teste.amostraPorVariante)} sessões por variante. ${a.teste.motivo}`
+        : undefined,
+      rollback: a.teste
+        ? `Promover só com ganho de ${a.teste.efeitoMinimoPp.toFixed(2).replace(".", ",")} ponto percentual ou mais. Abaixo disso, manter A.`
+        : undefined,
+      clarityLinks: { heatmaps: lk.heatmaps, recordings: lk.recordings, filterHint: lk.filterHint },
+    };
+
+    try {
+      const r = await fetch("/api/monday/create-task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ insight, sourceLink: a.pagina }),
+      });
+      const d = await r.json();
+      if (!d.ok) {
+        setTarefas((t) => ({ ...t, [a.id]: { estado: "erro", msg: d.message || d.error || "falhou" } }));
+        return;
+      }
+      setTarefas((t) => ({ ...t, [a.id]: { estado: "ok", url: d.item?.url } }));
+
+      // Persiste para o botão não oferecer duplicata depois de um F5.
+      fetch("/api/cro/proposal-state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          propertyId: selectedId,
+          proposalKey: a.id,
+          status: "accepted",
+          mondayItemId: d.item?.id,
+          mondayUrl: d.item?.url,
+          snapshot: { title: a.titulo, page: a.pagina, classificacao: a.classificacao },
+        }),
+      }).catch(() => {
+        /* a tarefa já existe no Monday; persistir é conveniência, não requisito */
+      });
+    } catch (err) {
+      setTarefas((t) => ({ ...t, [a.id]: { estado: "erro", msg: (err as Error).message } }));
+    }
+  }
 
   const links = clarityLinksFor(propertyName);
 
@@ -258,6 +376,7 @@ export default function CROPage() {
                 const e = ESTILO[a.classificacao];
                 const Icone = e.icone;
                 const expandido = aberto === a.id;
+                const tarefa = tarefas[a.id];
                 const lk = clarityLinksFor(propertyName, a.pagina);
                 return (
                   <div key={a.id} className="rounded-2xl border border-[color:var(--border)] bg-white overflow-hidden">
@@ -267,7 +386,14 @@ export default function CROPage() {
                           <Icone size={11} /> {e.rotulo}
                         </span>
                         <div className="min-w-0 flex-1">
-                          <p className="font-bold text-sm">{a.titulo}</p>
+                          <p className="font-bold text-sm">
+                            {a.titulo}
+                            {tarefa?.estado === "ok" && (
+                              <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                no Monday
+                              </span>
+                            )}
+                          </p>
                           <p className="text-xs text-[color:var(--muted-foreground)] truncate mt-0.5" title={a.pagina}>
                             {a.pagina}
                           </p>
@@ -312,6 +438,36 @@ export default function CROPage() {
                             ))}
                           </div>
                         </Bloco>
+                        {/* Tarefa no Monday, a partir do achado medido */}
+                        <div className="flex flex-wrap items-center gap-3 pt-1 border-t border-[color:var(--border)] mt-1 pt-3">
+                          {tarefa?.estado === "ok" ? (
+                            <>
+                              <span className="text-xs font-semibold text-emerald-700">Tarefa criada</span>
+                              {tarefa.url && (
+                                <a href={tarefa.url} target="_blank" rel="noopener noreferrer"
+                                   className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#7c5cff] hover:underline">
+                                  Abrir no Monday <ExternalLink size={12} />
+                                </a>
+                              )}
+                            </>
+                          ) : (
+                            <button
+                              onClick={(ev) => { ev.stopPropagation(); criarTarefa(a); }}
+                              disabled={tarefa?.estado === "criando"}
+                              className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-[#7c5cff] text-white hover:bg-[#6a4ae0] disabled:opacity-50 disabled:cursor-wait"
+                            >
+                              {tarefa?.estado === "criando" ? "Criando…" : "Criar tarefa no Monday"}
+                            </button>
+                          )}
+                          {tarefa?.estado === "erro" && (
+                            <span className="text-xs text-red-700">Falhou: {tarefa.msg}</span>
+                          )}
+                          <span className="text-[11px] text-[color:var(--muted-foreground)]">
+                            Vai com a evidência, a hipótese e os passos. Sem ICE, sem impacto em R$ e sem
+                            esforço, porque nenhum dos três é medido aqui.
+                          </span>
+                        </div>
+
                         {lk.recordings && (
                           <div className="flex flex-wrap gap-3 pt-1">
                             <a href={lk.recordings} target="_blank" rel="noopener noreferrer"
