@@ -272,6 +272,12 @@ export async function POST(req: NextRequest) {
      * Sem isso, tudo caia no mesmo quadro.
      */
     boardId?: string;
+    /**
+     * Grupo de destino POR NOME. Resolvido por nome de proposito: sobrevive a
+     * renomeacao de ID e falha visivel quando o grupo nao existe, em vez de
+     * cair calado no primeiro grupo do board.
+     */
+    groupName?: string;
     // Compatibilidade retroativa com chamadas antigas (description simples)
     description?: string;
     // rawBody=true: `description` já é o corpo final (HTML) e deve ser postado
@@ -301,7 +307,10 @@ export async function POST(req: NextRequest) {
   // MONDAY_CRO_GROUP_NAME se estiver definido, e senao deixamos o resolvedor cair
   // no primeiro grupo do quadro, que e o comportamento dele quando nao acha nome
   // nem fallback.
-  const grupoDesejado = trocouDeBoard ? process.env.MONDAY_CRO_GROUP_NAME : groupName;
+  // Precedencia: o que o chamador pediu, depois a env do CRO quando trocou de
+  // board, depois a env padrao. Quem chama sabe a natureza da tarefa; a env nao.
+  const grupoDesejado =
+    body.groupName || (trocouDeBoard ? process.env.MONDAY_CRO_GROUP_NAME : groupName);
   const groupResolution = await resolveGroupId(apiToken, boardId, grupoDesejado, groupIdFallback);
   const groupId = groupResolution.groupId;
   const groupWarning = groupResolution.error;

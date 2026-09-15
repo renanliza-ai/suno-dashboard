@@ -87,6 +87,38 @@ const ESTILO: Record<Classificacao, { rotulo: string; icone: typeof Wrench; clas
 
 const nf = new Intl.NumberFormat("pt-BR");
 
+/**
+ * Destino no Monday para tarefa aceita nesta aba.
+ *
+ * Board indicado pelo Renan em 15/09/2026:
+ * https://suno.monday.com/boards/18407955812
+ *
+ * ⚠️ Board ID não é segredo, está na URL que qualquer pessoa do time abre. Por
+ * isso fica no código, com a variável de ambiente por cima quando existir, em
+ * vez de exigir configuração para funcionar.
+ *
+ * O grupo vem da CLASSIFICAÇÃO, não de um destino único: os oito grupos deste
+ * board separam por natureza do trabalho, e jogar tudo em "Growth / CRO" faria
+ * o board perder exatamente a organização que ele tem. Os nomes abaixo foram
+ * lidos do board em 15/09/2026, não supostos.
+ *
+ * A resolução no Monday é POR NOME de propósito: sobrevive a mudança de ID, e
+ * quando o nome não existe a rota devolve a lista de grupos disponíveis em vez
+ * de enfiar a tarefa no primeiro grupo calada.
+ */
+const MONDAY_BOARD_CRO = "18407955812";
+
+const MONDAY_GRUPO_POR_CLASSE: Record<Classificacao, string> = {
+  // Medição quebrada é problema de dado, não de interface nem de hipótese.
+  validar_medicao: "📊 Analytics",
+  // Elemento morto e erro de JavaScript são defeito para o time de tecnologia.
+  corrigir: "⚙️ Tech / Features",
+  // Ainda não se sabe o que testar: o trabalho é de análise.
+  investigar: "📈 Growth / CRO",
+  testar: "📈 Growth / CRO",
+  sem_volume: "📈 Growth / CRO",
+};
+
 export default function CROPage() {
   const { selectedId, selected, useRealData } = useGA4();
   const propertyName = selected?.displayName || "";
@@ -207,7 +239,12 @@ export default function CROPage() {
       const r = await fetch("/api/monday/create-task", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ insight, sourceLink: a.pagina }),
+        body: JSON.stringify({
+          insight,
+          sourceLink: a.pagina,
+          boardId: MONDAY_BOARD_CRO,
+          groupName: MONDAY_GRUPO_POR_CLASSE[a.classificacao],
+        }),
       });
       const d = await r.json();
       if (!d.ok) {
@@ -463,8 +500,9 @@ export default function CROPage() {
                             <span className="text-xs text-red-700">Falhou: {tarefa.msg}</span>
                           )}
                           <span className="text-[11px] text-[color:var(--muted-foreground)]">
-                            Vai com a evidência, a hipótese e os passos. Sem ICE, sem impacto em R$ e sem
-                            esforço, porque nenhum dos três é medido aqui.
+                            Vai para <b>{MONDAY_GRUPO_POR_CLASSE[a.classificacao]}</b> com a evidência, a
+                            hipótese e os passos. Sem ICE, sem impacto em R$ e sem esforço, porque nenhum
+                            dos três é medido aqui.
                           </span>
                         </div>
 
