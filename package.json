@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "guarda:deploy": "node scripts/guarda-deploy.mjs",
+    "guarda:contrato": "node scripts/guarda-contrato.mjs",
+    "guarda": "node scripts/guarda-contrato.mjs && npx tsc --noEmit && npm run build",
+    "guarda:lint": "eslint"
   },
   "dependencies": {
     "@vercel/kv": "^3.0.0",
