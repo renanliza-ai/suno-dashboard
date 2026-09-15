@@ -20,7 +20,7 @@ export const maxDuration = 60;
  *   - não devolve Core Web Vitals (o GA4 não fornece, e a média do Clarity é
  *     inutilizável: LCP médio de 1.292.259 ms no login, medido em 15/09/2026)
  *
- * Params: propertyId, propertyName, days (1 a 3, limite da API do Clarity)
+ * Params: propertyId, propertyName, days (1 a 30; ver a ressalva em clarity-api.ts)
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -35,8 +35,11 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // A documentação do Clarity diz no máximo 3 dias, mas teste de 01/09/2026
+  // devolveu 15 e 30. Aceitamos até 30 e deixamos a API decidir: se ela
+  // recusar, o erro sobe com o status em vez de virar limite presumido.
   const diasRaw = Number(sp.get("days") || 3);
-  const dias = (diasRaw === 1 || diasRaw === 2 ? diasRaw : 3) as 1 | 2 | 3;
+  const dias = Number.isFinite(diasRaw) ? Math.min(Math.max(Math.round(diasRaw), 1), 30) : 3;
   const profile = resolveBU(propertyName);
 
   // Janela do GA4 alinhada à do Clarity: comparar períodos diferentes produz
@@ -226,7 +229,14 @@ export async function GET(req: NextRequest) {
       bu: { key: profile.key, label: profile.label, conversionModel: profile.conversionModel },
       janela: janelaTexto,
       dias,
-      clarity: { conectado: true, paginas: clarity.rows.length, coletadoEm: clarity.fetchedAt },
+      clarity: {
+        conectado: true,
+        paginas: clarity.rows.length,
+        coletadoEm: clarity.fetchedAt,
+        // ?debug=1 devolve a FORMA crua da resposta do Clarity. Existe porque
+        // supor nome de campo ja zerou o denominador de toda taxa uma vez.
+        ...(sp.get("debug") === "1" ? { amostraCrua: clarity.amostraCrua, topo: clarity.rows.slice(0, 5) } : {}),
+      },
       ga4: { eventos: eventosConversao, recorte: "Brasil", erro: ga4Conv.error || null },
       achados: todos,
       semVolume: semVolume.slice(0, 30).map((s) => ({ url: s.url, pageViews: s.pageViews })),

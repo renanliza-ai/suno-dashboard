@@ -12,8 +12,12 @@ import { resolveBU, type BUKey } from "@/lib/bu";
  *
  * ⚠️ TRÊS LIMITES DA API QUE MOLDAM TODO O DESENHO
  *
- * 1. `numOfDays` aceita 1, 2 ou 3. Não existe janela maior nem data
- *    arbitrária. Toda leitura é dos últimos 3 dias, no máximo.
+ * 1. `numOfDays`: a documentação da Data Export API diz 1 a 3. MAS um teste
+ *    de 01/09/2026 pelo MCP devolveu 15 dias (287.120 sessões) e 30 dias
+ *    (575.097), o que contradiz a documentação. Como os dois caminhos podem
+ *    bater em back-ends diferentes, aqui o valor é PASSADO ADIANTE e o que a
+ *    API responder manda. Se ela recusar, o erro sobe com o status, em vez de
+ *    a gente presumir um limite que talvez não exista.
  * 2. **10 requisições por projeto por dia.** Estourou, a API recusa até o dia
  *    seguinte. Por isso a rota que consome isto faz UMA chamada por B.U. e
  *    cacheia com folga.
@@ -51,7 +55,7 @@ export type ClarityPageRow = {
 };
 
 export type ClarityFetchResult =
-  | { ok: true; days: number; rows: ClarityPageRow[]; fetchedAt: string }
+  | { ok: true; days: number; rows: ClarityPageRow[]; fetchedAt: string; amostraCrua: unknown[] }
   | { ok: false; reason: "sem_token"; envVar: string | null; bu: BUKey }
   | { ok: false; reason: "sem_suporte"; bu: BUKey }
   | { ok: false; reason: "erro_api"; status: number; detail: string; bu: BUKey };
@@ -88,7 +92,7 @@ export function clarityTokenEnvFor(propertyName: string): string | null {
 }
 
 /**
- * Busca as métricas de fricção por URL nos últimos `days` dias (1 a 3).
+ * Busca as métricas de fricção por URL nos últimos `days` dias.
  *
  * A API devolve um array de métricas, cada uma com um array de linhas já
  * quebrado pela dimensão pedida. Nós transpomos para uma linha por URL, que é
@@ -96,7 +100,7 @@ export function clarityTokenEnvFor(propertyName: string): string | null {
  */
 export async function fetchClarityPages(
   propertyName: string,
-  days: 1 | 2 | 3 = 3
+  days: number = 3
 ): Promise<ClarityFetchResult> {
   const bu = resolveBU(propertyName).key;
   const envVar = TOKEN_ENV_BY_BU[bu] || null;
@@ -145,17 +149,36 @@ export async function fetchClarityPages(
     rageRate: null, deadRate: null, quickbackRate: null,
   });
 
+  /**
+   * ⚠️ A CONTAGEM VEM EM CAMPO DIFERENTE POR MÉTRICA.
+   *
+   * `Traffic` traz o volume em `totalSessionCount`; as métricas de fricção
+   * (RageClickCount, DeadClickCount e companhia) trazem em `subTotal`, com
+   * `sessionsCount` do lado dizendo em quantas sessões aquilo aconteceu.
+   *
+   * Ler `subTotal` para tudo, que foi a primeira versão deste arquivo, zera o
+   * `pageViews` de todas as linhas. E `pageViews` é o denominador de toda taxa
+   * e o piso de volume: zerado, nenhuma página passa do piso e a aba fica vazia
+   * sem erro nenhum. Defeito silencioso da pior espécie.
+   */
   for (const m of Array.isArray(raw) ? raw : []) {
-    const campo = METRIC_MAP[String(m.metricName || "")];
+    const nome = String(m.metricName || "");
+    const campo = METRIC_MAP[nome];
     if (!campo) continue;
     for (const linha of m.information || []) {
-      // A dimensão volta com nome variável entre versões da API.
+      // A dimensão volta sob o próprio nome dela, e a grafia varia por versão.
       const u = String(linha.Url ?? linha.URL ?? linha.url ?? "").trim();
       if (!u) continue;
       const atual = porUrl.get(u) || zero(u);
-      // `subTotal` é a contagem da métrica; `sessionsCount` o total de sessões.
-      atual[campo] += num(linha.subTotal ?? linha.SubTotal ?? linha.count);
-      const s = num(linha.sessionsCount ?? linha.SessionsCount ?? linha.sessionsWithMetricPercentage);
+
+      const volume =
+        nome === "Traffic"
+          ? num(linha.totalSessionCount ?? linha.TotalSessionCount ?? linha.subTotal)
+          : num(linha.subTotal ?? linha.SubTotal ?? linha.count ?? linha.totalSessionCount);
+
+      atual[campo] += volume;
+
+      const s = num(linha.sessionsCount ?? linha.SessionsCount ?? linha.totalSessionCount);
       if (s > atual.sessions) atual.sessions = s;
       porUrl.set(u, atual);
     }
@@ -173,5 +196,17 @@ export async function fetchClarityPages(
 
   rows.sort((a, b) => b.pageViews - a.pageViews);
 
-  return { ok: true, days, rows, fetchedAt: new Date().toISOString() };
+  /**
+   * Amostra crua da resposta, para conferir a FORMA em vez de supor.
+   * A primeira versão deste parser supôs o nome do campo de contagem e errou,
+   * zerando o denominador de toda taxa sem devolver erro. Com a amostra na mão
+   * o mesmo engano vira uma conferência de dez segundos.
+   */
+  const amostraCrua = (Array.isArray(raw) ? raw : []).slice(0, 3).map((m) => ({
+    metricName: m.metricName,
+    campos: Object.keys((m.information || [])[0] || {}),
+    primeiraLinha: (m.information || [])[0],
+  }));
+
+  return { ok: true, days, rows, fetchedAt: new Date().toISOString(), amostraCrua };
 }
