@@ -279,10 +279,14 @@ export async function fetchClarityPages(
    * zerando o denominador de toda taxa sem devolver erro. Com a amostra na mão
    * o mesmo engano vira uma conferência de dez segundos.
    */
-  const amostraCrua = (Array.isArray(raw) ? raw : []).slice(0, 3).map((m) => ({
+  const amostraCrua = (Array.isArray(raw) ? raw : []).map((m) => ({
     metricName: m.metricName,
+    linhas: (m.information || []).length,
     campos: Object.keys((m.information || [])[0] || {}),
-    primeiraLinha: (m.information || [])[0],
+    // A linha de MAIOR volume conta mais sobre a semântica do que a primeira,
+    // que costuma ser uma URL de cauda com tudo zerado.
+    maiorLinha: (m.information || []).slice().sort((a, b) =>
+      Number(b.subTotal ?? b.totalSessionCount ?? 0) - Number(a.subTotal ?? a.totalSessionCount ?? 0))[0],
   }));
 
   return { ok: true, days, rows, fetchedAt: new Date().toISOString(), amostraCrua };
