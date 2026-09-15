@@ -146,17 +146,36 @@ async function testarBU(propertyName: string, rotulo: string) {
     observado: `${comVolume} de ${r.rows.length} URLs com pageViews acima de zero`,
   });
 
-  // 7. nomes de campo
+  /**
+   * 7. nomes de campo.
+   *
+   * ⚠️ A PRIMEIRA VERSÃO DESTE PASSO PASSAVA COM TUDO ZERADO, e foi assim que
+   * ele deu OK numa integração que estava devolvendo 0% de fricção em todas as
+   * páginas. `deadRate !== null` é verdadeiro quando deadRate é 0, então o teste
+   * afirmava "os campos batem" justamente no caso em que eles não batiam.
+   *
+   * Teste que só reprova quando o dado some, e passa quando o dado vem zerado,
+   * não é teste: é a mesma suposição escrita de outro jeito.
+   *
+   * Agora exige SINAL: pelo menos uma URL com fricção acima de zero. Num
+   * conjunto de milhares de páginas, zero absoluto de rage, dead e quickback em
+   * TODAS é defeito de leitura, não site perfeito.
+   */
   const topo = r.rows[0];
-  const temFriccao = topo.deadRate !== null || topo.rageRate !== null || topo.quickbackRate !== null;
+  const comFriccao = r.rows.filter(
+    (x) => x.deadClicks > 0 || x.rageClicks > 0 || x.quickbacks > 0 || x.scriptErrors > 0
+  ).length;
+  const temSinal = comFriccao > 0;
   passos.push({
     n: 7,
-    nome: "nomes de campo batem com o parser",
-    ok: temFriccao,
-    observado: temFriccao
-      ? `topo: ${topo.url.slice(0, 60)} com ${topo.pageViews} pageviews, dead ${topo.deadRate}%, quickback ${topo.quickbackRate}%`
-      : "as taxas vieram todas nulas: o campo de fricção mudou de nome",
-    acao: temFriccao ? undefined : "Conferir a forma crua em /api/cro/evidence?debug=1 e ajustar o METRIC_MAP de src/lib/clarity-api.ts.",
+    nome: "os campos de fricção trazem sinal",
+    ok: temSinal,
+    observado: temSinal
+      ? `${comFriccao} de ${r.rows.length} URLs com fricção acima de zero. Topo: ${topo.url.slice(0, 55)} com ${topo.pageViews} pageviews, dead ${topo.deadRate}%, quickback ${topo.quickbackRate}%`
+      : `ZERO fricção em todas as ${r.rows.length} URLs. Num conjunto desse tamanho isso é defeito de leitura, não site sem atrito.`,
+    acao: temSinal
+      ? undefined
+      : "Conferir a forma crua em /api/cro/evidence?debug=1 e ajustar METRIC_MAP ou os nomes de campo em src/lib/clarity-api.ts.",
   });
 
   // 8. classificação

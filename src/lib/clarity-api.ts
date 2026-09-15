@@ -161,25 +161,68 @@ export async function fetchClarityPages(
    * e o piso de volume: zerado, nenhuma página passa do piso e a aba fica vazia
    * sem erro nenhum. Defeito silencioso da pior espécie.
    */
+  /**
+   * ⚠️ A URL VEM COM A QUERY STRING INTEIRA, E ISSO ESTILHAÇA TUDO.
+   *
+   * Observado em 15/09/2026 via ?debug=1: a Data Export API devolve
+   *   https://lp.suno.com.br/cl/aniversario-premium-2026/?utm_campaign=_SNC...&utm_source=...
+   * como uma linha, e a mesma página sem UTM como OUTRA. Resultado medido: 2.872
+   * URLs na Research, a maioria com 1 ou 2 pageviews, e a home aparecendo com
+   * 2.959 pageviews aqui contra 9.061 pela camada de linguagem natural do MCP,
+   * que normaliza.
+   *
+   * Sem juntar por caminho, nenhuma página passa do piso de volume e a aba fica
+   * vazia. É o mesmo desfecho do zero silencioso, por outro caminho.
+   *
+   * Juntamos por origem + caminho. A query string é descartada de propósito:
+   * para fricção de usabilidade, a página é a mesma independente da UTM que
+   * trouxe a pessoa.
+   */
+  const normalizarUrl = (bruta: string): string | null => {
+    try {
+      const u = new URL(bruta);
+      if (!/^https?:$/.test(u.protocol)) return null;
+      if (/localhost|127\.0\.0\.1/i.test(u.hostname)) return null;
+      const caminho = u.pathname.length > 1 ? u.pathname.replace(/\/+$/, "") : "/";
+      return `${u.origin}${caminho}`;
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * ⚠️ E O CAMPO DE PAGEVIEWS É `pagesViews`, COM "s" NO MEIO.
+   *
+   * Cada métrica de fricção já traz o denominador da própria linha em
+   * `pagesViews`, e o numerador em `subTotal`. A versão anterior deste parser
+   * só lia `totalSessionCount` da métrica `Traffic`, então 2.701 das 2.872 URLs
+   * ficavam com denominador zero e toda taxa saía nula.
+   */
   for (const m of Array.isArray(raw) ? raw : []) {
     const nome = String(m.metricName || "");
     const campo = METRIC_MAP[nome];
     if (!campo) continue;
+
     for (const linha of m.information || []) {
-      // A dimensão volta sob o próprio nome dela, e a grafia varia por versão.
-      const u = String(linha.Url ?? linha.URL ?? linha.url ?? "").trim();
+      const u = normalizarUrl(String(linha.Url ?? linha.URL ?? linha.url ?? "").trim());
       if (!u) continue;
       const atual = porUrl.get(u) || zero(u);
 
-      const volume =
-        nome === "Traffic"
-          ? num(linha.totalSessionCount ?? linha.TotalSessionCount ?? linha.subTotal)
-          : num(linha.subTotal ?? linha.SubTotal ?? linha.count ?? linha.totalSessionCount);
+      if (nome === "Traffic") {
+        atual.sessions += num(linha.totalSessionCount ?? linha.TotalSessionCount);
+        atual.pageViews += num(linha.pagesViews ?? linha.PagesViews ?? linha.pageViews);
+      } else {
+        // Numerador da fricção.
+        atual[campo] += num(linha.subTotal ?? linha.SubTotal ?? linha.count);
+        // Denominador: cada métrica repete o pageviews da URL. Somar entre
+        // métricas multiplicaria o denominador pelo número de métricas, então
+        // ficamos com o MAIOR visto.
+        const pv = num(linha.pagesViews ?? linha.PagesViews ?? linha.pageViews);
+        if (pv > atual.pageViews) atual.pageViews = pv;
+        const s = num(linha.sessionsCount ?? linha.SessionsCount);
+        if (s > atual.sessions) atual.sessions = s;
+      }
 
-      atual[campo] += volume;
-
-      const s = num(linha.sessionsCount ?? linha.SessionsCount ?? linha.totalSessionCount);
-      if (s > atual.sessions) atual.sessions = s;
       porUrl.set(u, atual);
     }
   }
