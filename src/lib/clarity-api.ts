@@ -198,8 +198,20 @@ export async function fetchClarityPages(
     }
   };
 
-  /** Taxa por URL e por métrica, vinda pronta da API. */
-  const taxas = new Map<string, Record<string, number>>();
+  /**
+   * Agregação da taxa quando várias linhas cruas viram uma URL normalizada.
+   *
+   * ⚠️ NÃO se pega o maior percentual entre as variantes. Como juntamos por
+   * caminho, a home do Status recebe dezenas de linhas (uma por UTM), e basta
+   * UMA variante com 1 sessão e 1 quickback para o maior ser 100%. Foi
+   * exatamente isso que colocou "quickback 100%" numa página de 107.270
+   * pageviews cujo valor real é 16,4%.
+   *
+   * A taxa do agregado é ponderada: soma-se o NUMERADOR (sessões com a fricção,
+   * que é sessionsCount x percentual) e o DENOMINADOR (sessões totais) de cada
+   * variante, e divide-se no fim. Média de taxas não é a taxa da média.
+   */
+  const acumulado = new Map<string, Record<string, { num: number; den: number }>>();
 
   for (const m of Array.isArray(raw) ? raw : []) {
     const nome = String(m.metricName || "");
@@ -226,10 +238,13 @@ export async function fetchClarityPages(
         if (atual.sessions === 0 && sessTotal > atual.sessions) atual.sessions = sessTotal;
         if (atual.pageViews === 0 && sessTotal > 0) atual.pageViews = sessTotal;
 
-        const t = taxas.get(u) || {};
         const pct = num(linha.sessionsWithMetricPercentage);
-        if (pct > (t[nome] || 0)) t[nome] = pct;
-        taxas.set(u, t);
+        const acc = acumulado.get(u) || {};
+        const alvo = acc[nome] || { num: 0, den: 0 };
+        alvo.num += (sessTotal * pct) / 100;
+        alvo.den += sessTotal;
+        acc[nome] = alvo;
+        acumulado.set(u, acc);
       }
 
       porUrl.set(u, atual);
@@ -237,13 +252,17 @@ export async function fetchClarityPages(
   }
 
   const rows = Array.from(porUrl.values()).map((r) => {
-    const t = taxas.get(r.url) || {};
-    const ou = (v: number | undefined) => (v === undefined ? null : Number(v.toFixed(2)));
+    const acc = acumulado.get(r.url) || {};
+    const taxa = (metrica: string): number | null => {
+      const v = acc[metrica];
+      if (!v || v.den <= 0) return null;
+      return Number(((v.num / v.den) * 100).toFixed(2));
+    };
     return {
       ...r,
-      rageRate: ou(t.RageClickCount),
-      deadRate: ou(t.DeadClickCount),
-      quickbackRate: ou(t.QuickbackClick),
+      rageRate: taxa("RageClickCount"),
+      deadRate: taxa("DeadClickCount"),
+      quickbackRate: taxa("QuickbackClick"),
     };
   });
 
