@@ -106,6 +106,16 @@ export async function GET(req: NextRequest) {
           conectado: false,
           motivo: clarity.reason,
           envVar: clarity.reason === "sem_token" ? clarity.envVar : clarityTokenEnvFor(propertyName),
+          /**
+           * Quais variáveis com "clarity" no nome existem no runtime. APENAS
+           * os NOMES, nunca o valor: nome de variável não é segredo, token é.
+           *
+           * Existe porque "não achei a variável" tem três causas diferentes e
+           * indistinguíveis de fora: nome diferente do esperado, variável criada
+           * só em Preview e não em Production, ou build anterior à criação dela.
+           * Listar os nomes separa as três em um olhar.
+           */
+          variaveisVistas: Object.keys(process.env).filter((k) => /clarit/i.test(k)).sort(),
           detalhe:
             clarity.reason === "sem_token"
               ? `O Clarity não está conectado para esta B.U. Falta a variável de ambiente com o token da Data Export API. Sem ela esta aba não tem evidência de usabilidade, e prefere não mostrar nada a mostrar número inventado.`
