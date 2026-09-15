@@ -68,7 +68,7 @@ const dorme = (ms) => new Promise((r) => setTimeout(r, ms));
   const local = shaLocal();
   if (!local) {
     console.error("✗ Não consegui ler o HEAD local. Estou num repositório git?");
-    process.exit(1);
+    process.exitCode = 1; return;
   }
 
   const sujo = pendenciasLocais();
@@ -86,7 +86,7 @@ const dorme = (ms) => new Promise((r) => setTimeout(r, ms));
     if (r.erro) {
       console.error(`✗ Não consegui ler ${URL_PADRAO}/api/build-info: ${r.erro}`);
       console.error("  Se a rota ainda não existe no deploy ativo, publique-a antes de usar esta guarda.");
-      process.exit(1);
+      process.exitCode = 1; return;
     }
 
     if (r.sha === local) {
@@ -96,7 +96,7 @@ const dorme = (ms) => new Promise((r) => setTimeout(r, ms));
       } else {
         console.log("  Nenhuma variável de integração no runtime.");
       }
-      process.exit(0);
+      process.exitCode = 0; return;
     }
 
     const msg =
@@ -106,7 +106,7 @@ const dorme = (ms) => new Promise((r) => setTimeout(r, ms));
     if (semEspera || Date.now() - inicio > ESPERA_MAX_MS) {
       console.error(msg);
       if (!semEspera) console.error(`  Esperei ${Math.round((Date.now() - inicio) / 1000)}s e o deploy não alcançou.`);
-      process.exit(1);
+      process.exitCode = 1; return;
     }
 
     if (tentativa === 1) console.log(`… esperando o deploy alcançar ${local.slice(0, 7)}`);
