@@ -39,6 +39,45 @@ export async function GET() {
       integracoesVistas: Object.keys(process.env)
         .filter((k) => /^(CLARITY|META|GOOGLE_ADS|GA4|ZEUS|WP)_/i.test(k))
         .sort(),
+
+      /**
+       * FORMA do valor das variáveis do Clarity, nunca o valor.
+       *
+       * Existe por uma armadilha já vivida e documentada: o que o Clarity
+       * mostra no Settings geral é ID de PROJETO (curto, ~10 caracteres). O
+       * token da Data Export API é um JWT de cerca de 700 caracteres que começa
+       * com "eyJ". Trocar um pelo outro devolve 401 e parece problema de
+       * permissão.
+       *
+       * Comprimento e prefixo de três letras não são o segredo: são o suficiente
+       * para dizer "isso é um JWT" ou "isso é um ID", e nada além. O valor em si
+       * nunca sai daqui.
+       *
+       * ⚠️ E serve para um alerta mais grave: variável `NEXT_PUBLIC_*` é
+       * embutida pelo Next.js no bundle do NAVEGADOR. Token em variável
+       * NEXT_PUBLIC_ é token publicado.
+       */
+      formaDasVariaveisClarity: Object.keys(process.env)
+        .filter((k) => /clarit/i.test(k))
+        .sort()
+        .map((k) => {
+          const v = String(process.env[k] || "");
+          const pareceJWT = v.startsWith("eyJ");
+          const publica = k.startsWith("NEXT_PUBLIC_");
+          return {
+            nome: k,
+            comprimento: v.length,
+            pareceToken: pareceJWT,
+            expostaNoNavegador: publica,
+            veredito: pareceJWT
+              ? publica
+                ? "TOKEN EXPOSTO NO BUNDLE DO NAVEGADOR: rotacionar e mover para variável sem NEXT_PUBLIC_"
+                : "token da Data Export API, no lugar certo"
+              : v.length > 0 && v.length < 40
+                ? "ID de projeto, não token. O ID é público por natureza e não serve para a Data Export API."
+                : "valor não reconhecido",
+          };
+        }),
       agora: new Date().toISOString(),
     },
     { headers: { "Cache-Control": "no-store" } }
