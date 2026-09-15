@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, Ban, Beaker, ChevronDown, ExternalLink,
-  FlaskConical, Search, Wrench, Info,
+  FlaskConical, Search, Wrench, Info, Scale, LayoutTemplate,
+  Image as ImageIcon, MessageSquare,
 } from "lucide-react";
+import { classificarComunicacao, type PecaComunicacao } from "@/lib/cro-comunicacao";
 import { useGA4 } from "@/lib/ga4-context";
 import { DataStatus, SkeletonBlock } from "@/components/data-status";
 import { clarityLinksFor } from "@/lib/clarity";
@@ -33,9 +35,11 @@ import { clarityLinksFor } from "@/lib/clarity";
  */
 
 type Evidencia = { fonte: string; valor: string; amostra: string; janela: string };
-type Classificacao = "corrigir" | "investigar" | "testar" | "sem_volume" | "validar_medicao";
+type Classificacao =
+  | "corrigir" | "investigar" | "testar" | "decidir" | "sem_volume" | "validar_medicao";
+type Superficie = "pagina" | "banner" | "popup";
 type Achado = {
-  id: string; pagina: string; titulo: string;
+  id: string; superficie: Superficie; pagina: string; titulo: string;
   evidencias: Evidencia[]; hipotese: string;
   classificacao: Classificacao; porque: string;
   proximoPasso: string[]; prioridade: number;
@@ -72,6 +76,11 @@ const ESTILO: Record<Classificacao, { rotulo: string; icone: typeof Wrench; clas
     rotulo: "Investigar", icone: Search,
     classe: "bg-amber-50 text-amber-800 border-amber-200",
     explica: "O dado mostra QUE tem problema, não ONDE. Falta um corte antes de desenhar teste.",
+  },
+  decidir: {
+    rotulo: "Decidir", icone: Scale,
+    classe: "bg-sky-50 text-sky-800 border-sky-200",
+    explica: "O experimento já rodou sozinho. Não há o que testar, há o que trocar.",
   },
   testar: {
     rotulo: "Testar", icone: FlaskConical,
@@ -116,8 +125,18 @@ const MONDAY_GRUPO_POR_CLASSE: Record<Classificacao, string> = {
   // Ainda não se sabe o que testar: o trabalho é de análise.
   investigar: "📈 Growth / CRO",
   testar: "📈 Growth / CRO",
+  // Trocar a peça que perdeu o experimento natural é trabalho de mídia e criativo.
+  decidir: "🎯 Aquisição",
   sem_volume: "📈 Growth / CRO",
 };
+
+/** As três superfícies que a aba cobre. */
+const SUPERFICIES: { chave: Superficie | "todas"; rotulo: string; icone: typeof Wrench }[] = [
+  { chave: "todas", rotulo: "Tudo", icone: Beaker },
+  { chave: "pagina", rotulo: "Landing pages", icone: LayoutTemplate },
+  { chave: "banner", rotulo: "Banners", icone: ImageIcon },
+  { chave: "popup", rotulo: "Pop-ups", icone: MessageSquare },
+];
 
 export default function CROPage() {
   const { selectedId, selected, useRealData } = useGA4();
@@ -126,7 +145,22 @@ export default function CROPage() {
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [filtro, setFiltro] = useState<Classificacao | "todos">("todos");
+  const [superficie, setSuperficie] = useState<Superficie | "todas">("todas");
   const [aberto, setAberto] = useState<string | null>(null);
+
+  /** Achados de banner e pop-up, calculados a partir da aba de Comunicação. */
+  const [comunicacao, setComunicacao] = useState<{ achados: Achado[]; erro: string | null; pecas: number } | null>(null);
+
+  /**
+   * Estado real de cada LP no servidor.
+   *
+   * Pedido do Renan em 15/09/2026, depois de aposentar dezenas de LPs antigas
+   * com 301 para o institucional: o GA4 é histórico e continuava mostrando
+   * essas páginas como se ainda fossem alvo de trabalho.
+   */
+  const [estadoLPs, setEstadoLPs] = useState<Record<string, { estado: string; apta: boolean }>>({});
+  const [higienizar, setHigienizar] = useState(true);
+  const [verificando, setVerificando] = useState(false);
 
   /**
    * Tarefas no Monday, por achado.
@@ -179,10 +213,144 @@ export default function CROPage() {
     return () => { cancelado = true; };
   }, [selectedId, propertyName, useRealData]);
 
-  const visiveis = useMemo(
-    () => (data?.achados || []).filter((a) => filtro === "todos" || a.classificacao === filtro),
-    [data, filtro]
+  /**
+   * Banners e pop-ups.
+   *
+   * Consome `/api/comunicacao/spaces`, que já entrega o grão espaço × peça com
+   * a taxonomia normalizada e as armadilhas de escopo do GA4 resolvidas. Montar
+   * outra consulta aqui duplicaria essa lógica e as duas divergiriam na primeira
+   * mudança. O motor `classificarComunicacao` é puro, então roda no cliente.
+   */
+  useEffect(() => {
+    if (!useRealData || !selectedId || !propertyName) { setComunicacao(null); return; }
+    let cancelado = false;
+    const p = new URLSearchParams({ propertyId: selectedId, propertyName, kind: "todos", days: "14" });
+    fetch(`/api/comunicacao/spaces?${p.toString()}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d: {
+        error?: string; blocked?: string | null; range?: { startDate: string; endDate: string };
+        bu?: { conversionModel?: string };
+        spaces?: {
+          space: string; kind: "banner" | "popup"; bannerName: string; named: boolean;
+          sessions: number; leads: number; accounts: number | null;
+          checkoutStarts: number | null; purchases: number | null;
+        }[];
+      }) => {
+        if (cancelado) return;
+        if (d.error || !d.spaces?.length) {
+          setComunicacao({ achados: [], erro: d.error || d.blocked || null, pecas: 0 });
+          return;
+        }
+        // Regra universal Suno: venda mede a compra, captação mede o lead.
+        const venda = d.bu?.conversionModel === "captacao_venda";
+        const janela = d.range ? `${d.range.startDate} a ${d.range.endDate}` : "últimos 14 dias";
+        const linhas = d.spaces;
+        const para = (r: (typeof linhas)[number]): PecaComunicacao => ({
+          espaco: r.space,
+          peca: r.bannerName,
+          nomeada: r.named,
+          cliques: r.sessions,
+          conversoes: venda ? r.purchases || 0 : r.leads || 0,
+          eventoConversao: venda ? "compras" : "leads",
+          sinaisTotais:
+            (r.purchases || 0) + (r.checkoutStarts || 0) + (r.leads || 0) + (r.accounts || 0),
+        });
+        const achados: Achado[] = [];
+        for (const sup of ["banner", "popup"] as const) {
+          const pecas = linhas.filter((r) => r.kind === sup).map(para);
+          if (!pecas.length) continue;
+          achados.push(...(classificarComunicacao(pecas, sup, janela, 14).achados as Achado[]));
+        }
+        setComunicacao({ achados, erro: null, pecas: linhas.length });
+      })
+      .catch((e) => { if (!cancelado) setComunicacao({ achados: [], erro: (e as Error).message, pecas: 0 }); });
+    return () => { cancelado = true; };
+  }, [selectedId, propertyName, useRealData]);
+
+  /**
+   * Verifica no SERVIDOR quais LPs dos achados ainda estão no ar.
+   *
+   * Roda em rodadas porque a rota trabalha por orçamento de tempo: 210 LPs a
+   * duas batidas cada não cabem nos 60s da Vercel. Cada rodada aproveita o
+   * cache da anterior, então a segunda chamada é quase instantânea.
+   */
+  useEffect(() => {
+    const urls = Array.from(
+      new Set((data?.achados || []).filter((a) => a.superficie === "pagina").map((a) => a.pagina))
+    );
+    if (!urls.length) return;
+    let cancelado = false;
+    const paginas = urls
+      .map((u) => { try { const x = new URL(u); return { host: x.host, path: x.pathname }; } catch { return null; } })
+      .filter((x): x is { host: string; path: string } => x !== null);
+    if (!paginas.length) return;
+
+    async function rodar() {
+      setVerificando(true);
+      for (let rodada = 0; rodada < 6 && !cancelado; rodada++) {
+        const r = await fetch("/api/lp/estado", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paginas }),
+        }).then((x) => x.json()).catch(() => null);
+        if (cancelado || !r?.resultados) break;
+        const m: Record<string, { estado: string; apta: boolean }> = {};
+        for (const x of r.resultados as { host: string; path: string; estado: string; apta: boolean }[]) {
+          m[`${x.host}${x.path.replace(/\/+$/, "")}`.toLowerCase()] = { estado: x.estado, apta: x.apta };
+        }
+        setEstadoLPs((atual) => ({ ...atual, ...m }));
+        if (!r.pendentes) break;
+      }
+      if (!cancelado) setVerificando(false);
+    }
+    rodar();
+    return () => { cancelado = true; };
+  }, [data]);
+
+  const todosAchados = useMemo(
+    () => [...(data?.achados || []), ...(comunicacao?.achados || [])].sort((a, b) => b.prioridade - a.prioridade),
+    [data, comunicacao]
   );
+
+  /** LP que o servidor já disse que não recebe mais tráfego. */
+  const estadoDe = (a: Achado): string | null => {
+    if (a.superficie !== "pagina") return null;
+    try {
+      const x = new URL(a.pagina);
+      return estadoLPs[`${x.host}${x.pathname.replace(/\/+$/, "")}`.toLowerCase()]?.estado ?? null;
+    } catch { return null; }
+  };
+  const aposentada = (a: Achado) => {
+    const e = estadoDe(a);
+    return e === "aposentada" || e === "fora";
+  };
+  const removidasPorHigiene = useMemo(
+    () => todosAchados.filter(aposentada).length,
+    [todosAchados, estadoLPs]
+  );
+
+  const visiveis = useMemo(
+    () =>
+      todosAchados.filter(
+        (a) =>
+          (filtro === "todos" || a.classificacao === filtro) &&
+          (superficie === "todas" || a.superficie === superficie) &&
+          (!higienizar || !aposentada(a))
+      ),
+    [todosAchados, filtro, superficie, higienizar, estadoLPs]
+  );
+
+  const totaisVisiveis = useMemo(() => {
+    const base = todosAchados.filter(
+      (a) => (superficie === "todas" || a.superficie === superficie) && (!higienizar || !aposentada(a))
+    );
+    const c = (k: Classificacao) => base.filter((a) => a.classificacao === k).length;
+    return {
+      achados: base.length,
+      validar: c("validar_medicao"), corrigir: c("corrigir"),
+      decidir: c("decidir"), investigar: c("investigar"), testar: c("testar"),
+    };
+  }, [todosAchados, superficie, higienizar, estadoLPs]);
 
   /**
    * Cria a tarefa no Monday a partir do achado.
@@ -369,13 +537,47 @@ export default function CROPage() {
 
       {useRealData && !loading && data && data.clarity.conectado && (
         <>
+          {/* Superfície: landing page, banner ou pop-up */}
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            {SUPERFICIES.map((s) => {
+              const Icone = s.icone;
+              const n = s.chave === "todas"
+                ? todosAchados.filter((a) => !higienizar || !aposentada(a)).length
+                : todosAchados.filter((a) => a.superficie === s.chave && (!higienizar || !aposentada(a))).length;
+              const ativo = superficie === s.chave;
+              return (
+                <button key={s.chave} onClick={() => setSuperficie(s.chave)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition ${
+                    ativo
+                      ? "bg-[#7c5cff] text-white border-[#7c5cff]"
+                      : "bg-white text-[color:var(--muted-foreground)] border-[color:var(--border)] hover:border-[#7c5cff]/40"
+                  }`}>
+                  <Icone size={13} /> {s.rotulo}
+                  <span className={`tabular-nums ${ativo ? "opacity-90" : "opacity-60"}`}>{n}</span>
+                </button>
+              );
+            })}
+            <label className="ml-auto inline-flex items-center gap-2 text-xs text-[color:var(--muted-foreground)] cursor-pointer">
+              <input type="checkbox" checked={higienizar} onChange={(e) => setHigienizar(e.target.checked)}
+                className="rounded border-[color:var(--border)]" />
+              Só LPs no ar
+              {verificando && <span className="text-[10px] opacity-60">verificando…</span>}
+              {!verificando && removidasPorHigiene > 0 && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                  {removidasPorHigiene} fora
+                </span>
+              )}
+            </label>
+          </div>
+
           {/* Contagem por classificação, que é o resumo que importa */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-            {(["validar_medicao", "corrigir", "investigar", "testar"] as Classificacao[]).map((c) => {
-              const n = c === "validar_medicao" ? data.totais.validar
-                : c === "corrigir" ? data.totais.corrigir
-                : c === "investigar" ? data.totais.investigar
-                : data.totais.testar;
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+            {(["validar_medicao", "corrigir", "decidir", "investigar", "testar"] as Classificacao[]).map((c) => {
+              const n = c === "validar_medicao" ? totaisVisiveis.validar
+                : c === "corrigir" ? totaisVisiveis.corrigir
+                : c === "decidir" ? totaisVisiveis.decidir
+                : c === "investigar" ? totaisVisiveis.investigar
+                : totaisVisiveis.testar;
               const e = ESTILO[c];
               const Icone = e.icone;
               return (
@@ -395,16 +597,21 @@ export default function CROPage() {
           {filtro !== "todos" && (
             <button onClick={() => setFiltro("todos")}
               className="text-xs font-semibold text-[#7c5cff] hover:underline mb-3">
-              ← ver todos os {data.totais.achados} achados
+              ← ver todos os {totaisVisiveis.achados} achados
             </button>
+          )}
+
+          {comunicacao?.erro && (
+            <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">
+              Banners e pop-ups não entraram nesta lista: {comunicacao.erro}
+            </p>
           )}
 
           {visiveis.length === 0 ? (
             <div className="rounded-2xl border border-[color:var(--border)] bg-white p-8 text-center">
               <p className="font-semibold mb-1">Nenhum achado nesta classificação</p>
               <p className="text-sm text-[color:var(--muted-foreground)]">
-                Nenhuma página passou dos limiares de fricção na janela de {data.dias} dias. Isso é
-                resultado, não falta de dado.
+                Nada passou dos limiares na janela medida. Isso é resultado, não falta de dado.
               </p>
             </div>
           ) : (
@@ -414,7 +621,12 @@ export default function CROPage() {
                 const Icone = e.icone;
                 const expandido = aberto === a.id;
                 const tarefa = tarefas[a.id];
-                const lk = clarityLinksFor(propertyName, a.pagina);
+                // Banner e pop-up não têm URL: o Clarity é por página, então
+                // link dali seria link quebrado com cara de atalho útil.
+                const lk = a.superficie === "pagina"
+                  ? clarityLinksFor(propertyName, a.pagina)
+                  : { recordings: "", heatmaps: "", filterHint: "" };
+                const est = estadoDe(a);
                 return (
                   <div key={a.id} className="rounded-2xl border border-[color:var(--border)] bg-white overflow-hidden">
                     <button onClick={() => setAberto(expandido ? null : a.id)} className="w-full text-left p-4 hover:bg-[color:var(--muted)]/30">
@@ -432,8 +644,28 @@ export default function CROPage() {
                             )}
                           </p>
                           <p className="text-xs text-[color:var(--muted-foreground)] truncate mt-0.5" title={a.pagina}>
+                            <span className="font-semibold text-[10px] uppercase tracking-wider mr-1.5 opacity-70">
+                              {a.superficie === "pagina" ? "LP" : a.superficie === "banner" ? "Banner" : "Pop-up"}
+                            </span>
                             {a.pagina}
                           </p>
+                          {/* Estado da LP no servidor. Achado sobre página que
+                              não recebe mais tráfego é trabalho jogado fora. */}
+                          {est && est !== "no_ar" && (
+                            <span className={`inline-block mt-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${
+                              est === "no_ar_com_vazamento"
+                                ? "bg-amber-50 text-amber-800 border-amber-200"
+                                : "bg-slate-100 text-slate-600 border-slate-200"
+                            }`}>
+                              {est === "no_ar_com_vazamento"
+                                ? "no ar, mas a URL sem barra final vai para o institucional"
+                                : est === "aposentada"
+                                  ? "aposentada: o endereço redireciona"
+                                  : est === "fora"
+                                    ? "fora do ar (404)"
+                                    : "estado não verificado"}
+                            </span>
+                          )}
                           {/* A evidência fica VISÍVEL sem precisar abrir: é o que
                               sustenta o card, não um detalhe secundário. */}
                           <div className="flex flex-wrap gap-1.5 mt-2">

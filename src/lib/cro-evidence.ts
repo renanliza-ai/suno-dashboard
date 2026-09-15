@@ -25,7 +25,16 @@
  *    a recomendação é mudança direta, não experimento.
  */
 
-export type Classificacao = "corrigir" | "investigar" | "testar" | "sem_volume" | "validar_medicao";
+export type Classificacao =
+  | "corrigir"
+  | "investigar"
+  | "testar"
+  | "decidir"
+  | "sem_volume"
+  | "validar_medicao";
+
+/** Onde o achado vive. Banner e pop-up moram em utm_medium, não em URL. */
+export type Superficie = "pagina" | "banner" | "popup";
 
 export type Evidencia = {
   /** De onde veio o número. Nunca vazio. */
@@ -40,6 +49,7 @@ export type Evidencia = {
 
 export type Achado = {
   id: string;
+  superficie: Superficie;
   pagina: string;
   titulo: string;
   evidencias: Evidencia[];
@@ -164,6 +174,7 @@ export function classificarFricção(
     if (l.scriptErrors > 0) {
       achados.push({
         id: `erro:${l.url}`,
+        superficie: "pagina",
         pagina: l.url,
         titulo: "Erro de JavaScript na página",
         evidencias: [
@@ -186,6 +197,7 @@ export function classificarFricção(
     if (l.deadRate !== null && l.deadRate >= LIMIAR.deadClick) {
       achados.push({
         id: `dead:${l.url}`,
+        superficie: "pagina",
         pagina: l.url,
         titulo: "Gente clicando em algo que não responde",
         evidencias: [
@@ -208,6 +220,7 @@ export function classificarFricção(
     if (l.rageRate !== null && l.rageRate >= LIMIAR.rageClick) {
       achados.push({
         id: `rage:${l.url}`,
+        superficie: "pagina",
         pagina: l.url,
         titulo: "Clique repetido de frustração",
         evidencias: [
@@ -230,6 +243,7 @@ export function classificarFricção(
     if (l.quickbackRate !== null && l.quickbackRate >= LIMIAR.quickback) {
       achados.push({
         id: `quick:${l.url}`,
+        superficie: "pagina",
         pagina: l.url,
         titulo: "Abre e volta imediatamente",
         evidencias: [
@@ -278,6 +292,7 @@ export function acharDivergencia(params: {
 
   return {
     id: `diverg:${pagina}`,
+    superficie: "pagina",
     pagina,
     titulo: "O Clarity vê conversão e o GA4 não registra",
     evidencias: [
@@ -299,6 +314,11 @@ export function acharDivergencia(params: {
 }
 
 export const ROTULO_CLASSIFICACAO: Record<Classificacao, { texto: string; cor: string; explica: string }> = {
+  decidir: {
+    texto: "Decidir",
+    cor: "sky",
+    explica: "O experimento já rodou sozinho e o resultado está na mesa. Não há o que testar, há o que trocar.",
+  },
   validar_medicao: {
     texto: "Validar medição",
     cor: "violet",

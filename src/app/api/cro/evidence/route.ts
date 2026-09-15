@@ -208,6 +208,7 @@ export async function GET(req: NextRequest) {
 
     candidatos.push({
       id: `teste:${r.url}`,
+      superficie: "pagina",
       pagina: r.url,
       titulo: "Página sem defeito conhecido e com volume para testar",
       evidencias: [

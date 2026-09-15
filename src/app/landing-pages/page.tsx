@@ -7,6 +7,7 @@ import { DataStatus, PeriodBadge, SkeletonBlock, DataErrorCard } from "@/compone
 import { clarityLinksFor } from "@/lib/clarity";
 import { LPChannelComparator } from "@/components/lp-channel-comparator";
 import { CollapsibleNote, ShowMore, BotaoExportar, baixarCsv } from "@/components/ui-collapse";
+import { useEstadoLP, chave as chaveEstado } from "@/lib/use-estado-lp";
 
 /**
  * /landing-pages — desempenho de LP com a regra de conversão da B.U.
@@ -58,6 +59,48 @@ export default function LandingPagesPage() {
   const [objFilter, setObjFilter] = useState<"todos" | "captacao" | "venda" | "indefinido" | "alarme">("todos");
   const [sortKey, setSortKey] = useState<SortKey>("sessions");
   const [sortDesc, setSortDesc] = useState(true);
+
+  /**
+   * Higienização: mostrar só LP que ainda recebe tráfego.
+   *
+   * Pedido do Renan em 15/09/2026, depois de aposentar dezenas de LPs antigas
+   * com 301 para o institucional. O GA4 é HISTÓRICO: ele continua reportando o
+   * tráfego que a LP teve ANTES do redirecionamento, então a tabela mostrava
+   * páginas mortas como se ainda fossem alvo de trabalho. Quem responde essa
+   * pergunta é o servidor, não o relatório.
+   */
+  const [soNoAr, setSoNoAr] = useState(true);
+  const paginasParaVerificar = useMemo(
+    () => (data?.rows || []).map((r) => ({ host: r.host, path: r.path })),
+    [data]
+  );
+  const { mapa: estadoLP, verificando: verificandoEstado, pendentes: estadoPendentes } =
+    useEstadoLP(paginasParaVerificar);
+
+  /** Quantas LPs o servidor já confirmou que não recebem mais tráfego. */
+  const aposentadasContadas = useMemo(
+    () =>
+      (data?.rows || []).filter((r) => {
+        const e = estadoLP[chaveEstado(r.host, r.path)]?.estado;
+        return e === "aposentada" || e === "fora";
+      }).length,
+    [data, estadoLP]
+  );
+  /**
+   * LP viva cuja URL SEM barra final é jogada para fora.
+   *
+   * Medido em 15/09/2026: 43 das 210 LPs da Research. Não é higienização, é
+   * defeito ativo: quem chega por link antigo, e-mail ou anúncio sem a barra
+   * não vê a página. Fica em aviso próprio para não sumir junto com as
+   * aposentadas.
+   */
+  const comVazamento = useMemo(
+    () =>
+      (data?.rows || [])
+        .filter((r) => estadoLP[chaveEstado(r.host, r.path)]?.estado === "no_ar_com_vazamento")
+        .sort((a, b) => b.sessions - a.sessions),
+    [data, estadoLP]
+  );
   // Tabela carrega 10 linhas e expande por clique. Pedido do Renan: a lista
   // completa empurrava tudo para baixo da dobra.
   const PASSO = 10;
@@ -77,6 +120,15 @@ export default function LandingPagesPage() {
     let filtered = needle ? base.filter((r) => r.path.toLowerCase().includes(needle)) : base;
     if (objFilter === "alarme") filtered = filtered.filter((r) => r.mismatch);
     else if (objFilter !== "todos") filtered = filtered.filter((r) => r.objective === objFilter);
+    // LP que o servidor já disse que redireciona ou sumiu sai da lista. O que
+    // ainda NÃO foi verificado permanece: sumir por falta de verificação seria
+    // esconder LP viva.
+    if (soNoAr) {
+      filtered = filtered.filter((r) => {
+        const e = estadoLP[chaveEstado(r.host, r.path)]?.estado;
+        return e !== "aposentada" && e !== "fora";
+      });
+    }
     const get = (r: LPPerfRow, k: SortKey): number => {
       const v = r[k];
       return typeof v === "number" ? v : -1;
@@ -85,7 +137,7 @@ export default function LandingPagesPage() {
       const d = get(a, sortKey) - get(b, sortKey);
       return sortDesc ? -d : d;
     });
-  }, [data, q, objFilter, sortKey, sortDesc]);
+  }, [data, q, objFilter, sortKey, sortDesc, soNoAr, estadoLP]);
 
   // Volta para 10 sempre que o recorte muda, senão o usuário fica com uma
   // janela grande herdada de outro filtro e acha que a lista é maior.
@@ -377,6 +429,47 @@ export default function LandingPagesPage() {
             </div>
           )}
 
+          {/* Vazamento por barra final: LP viva perdendo o tráfego sem barra */}
+          {comVazamento.length > 0 && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 mb-3">
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-amber-900 text-sm mb-1">
+                    {comVazamento.length} LP{comVazamento.length === 1 ? "" : "s"} no ar perdendo o tráfego
+                    que chega sem a barra final
+                  </p>
+                  <p className="text-xs text-amber-800 leading-relaxed mb-2">
+                    A página responde normalmente no endereço com barra, mas quem chega no endereço sem
+                    barra é redirecionado para fora. Link antigo, e-mail e anúncio costumam apontar para a
+                    versão sem barra, então esse tráfego não vê a LP. Ou o 301 de aposentadoria ficou pela
+                    metade, ou foi aplicado por engano em página que deveria continuar.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {comVazamento.slice(0, 8).map((r) => (
+                      <span key={r.path} className="text-[11px] px-2 py-0.5 rounded-md bg-white/70 border border-amber-200 text-amber-900">
+                        {r.path} <b className="tabular-nums">{fmt(r.sessions)}</b> sess
+                        {r.leads > 0 && <> · <b className="tabular-nums">{fmt(r.leads)}</b> leads</>}
+                      </span>
+                    ))}
+                    {comVazamento.length > 8 && (
+                      <span className="text-[11px] px-2 py-0.5 text-amber-800">
+                        e mais {comVazamento.length - 8}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {estadoPendentes > 0 && !verificandoEstado && (
+            <p className="text-xs text-[color:var(--muted-foreground)] mb-2">
+              {estadoPendentes} LPs ainda não foram verificadas no servidor. Elas continuam na lista de
+              propósito: sumir por falta de verificação esconderia LP viva.
+            </p>
+          )}
+
           {/* Filtros */}
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <div className="relative">
@@ -430,6 +523,23 @@ export default function LandingPagesPage() {
                 Só Suno Asset (/asset/)
               </button>
             )}
+            {/* Higienização: o GA4 é histórico, quem sabe se a LP está no ar é
+                o servidor. Rótulo diz o que o filtro FAZ, não o que ele esconde. */}
+            <button
+              onClick={() => { setSoNoAr((v) => !v); resetPaginacao(); }}
+              className={`px-3 py-2 text-xs font-semibold rounded-xl border transition ${
+                soNoAr
+                  ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                  : "bg-white border-[color:var(--border)] text-[color:var(--muted-foreground)]"
+              }`}
+              title="Confere no servidor se a LP responde 200 no próprio endereço. LP que redireciona ou some do ar sai da lista."
+            >
+              {soNoAr ? "✓ " : ""}Só LPs no ar
+              {verificandoEstado && <span className="ml-1.5 opacity-60">verificando…</span>}
+              {!verificandoEstado && aposentadasContadas > 0 && (
+                <span className="ml-1.5 opacity-70">({aposentadasContadas} fora)</span>
+              )}
+            </button>
             <div className="ml-auto flex items-center gap-2">
               <span className="text-xs text-[color:var(--muted-foreground)]">
                 {rows.length} LP{rows.length === 1 ? "" : "s"} · {periodLabel}
