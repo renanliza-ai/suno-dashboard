@@ -197,6 +197,40 @@ export async function fetchClarityPages(
   rows.sort((a, b) => b.pageViews - a.pageViews);
 
   /**
+   * GUARDA DE ZERO SILENCIOSO.
+   *
+   * Nasceu de um defeito real: a primeira versão deste parser leu `subTotal`
+   * para todas as métricas, mas `Traffic` traz o volume em `totalSessionCount`.
+   * Resultado: `pageViews` saía ZERO em toda linha. Como `pageViews` é o
+   * denominador de toda taxa E o piso de volume, a aba ficava vazia sem
+   * devolver erro nenhum. Quem abrisse concluiria "não há achado".
+   *
+   * A regra geral, que vale para qualquer cliente de API externa deste projeto:
+   * receber linhas e todas com denominador zero NÃO é um resultado, é um
+   * defeito de leitura. Resultado vazio é `rows.length === 0`. Linha existindo
+   * com denominador zero em 100% dos casos significa que o campo mudou de nome
+   * ou nunca foi o que eu supus.
+   *
+   * Falhar alto aqui custa uma mensagem de erro. Falhar baixo custa uma
+   * decisão de negócio tomada em cima de uma tela vazia.
+   */
+  if (rows.length > 0 && rows.every((r) => r.pageViews === 0)) {
+    const camposVistos = Array.from(
+      new Set((Array.isArray(raw) ? raw : []).flatMap((m) => Object.keys((m.information || [])[0] || {})))
+    );
+    return {
+      ok: false,
+      reason: "erro_api",
+      status: 200,
+      detail:
+        `O Clarity devolveu ${rows.length} linhas e TODAS com pageViews zero. ` +
+        `Isso é defeito de leitura, não ausência de tráfego: o campo de contagem mudou de nome. ` +
+        `Campos presentes na resposta: ${camposVistos.join(", ") || "nenhum"}.`,
+      bu,
+    };
+  }
+
+  /**
    * Amostra crua da resposta, para conferir a FORMA em vez de supor.
    * A primeira versão deste parser supôs o nome do campo de contagem e errou,
    * zerando o denominador de toda taxa sem devolver erro. Com a amostra na mão
