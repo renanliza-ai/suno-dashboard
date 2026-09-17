@@ -643,6 +643,17 @@ export default function TrackingPage() {
   // a Meta Graph API e retorna o estado da integração (token + pixel + envio).
   // ====================================================================
   type CAPIStatus = "active" | "partial" | "inactive" | "loading" | "not_configured";
+  /**
+   * @forma-observada: shape lido do código das duas rotas em 17/09/2026, e o
+   * campo que importa aqui, `stats`, é montado em `/api/capi/stats` a partir de
+   * GET /{pixel}/stats da Graph API v19.0. A resposta crua da Meta sai em
+   * `/api/capi/stats?debug=1` (campo `amostraCrua`), que é a sonda para conferir
+   * quando a Meta mudar a agregação.
+   *
+   * Os dois shapes convivem de propósito: `stats`/`erro` vêm da rota de LEITURA,
+   * que a tela chama sozinha; `checks`/`metaResponse`/`eventSent` vêm da rota de
+   * ENVIO, que só responde quando alguém clica para disparar o teste.
+   */
   type CAPILiveResp = {
     ok: boolean;
     capiConfigured?: boolean;
@@ -675,6 +686,14 @@ export default function TrackingPage() {
     nextStep?: string;
     error?: string;
     stage?: string;
+    /** Campos de `/api/capi/stats` (leitura pura, sem enviar evento). */
+    stats?: { event: string; count: number }[] | null;
+    erro?: string | null;
+    modoTeste?: boolean;
+    leitura?: string;
+    /** `/api/capi/test` só envia com `enviar=1`; sem isso responde o que faria. */
+    enviado?: boolean;
+    oQueIstoNaoProva?: string;
   };
 
   const [capiLive, setCapiLive] = useState<CAPILiveResp | null>(null);
@@ -695,7 +714,18 @@ export default function TrackingPage() {
         const propParam = propertyName ? `?propertyName=${encodeURIComponent(propertyName)}` : "";
         // cache-buster pra ignorar qualquer cache de CDN/SWR quando user pediu revalidar
         const buster = `${propParam ? "&" : "?"}_t=${Date.now()}`;
-        const r = await fetch(`/api/capi/test${propParam}${buster}`, { cache: "no-store" });
+        /**
+         * ⚠️ `/api/capi/stats`, NUNCA `/api/capi/test` aqui.
+         *
+         * Até 17/09/2026 este efeito chamava `/api/capi/test` a cada 5 minutos,
+         * e aquela rota ENVIA um PageView ao pixel. Com a aba aberta, o painel
+         * injetava evento de mentira no pixel de PRODUÇÃO da Suno a cada 5
+         * minutos, com e-mail e telefone inventados no user_data. Ou seja, o ato
+         * de olhar a tela sujava o dado que a tela deveria auditar.
+         *
+         * Carregamento automático só LÊ. Enviar evento virou ação com botão.
+         */
+        const r = await fetch(`/api/capi/stats${propParam}${buster}`, { cache: "no-store" });
         const data = (await r.json()) as CAPILiveResp;
         if (alive) {
           setCapiLive(data);
@@ -723,11 +753,24 @@ export default function TrackingPage() {
 
   // Deriva o status pra UI a partir da resposta real
   const capiData = useMemo(() => {
+    /**
+     * ⚠️ "active" aqui significa CREDENCIAL VÁLIDA E PIXEL RECEBENDO EVENTO.
+     *
+     * NÃO significa que as conversões da Suno estão indo por CAPI. A contagem de
+     * `/{pixel}/stats` soma navegador e servidor sem separar, e o ping do painel
+     * só prova que o token posta. Quem separa origem é o Events Manager, em
+     * Connection Method, e não há API pública para isso hoje. A tela é obrigada
+     * a dizer essa diferença, senão o rótulo "Ativo" engana sozinho.
+     *
+     * Até 17/09/2026 o status vinha de `events_received === 1` do PRÓPRIO ping
+     * que a tela acabara de disparar: ou seja, o painel se auditava.
+     */
     let status: CAPIStatus = "loading";
     if (capiLoading) status = "loading";
     else if (capiLive && capiLive.capiConfigured === false) status = "not_configured";
-    else if (capiLive?.ok && capiLive.metaResponse?.events_received === 1) status = "active";
-    else if (capiLive && capiLive.checks?.["3_meta_api_reachable"] && !capiLive.ok) status = "partial";
+    else if (capiLive?.stats && capiLive.stats.length > 0) status = "active";
+    else if (capiLive?.capiConfigured && capiLive.erro) status = "partial";
+    else if (capiLive?.capiConfigured) status = "partial";
     else status = "inactive";
 
     // ZERO MOCK (30/06): o STATUS do CAPI e real (ping na Meta Graph API).
@@ -1667,9 +1710,10 @@ export default function TrackingPage() {
               <Zap size={12} /> O que é CAPI e por que importa
             </h4>
             <p className="text-blue-900 leading-relaxed mb-2">
-              <strong>Conversions API</strong> é tracking <strong>server-side</strong> da Meta — em vez de o pixel disparar do navegador
-              do usuário (que pode ser bloqueado por ITP, AdBlock, iOS 14.5+), o servidor envia direto ao Meta. Resultado:
-              recupera 70-90% das conversões que você está perdendo hoje.
+              <strong>Conversions API</strong> é tracking <strong>server-side</strong> da Meta: em vez de o pixel disparar do navegador
+              do usuário (que pode ser bloqueado por ITP, AdBlock, iOS 14.5+), o servidor envia direto à Meta. O quanto isso
+              recupera depende de quanto do seu tráfego perde o pixel hoje, e só o seu próprio número responde: a faixa que
+              a Meta divulga em material comercial não foi medida na Suno.
             </p>
             <p className="text-xs text-blue-800">
               <strong>Por que agora:</strong> com os novos <strong>Meta Ads AI Connectors</strong> (lançados em 2026), a configuração
@@ -1677,52 +1721,54 @@ export default function TrackingPage() {
             </p>
           </div>
 
-          {/* Eventos críticos: client vs server */}
+          {/* Eventos que a Meta recebeu neste pixel */}
           <div>
             <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
-              <Activity size={14} /> Eventos críticos: client vs server
+              <Activity size={14} /> Eventos que a Meta recebeu neste pixel
             </h4>
-            <div className="rounded-xl border border-[color:var(--border)] overflow-hidden">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="bg-[color:var(--muted)] text-[color:var(--muted-foreground)]">
-                    <th className="text-left px-4 py-2 font-medium">Evento</th>
-                    <th className="text-right px-4 py-2 font-medium">GA4 (client)</th>
-                    <th className="text-right px-4 py-2 font-medium">CAPI (server)</th>
-                    <th className="text-right px-4 py-2 font-medium">Δ recuperação</th>
-                    <th className="text-center px-4 py-2 font-medium">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {capiData.criticalEvents.map((ev) => {
-                    const delta = ev.capiCount - ev.clientCount;
-                    const pctMore = ev.clientCount > 0 ? Math.round((delta / ev.clientCount) * 100) : 0;
-                    return (
-                      <tr key={ev.name} className="border-t border-[color:var(--border)]">
-                        <td className="px-4 py-2 font-mono font-semibold">{ev.name}</td>
-                        <td className="px-4 py-2 text-right tabular-nums">{formatNumber(ev.clientCount)}</td>
-                        <td className="px-4 py-2 text-right tabular-nums font-semibold">
-                          {ev.capiCount > 0 ? formatNumber(ev.capiCount) : "—"}
-                        </td>
-                        <td className={`px-4 py-2 text-right tabular-nums font-bold ${pctMore > 0 ? "text-emerald-700" : "text-red-600"}`}>
-                          {ev.capiCount > 0 ? `+${pctMore}%` : "0"}
-                        </td>
-                        <td className="px-4 py-2 text-center">
-                          {ev.capiCount > 0 ? (
-                            <CheckCircle2 size={14} className="inline text-emerald-600" />
-                          ) : (
-                            <XCircle size={14} className="inline text-red-500" />
-                          )}
+            {capiLive?.stats && capiLive.stats.length > 0 ? (
+              <div className="rounded-xl border border-[color:var(--border)] overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-[color:var(--muted)] text-[color:var(--muted-foreground)]">
+                      <th className="text-left px-4 py-2 font-medium">Evento</th>
+                      <th className="text-right px-4 py-2 font-medium">Recebidos pela Meta</th>
+                      <th className="text-left px-4 py-2 font-medium">Origem</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {capiLive.stats.map((ev) => (
+                      <tr key={ev.event} className="border-t border-[color:var(--border)]">
+                        <td className="px-4 py-2 font-mono font-semibold">{ev.event}</td>
+                        <td className="px-4 py-2 text-right tabular-nums font-semibold">{formatNumber(ev.count)}</td>
+                        <td className="px-4 py-2 text-[color:var(--muted-foreground)]">
+                          navegador + servidor, sem separar
                         </td>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <p className="text-[11px] text-[color:var(--muted-foreground)] mt-2">
-              Δ recuperação acima de 0 indica que o servidor está enviando mais eventos do que o pixel client-side está
-              capturando — é a sua receita real aparecendo no Meta.
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-[color:var(--border)] p-4 text-xs text-[color:var(--muted-foreground)]">
+                {capiLive?.erro
+                  ? `A Meta não devolveu contagem por evento: ${capiLive.erro}`
+                  : "Sem contagem disponível para este pixel."}
+              </div>
+            )}
+            {/*
+              A coluna "Δ recuperação" que ficava aqui comparava CAPI contra GA4
+              e sempre mostrou zero, porque nunca houve fonte para o lado CAPI.
+              Comparar as duas ferramentas também não responderia a pergunta: GA4
+              e Meta contam coisas diferentes, com janelas e modelos diferentes.
+              A separação por origem existe só no Events Manager.
+            */}
+            <p className="text-[11px] text-[color:var(--muted-foreground)] mt-2 leading-relaxed">
+              Este é o total que a Meta registrou, somando pixel do navegador e servidor.{" "}
+              <strong>Ele não prova que a CAPI está funcionando</strong>: um pixel só client-side produz exatamente a
+              mesma tabela. Para separar, abra Events Manager, selecione o evento e veja{" "}
+              <strong>Connection Method</strong> (Browser / Server / Both). Não existe API pública que devolva esse corte
+              nem o Event Match Quality.
             </p>
           </div>
 
@@ -1775,15 +1821,23 @@ export default function TrackingPage() {
                 requer Meta Events Manager (sem estimativa fabricada)
               </p>
             </div>
+            {/* Os dois cards que ficavam aqui traziam "+15-25% de ROAS" e "3-5
+                dias" como se fossem medição da Suno. São número de material da
+                Meta, e estavam ao lado de um card que diz "sem estimativa
+                fabricada". Ou a tela inteira mede, ou ela declara que não mede. */}
             <div className="rounded-xl bg-blue-50 border border-blue-200 p-3">
-              <p className="text-[10px] uppercase font-bold text-blue-600">Lift de ROAS esperado</p>
-              <p className="text-lg font-bold mt-1 text-blue-800">+15-25%</p>
-              <p className="text-[10px] text-[color:var(--muted-foreground)]">vs tracking só client-side</p>
+              <p className="text-[10px] uppercase font-bold text-blue-600">Lift de ROAS</p>
+              <p className="text-lg font-bold mt-1 text-blue-800">—</p>
+              <p className="text-[10px] text-[color:var(--muted-foreground)]">
+                só medível com teste geo ou de conversão elevada; a Suno não rodou nenhum
+              </p>
             </div>
             <div className="rounded-xl bg-violet-50 border border-violet-200 p-3">
-              <p className="text-[10px] uppercase font-bold text-violet-600">Tempo de implementação</p>
-              <p className="text-lg font-bold mt-1 text-violet-800">3-5 dias</p>
-              <p className="text-[10px] text-[color:var(--muted-foreground)]">via AI Connector</p>
+              <p className="text-[10px] uppercase font-bold text-violet-600">Event Match Quality</p>
+              <p className="text-lg font-bold mt-1 text-violet-800">—</p>
+              <p className="text-[10px] text-[color:var(--muted-foreground)]">
+                só no Events Manager: não há API pública que devolva o EMQ
+              </p>
             </div>
           </div>
 

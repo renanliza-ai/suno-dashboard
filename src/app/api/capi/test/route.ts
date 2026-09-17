@@ -1,121 +1,135 @@
+import { auth } from "@/auth";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
+import { resolveCAPICredentials } from "@/lib/capi-credenciais";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * /api/capi/test
+ * /api/capi/test — envia UM evento de teste à Conversions API da Meta.
  *
- * Faz um ping real à Meta Conversions API e retorna o diagnóstico:
- *  - Pixel ID + token estão configurados?
- *  - O endpoint Meta aceita o token? (pixel/token combinam?)
- *  - Um evento de teste (PageView com event_id sintético) é aceito?
- *  - Match Quality estimado por proxy (campos que enviamos)
+ * @forma-observada: resposta da Graph API v19.0 POST /{pixel}/events, campos
+ * `events_received`, `messages`, `fbtrace_id` e `error{message,type,code}`,
+ * observados na validação do pixel da Research em 17/09/2026.
  *
- * Se METAPIA_CAPI_TEST_CODE estiver setado, o evento entra em "Test Events"
- * (não vai pra produção/atribuição). Recomendado pra validação inicial.
+ * ⚠️ TRÊS DEFEITOS CORRIGIDOS EM 17/09/2026. Não reabra nenhum.
  *
- * Uso: GET /api/capi/test?clientIp=auto&userAgent=auto
+ * 1. A ROTA ERA ABERTA. O middleware do projeto exclui `api` do matcher
+ *    (`/((?!api|_next/...))`), então NENHUMA rota de API é protegida por ele:
+ *    cada uma precisa do seu próprio gate. Esta não tinha. Qualquer pessoa na
+ *    internet podia chamar a URL pública e injetar evento no pixel da Suno.
+ *
+ * 2. A TELA CHAMAVA ISTO SOZINHA, a cada 5 minutos, só para mostrar "status".
+ *    Olhar o painel poluía o pixel de produção. A leitura mudou para
+ *    `/api/capi/stats`, que não envia nada. Enviar agora exige `?enviar=1`, e
+ *    quem passa isso é um botão que a pessoa clica de propósito.
+ *
+ * 3. O EVENTO LEVAVA PII FALSA: `em` de "test@suno.com.br", `ph` de
+ *    "5511999999999" e um `external_id` inventado, todos hasheados e enviados
+ *    como se fossem pessoa real. Isso entra em correspondência de público e em
+ *    Event Match Quality, ou seja, sujava o sinal que a Meta usa para otimizar
+ *    campanha. O teste agora manda SÓ IP e user agent, que é o mínimo para a
+ *    Meta aceitar o evento, e nenhum identificador de pessoa inventado.
+ *
+ * ⚠️ SEM `META_CAPI_TEST_CODE` O EVENTO VAI PARA PRODUÇÃO. Com a variável, ele
+ * cai em Test Events e não entra em atribuição. A rota recusa o envio em
+ * produção a não ser que quem chama assuma isso explicitamente com
+ * `?confirmarProducao=1`, porque o padrão silencioso era o que causava o
+ * problema 2.
  */
-/**
- * Normaliza nome de propriedade pra comparação tolerante (case-insensitive,
- * remove espaços extras, normaliza "–" e "-").
- */
-function normalizeName(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/[–—]/g, "-")
-    .trim();
-}
-
-/**
- * Busca o par (pixelId, token) para uma propriedade específica.
- * Procura nos blocos `META_CAPI_PROPERTY_N_*` por nome.
- * Cai no fallback `META_PIXEL_ID` / `META_CAPI_ACCESS_TOKEN` se não achar.
- *
- * Retorna `null` se nem o fallback estiver configurado, indicando que a
- * propriedade não tem CAPI ativa.
- */
-function resolveCAPICredentials(propertyName: string | null): {
-  pixelId: string;
-  accessToken: string;
-  matchedProperty: string | null;
-  fromFallback: boolean;
-} | null {
-  // 1. Tenta achar bloco numerado por nome
-  if (propertyName) {
-    const target = normalizeName(propertyName);
-    for (let i = 1; i <= 20; i++) {
-      const name = process.env[`META_CAPI_PROPERTY_${i}_NAME`];
-      const pixel = process.env[`META_CAPI_PROPERTY_${i}_PIXEL_ID`];
-      const token = process.env[`META_CAPI_PROPERTY_${i}_TOKEN`];
-      if (name && pixel && token && normalizeName(name) === target) {
-        return { pixelId: pixel, accessToken: token, matchedProperty: name, fromFallback: false };
-      }
-    }
-  }
-
-  // 2. Fallback global (legado / default)
-  const fbPixel = process.env.META_PIXEL_ID;
-  const fbToken = process.env.META_CAPI_ACCESS_TOKEN;
-  if (fbPixel && fbToken) {
-    return { pixelId: fbPixel, accessToken: fbToken, matchedProperty: null, fromFallback: true };
-  }
-
-  return null;
-}
 
 export async function GET(req: NextRequest) {
+  const session = (await auth()) as { user?: { isMaster?: boolean } } | null;
+  if (!session?.user?.isMaster) {
+    return NextResponse.json({ error: "forbidden_master_only" }, { status: 403 });
+  }
+
   const propertyName = req.nextUrl.searchParams.get("propertyName");
+  const enviar = req.nextUrl.searchParams.get("enviar") === "1";
+  const confirmarProducao = req.nextUrl.searchParams.get("confirmarProducao") === "1";
   const credentials = resolveCAPICredentials(propertyName);
   const testCode = process.env.META_CAPI_TEST_CODE;
 
-  // 1. Validação de configuração — se nem a propriedade específica nem o fallback,
-  // é porque essa property realmente não tem CAPI configurada.
   if (!credentials) {
     return NextResponse.json({
       ok: false,
       stage: "config",
-      error:
-        propertyName
-          ? `CAPI não configurada para a propriedade "${propertyName}". Adicione um bloco META_CAPI_PROPERTY_N_NAME / PIXEL_ID / TOKEN em .env.local.`
-          : "Nenhuma credencial CAPI configurada em .env.local.",
-      propertyRequested: propertyName,
       capiConfigured: false,
+      propertyRequested: propertyName,
+      error: propertyName
+        ? `CAPI não configurada para "${propertyName}". Falta um bloco META_CAPI_PROPERTY_N_NAME / PIXEL_ID / TOKEN no ambiente.`
+        : "Nenhuma credencial CAPI configurada no ambiente.",
       checks: {
         hasPropertyName: Boolean(propertyName),
         hasPropertySpecificConfig: false,
         hasFallback: Boolean(process.env.META_PIXEL_ID && process.env.META_CAPI_ACCESS_TOKEN),
         hasTestCode: Boolean(testCode),
       },
-    }, { status: 200 }); // 200 para o frontend conseguir renderizar o estado "não configurado"
+    });
   }
 
   const { pixelId, accessToken, matchedProperty, fromFallback } = credentials;
 
-  // 2. Sanity check do formato do token (Meta access tokens começam com EAA...)
   if (!accessToken.startsWith("EA")) {
-    return NextResponse.json({
-      ok: false,
-      stage: "format",
-      error: "Token não parece ser um access token válido da Meta (deveria começar com EAA...)",
-    }, { status: 400 });
+    return NextResponse.json(
+      {
+        ok: false,
+        stage: "format",
+        error: "O token não tem formato de access token da Meta (esperado começar com EA).",
+      },
+      { status: 400 }
+    );
   }
 
-  // 3. Monta um evento de teste — PageView é o mais seguro (não cria conversão real)
+  // Sem `enviar=1` a rota só DIZ o que faria. É o estado seguro por padrão.
+  if (!enviar) {
+    return NextResponse.json({
+      ok: null,
+      enviado: false,
+      capiConfigured: true,
+      matchedProperty,
+      propertyRequested: propertyName,
+      fromFallback,
+      pixelIdMasked: `${pixelId.slice(0, 4)}****${pixelId.slice(-4)}`,
+      tokenLastFour: accessToken.slice(-4),
+      modoTeste: Boolean(testCode),
+      detalhe: testCode
+        ? "Pronto para enviar um PageView de teste. Como META_CAPI_TEST_CODE está configurado, ele cai em Test Events e não entra em atribuição. Chame com enviar=1."
+        : "Pronto para enviar, MAS sem META_CAPI_TEST_CODE o evento vai para PRODUÇÃO e entra na contagem do pixel. Configure o test code, ou chame com enviar=1&confirmarProducao=1 se aceitar isso de propósito.",
+    });
+  }
+
+  // Envio em produção exige aceite explícito.
+  if (!testCode && !confirmarProducao) {
+    return NextResponse.json(
+      {
+        ok: false,
+        enviado: false,
+        stage: "producao_nao_confirmada",
+        error:
+          "Envio recusado: sem META_CAPI_TEST_CODE este evento entraria no pixel de PRODUÇÃO e na contagem real. Configure o test code em Events Manager > Test Events, ou repita com confirmarProducao=1 para assumir o envio em produção.",
+        modoTeste: false,
+      },
+      { status: 409 }
+    );
+  }
+
   const ip =
     req.headers.get("x-forwarded-for")?.split(",")[0] ||
     req.headers.get("x-real-ip") ||
     "127.0.0.1";
   const userAgent = req.headers.get("user-agent") || "Mozilla/5.0 (CAPI-Test)";
   const eventTime = Math.floor(Date.now() / 1000);
-  const eventId = `test_${eventTime}_${Math.random().toString(36).slice(2, 10)}`;
+  const eventId = `suno_dashboard_test_${eventTime}_${crypto.randomBytes(4).toString("hex")}`;
 
-  // Hash SHA-256 simples — Meta exige PII hasheada
-  const hash = (s: string) => crypto.createHash("sha256").update(s.trim().toLowerCase()).digest("hex");
-
+  /**
+   * user_data com o MÍNIMO que a Meta aceita.
+   *
+   * Nada de `em`, `ph` ou `external_id`: identificador de pessoa inventado entra
+   * em correspondência de público e em Event Match Quality, e distorce o sinal
+   * de otimização de campanha com uma pessoa que não existe.
+   */
   const payload = {
     data: [
       {
@@ -123,25 +137,14 @@ export async function GET(req: NextRequest) {
         event_time: eventTime,
         event_id: eventId,
         action_source: "website",
-        event_source_url: req.headers.get("referer") || "https://suno.com.br/test",
-        user_data: {
-          client_ip_address: ip,
-          client_user_agent: userAgent,
-          em: [hash("test@suno.com.br")],
-          ph: [hash("5511999999999")],
-          external_id: [hash("test-user-suno-001")],
-        },
-        custom_data: {
-          test_source: "suno-dashboard-capi-validator",
-          dashboard_version: "1.0",
-        },
+        event_source_url: "https://suno-dashboard-painel.vercel.app/tracking",
+        user_data: { client_ip_address: ip, client_user_agent: userAgent },
+        custom_data: { test_source: "suno-dashboard-capi-validator" },
       },
     ],
     ...(testCode ? { test_event_code: testCode } : {}),
   };
 
-  // 4. Chama a Graph API da Meta
-  const metaUrl = `https://graph.facebook.com/v19.0/${pixelId}/events?access_token=${accessToken}`;
   let metaResponse: {
     events_received?: number;
     messages?: string[];
@@ -152,9 +155,13 @@ export async function GET(req: NextRequest) {
   let networkError: string | null = null;
 
   try {
-    const resp = await fetch(metaUrl, {
+    // Token no HEADER. Na query string ele vaza para log de servidor e de proxy.
+    const resp = await fetch(`https://graph.facebook.com/v19.0/${pixelId}/events`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
       body: JSON.stringify(payload),
     });
     httpStatus = resp.status;
@@ -163,8 +170,8 @@ export async function GET(req: NextRequest) {
     networkError = (e as Error).message;
   }
 
-  // 5. Diagnóstico
   const isOk = httpStatus === 200 && metaResponse?.events_received === 1;
+
   const checks = {
     "1_credentials_configured": Boolean(pixelId && accessToken),
     "2_token_format_valid": accessToken.startsWith("EA"),
@@ -174,106 +181,69 @@ export async function GET(req: NextRequest) {
     "6_test_mode_active": Boolean(testCode),
   };
 
-  // 6. Recomendações práticas
   const recommendations: string[] = [];
   if (!testCode) {
     recommendations.push(
-      "⚠ Você está enviando para PRODUÇÃO. Pegue um Test Event Code em Events Manager → Test Events e adicione META_CAPI_TEST_CODE no .env.local."
+      "Este evento foi para PRODUÇÃO. Configure META_CAPI_TEST_CODE (Events Manager > Test Events) para que a validação não entre mais na contagem do pixel."
     );
   }
   if (metaResponse?.error) {
     recommendations.push(
-      `❌ Meta retornou erro: ${metaResponse.error.message}. Verifique se o token tem permissão para o pixel ${pixelId}.`
-    );
-  }
-  if (httpStatus === 200 && metaResponse?.events_received === 1) {
-    recommendations.push(
-      "✅ Integração funcionando! Vá em Events Manager → Test Events e confirme que o evento PageView com event_id começando com 'test_' chegou."
+      `A Meta recusou: ${metaResponse.error.message}. Confira se o token tem permissão para o pixel ${pixelId}.`
     );
   }
   if (httpStatus >= 400 && httpStatus < 500) {
     recommendations.push(
-      "❌ Erro 4xx geralmente indica token expirado, pixel ID errado ou permissão faltando. Renove o access token em Events Manager → Settings → Generate Access Token."
+      "Erro 4xx costuma ser token expirado, pixel errado ou permissão faltando. Gere outro token em Events Manager > Settings."
     );
   }
-
-  // Aviso adicional se a propriedade pediu específica mas caiu no fallback
   if (propertyName && fromFallback) {
     recommendations.unshift(
-      `ℹ Você está usando o pixel padrão (META_PIXEL_ID). A propriedade "${propertyName}" não tem bloco específico em .env.local — está usando as credenciais default do Suno Research. Considere adicionar um bloco META_CAPI_PROPERTY_N_* dedicado.`
+      `Atenção: "${propertyName}" não tem bloco próprio e caiu no pixel padrão (META_PIXEL_ID). Este teste validou o pixel do Suno Research, não o desta B.U.`
+    );
+  }
+  if (isOk) {
+    recommendations.push(
+      "O ping funcionou. Isso prova que a credencial é válida e que a Meta aceita evento por este pixel. NÃO prova que as conversões reais da Suno estão indo por CAPI: quem responde isso é Events Manager > Connection Method."
     );
   }
 
-  // 7. Stats REAIS do pixel (best-effort): contagem agregada de eventos que a
-  // Meta recebeu, via GET /{pixel}/stats. Substitui os numeros que antes eram
-  // FABRICADOS no /tracking. Parse defensivo: se o shape/permissao nao ajudar,
-  // devolve null e a UI mostra indisponivel (nunca inventa).
-  let pixelStats: { event: string; count: number }[] | null = null;
-  let pixelStatsError: string | null = null;
-  try {
-    const statsResp = await fetch(
-      `https://graph.facebook.com/v19.0/${pixelId}/stats?aggregation=event&access_token=${accessToken}`,
-      { cache: "no-store" }
-    );
-    const statsJson = (await statsResp.json()) as {
-      data?: { value?: { value?: string; count?: number }[] | number; start_time?: string }[];
-      error?: { message?: string };
-    };
-    if (statsResp.ok && Array.isArray(statsJson.data)) {
-      const agg = new Map<string, number>();
-      for (const bucket of statsJson.data) {
-        if (Array.isArray(bucket.value)) {
-          for (const v of bucket.value) {
-            if (v && typeof v.value === "string") {
-              agg.set(v.value, (agg.get(v.value) || 0) + Number(v.count || 0));
-            }
-          }
-        }
-      }
-      if (agg.size > 0) {
-        pixelStats = Array.from(agg.entries())
-          .map(([event, count]) => ({ event, count }))
-          .sort((a, b) => b.count - a.count)
-          .slice(0, 15);
-      }
-    } else if (statsJson.error?.message) {
-      pixelStatsError = statsJson.error.message.slice(0, 200);
-    }
-  } catch (e) {
-    pixelStatsError = (e as Error).message.slice(0, 200);
-  }
-
-  return NextResponse.json({
-    ok: isOk,
-    capiConfigured: true,
-    matchedProperty,
-    propertyRequested: propertyName,
-    fromFallback,
-    pixelId,
-    pixelStats,
-    pixelStatsError,
-    pixelIdMasked: `${pixelId.slice(0, 4)}****${pixelId.slice(-4)}`,
-    tokenLastFour: accessToken.slice(-4),
-    httpStatus,
-    networkError,
-    checks,
-    metaResponse: {
-      events_received: metaResponse?.events_received,
-      messages: metaResponse?.messages,
-      fbtrace_id: metaResponse?.fbtrace_id,
-      error: metaResponse?.error,
+  return NextResponse.json(
+    {
+      ok: isOk,
+      enviado: true,
+      capiConfigured: true,
+      matchedProperty,
+      propertyRequested: propertyName,
+      fromFallback,
+      pixelIdMasked: `${pixelId.slice(0, 4)}****${pixelId.slice(-4)}`,
+      tokenLastFour: accessToken.slice(-4),
+      httpStatus,
+      networkError,
+      checks,
+      metaResponse: {
+        events_received: metaResponse?.events_received,
+        messages: metaResponse?.messages,
+        fbtrace_id: metaResponse?.fbtrace_id,
+        error: metaResponse?.error,
+      },
+      eventSent: {
+        event_name: "PageView",
+        event_id: eventId,
+        event_time: eventTime,
+        action_source: "website",
+        pii_fields_sent: ["client_ip_address", "client_user_agent"],
+        test_mode: Boolean(testCode),
+      },
+      recommendations,
+      /**
+       * O limite desta rota, explícito na própria resposta. Sem isto a tela
+       * mostrava "Ativo" e o leitor concluía que a CAPI da Suno estava operando,
+       * quando o que passou foi só o ping do painel.
+       */
+      oQueIstoNaoProva:
+        "Que os eventos reais de Lead e Purchase da Suno estão sendo enviados por CAPI, que estão deduplicando com o pixel do navegador pelo event_id, e qual é o Event Match Quality. Nada disso sai desta rota.",
     },
-    eventSent: {
-      event_name: "PageView",
-      event_id: eventId,
-      event_time: eventTime,
-      action_source: "website",
-      pii_fields_sent: ["em", "ph", "external_id", "client_ip_address", "client_user_agent"],
-      test_mode: Boolean(testCode),
-    },
-    recommendations,
-    nextStep: isOk
-      ? "Abra Meta Events Manager → Test Events e confirme que o evento chegou com selo 'Server'."
-      : "Veja recommendations acima para diagnosticar o problema.",
-  }, { status: isOk ? 200 : 500 });
+    { status: isOk ? 200 : 500 }
+  );
 }
