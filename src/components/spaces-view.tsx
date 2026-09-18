@@ -47,7 +47,7 @@ export function SpacesView({
   icon: React.ReactNode;
   subtitle: string;
 }) {
-  const { useRealData, periodLabel, customRange, days } = useGA4();
+  const { useRealData, selected, periodLabel, customRange, days } = useGA4();
   const { data, meta, error, loading } = useComunicacaoSpaces(kind);
   const [sortKey, setSortKey] = useState<SortKey>("sessions");
   const [sortDesc, setSortDesc] = useState(true);
@@ -343,7 +343,15 @@ export function SpacesView({
                       baixarCsv(
                         `pecas-${kind}-${data.bu.key}-${data.range.startDate}-a-${data.range.endDate}`,
                         ["Espaco","Nome da peca","Tem nome","% do espaco","Pecas no espaco","Grafias somadas","Tipo","Cliques","Sessoes engajadas","% engajamento","Leads","Conta criada","Chegou ao checkout","Cliques de CTA (todos os destinos)","Compras"],
-                        rows.map((r) => [r.space, r.bannerName, r.named ? "sim" : "nao", r.sharePct, r.pecasNoEspaco, r.rawMediums.join(" | "), r.kind, r.sessions, r.engagedSessions, r.engagementRate, r.leads, r.accounts, r.checkoutStarts, r.ctaClicksAll, r.purchases])
+                        rows.map((r) => [r.space, r.bannerName, r.named ? "sim" : "nao", r.sharePct, r.pecasNoEspaco, r.rawMediums.join(" | "), r.kind, r.sessions, r.engagedSessions, r.engagementRate, r.leads, r.accounts, r.checkoutStarts, r.ctaClicksAll, r.purchases]),
+                        // Carimbo de conta em toda linha: o arquivo passa a dizer
+                        // sozinho de qual property ele veio, sem depender do nome.
+                        {
+                          property: selected?.displayName || "(não identificada)",
+                          propertyId: selected?.id || "-",
+                          bu: data.bu.label,
+                          periodo: `${data.range.startDate} a ${data.range.endDate}`,
+                        }
                       )
                     }
                   />

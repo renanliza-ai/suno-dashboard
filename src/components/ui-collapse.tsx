@@ -137,21 +137,62 @@ export function ShowMore({
   );
 }
 
+/** Identificação da conta, carimbada em toda linha do arquivo exportado. */
+export type ContextoExport = {
+  /** displayName da property do GA4 que estava selecionada. */
+  property: string;
+  /** ID numérico da property, que é o que não tem sinônimo nem grafia dupla. */
+  propertyId: string;
+  /** B.U. resolvida a partir da property, como o painel a interpretou. */
+  bu: string;
+  /** Período exportado, para o arquivo não depender do nome dele. */
+  periodo?: string;
+};
+
 /**
  * Exporta linhas para CSV e dispara o download no navegador.
  *
  * Separador ";" e BOM UTF-8 porque o destino é Excel em pt-BR: com vírgula o
  * Excel joga tudo numa coluna só, e sem BOM ele come os acentos.
  * Número sai com vírgula decimal pelo mesmo motivo.
+ *
+ * ⚠️ O CARIMBO DE CONTA É OBRIGATÓRIO, E O MOTIVO É ESTE
+ *
+ * Em 18/09/2026 o Renan relatou export trazendo dado de outra conta. As rotas
+ * filtram por property e a apuração não reproduziu o problema, mas o arquivo
+ * antigo não dizia de qual conta ele era: quem abrisse dois exports lado a lado
+ * não tinha como saber qual era qual, nem provar que estavam certos.
+ *
+ * Agora as três primeiras colunas de TODA linha trazem conta, ID e B.U. Isso
+ * faz duas coisas: elimina a ambiguidade na leitura, e transforma qualquer
+ * mistura futura em algo visível na hora, com uma tabela dinâmica de uma
+ * coluna, em vez de suspeita sem prova.
+ *
+ * O ID entra junto do nome de propósito: nome de property muda e tem grafia
+ * dupla (traço normal contra travessão já mordeu este projeto), o ID não.
  */
-export function baixarCsv(nomeArquivo: string, colunas: string[], linhas: (string | number | null)[][]) {
+export function baixarCsv(
+  nomeArquivo: string,
+  colunas: string[],
+  linhas: (string | number | null)[][],
+  contexto?: ContextoExport
+) {
   const esc = (v: string | number | null): string => {
     if (v === null || v === undefined) return "";
     if (typeof v === "number") return String(v).replace(".", ",");
     const s = String(v);
     return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const csv = [colunas.join(";"), ...linhas.map((l) => l.map(esc).join(";"))].join("\r\n");
+
+  const colunasFinais = contexto
+    ? ["Conta (property)", "ID da property", "B.U.", ...(contexto.periodo ? ["Periodo"] : []), ...colunas]
+    : colunas;
+  const carimbo = contexto
+    ? [contexto.property, contexto.propertyId, contexto.bu, ...(contexto.periodo ? [contexto.periodo] : [])]
+    : [];
+  const linhasFinais = contexto ? linhas.map((l) => [...carimbo, ...l]) : linhas;
+
+  const csv = [colunasFinais.join(";"), ...linhasFinais.map((l) => l.map(esc).join(";"))].join("\r\n");
   const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

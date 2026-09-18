@@ -588,7 +588,15 @@ export default function LandingPagesPage() {
                       r.primaryRate,
                       r.bounceRate,
                       r.mismatch,
-                    ])
+                    ]),
+                    // Carimbo de conta em toda linha: o arquivo passa a dizer
+                    // sozinho de qual property ele veio, sem depender do nome.
+                    {
+                      property: selected?.displayName || "(não identificada)",
+                      propertyId: selected?.id || "-",
+                      bu: data.bu.label,
+                      periodo: `${data.range.startDate} a ${data.range.endDate}`,
+                    }
                   )
                 }
               />
