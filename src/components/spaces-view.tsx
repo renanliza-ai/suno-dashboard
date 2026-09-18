@@ -5,6 +5,7 @@ import { AlertTriangle, Info, Ban } from "lucide-react";
 import { useGA4, useComunicacaoSpaces, type SpaceRow } from "@/lib/ga4-context";
 import { DataStatus, PeriodBadge, SkeletonBlock, DataErrorCard } from "@/components/data-status";
 import { CollapsibleNote, ShowMore, BotaoExportar, baixarCsv } from "@/components/ui-collapse";
+import { avaliarTrafego, chaveDaPeca } from "@/lib/trafego-suspeito";
 
 /**
  * Visão compartilhada das abas Banners e Pop-ups.
@@ -72,6 +73,12 @@ export function SpacesView({
   }, [data, sortKey, sortDesc]);
 
   const rowsVisiveis = useMemo(() => rows.slice(0, visiveis), [rows, visiveis]);
+
+  /**
+   * Tráfego inválido. NÃO altera número nenhum: o KPI segue mostrando o que o
+   * GA4 devolveu, e isto só marca o que não deveria ser lido como audiência.
+   */
+  const trafego = useMemo(() => avaliarTrafego(rows), [rows]);
 
   /**
    * ESPAÇO EXPANDIDO (11/09/2026).
@@ -306,6 +313,44 @@ export function SpacesView({
             {hasPurchase && <Kpi label="Compras" value={fmt(data.totals.purchases)} sub="fim do funil" />}
           </div>
 
+          {/* Tráfego inválido: vem ANTES da integridade porque, quando aparece,
+              é o fato mais importante da tela. Em 18/09/2026 duas peças
+              responderam por 80% dos cliques da Research com 5% a 8% de
+              engajamento e zero conversão, e o KPI de 969.794 foi lido como
+              resultado de banner. */}
+          {trafego.suspeitas.size > 0 && (
+            <div className="rounded-2xl border-2 border-red-300 bg-red-50 p-4 mb-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={20} className="text-red-600 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold text-red-900 mb-1">
+                    {trafego.pctSuspeito}% dos cliques desta janela têm sinal de tráfego inválido
+                  </p>
+                  <p className="text-xs text-red-800 leading-relaxed mb-2">
+                    {trafego.suspeitas.size === 1 ? "Uma peça concentra" : `${trafego.suspeitas.size} peças concentram`}{" "}
+                    <b>{fmt(trafego.sessoesSuspeitas)}</b> dos {fmt(trafego.sessoesTotais)} cliques, com
+                    engajamento muito abaixo do resto e nenhuma conversão. Descontando{" "}
+                    {trafego.suspeitas.size === 1 ? "ela" : "elas"}, o volume real da janela fica perto de{" "}
+                    <b>{fmt(trafego.sessoesLimpas)}</b> cliques.
+                  </p>
+                  <ul className="space-y-1.5">
+                    {Array.from(trafego.suspeitas.values()).map((s) => (
+                      <li key={s.chave} className="text-[11px] text-red-900 bg-white/60 rounded-lg px-2.5 py-1.5">
+                        <b className="font-mono">{s.chave.replace("||", " · ")}</b>
+                        <br />
+                        {s.motivo}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-[11px] text-red-700 mt-2 leading-relaxed">
+                    Os números acima e na tabela seguem como o GA4 os entregou: nada foi descontado. O
+                    aviso marca o que não deve ser lido como audiência, e a decisão de excluir é sua.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Integridade da quebra por peça. Só aparece quando NÃO fecha: se a
               soma das peças perder sessão para corte de linha do GA4, a tela
               diz quanto, em vez de mostrar uma tabela silenciosamente menor. */}
@@ -342,8 +387,8 @@ export function SpacesView({
                     onClick={() =>
                       baixarCsv(
                         `pecas-${kind}-${data.bu.key}-${data.range.startDate}-a-${data.range.endDate}`,
-                        ["Espaco","Nome da peca","Tem nome","% do espaco","Pecas no espaco","Grafias somadas","Tipo","Cliques","Sessoes engajadas","% engajamento","Leads","Conta criada","Chegou ao checkout","Cliques de CTA (todos os destinos)","Compras"],
-                        rows.map((r) => [r.space, r.bannerName, r.named ? "sim" : "nao", r.sharePct, r.pecasNoEspaco, r.rawMediums.join(" | "), r.kind, r.sessions, r.engagedSessions, r.engagementRate, r.leads, r.accounts, r.checkoutStarts, r.ctaClicksAll, r.purchases]),
+                        ["Suspeita de trafego invalido","Espaco","Nome da peca","Tem nome","% do espaco","Pecas no espaco","Grafias somadas","Tipo","Cliques","Sessoes engajadas","% engajamento","Leads","Conta criada","Chegou ao checkout","Cliques de CTA (todos os destinos)","Compras"],
+                        rows.map((r) => [trafego.suspeitas.has(chaveDaPeca(r.space, r.bannerName)) ? "SIM" : "nao", r.space, r.bannerName, r.named ? "sim" : "nao", r.sharePct, r.pecasNoEspaco, r.rawMediums.join(" | "), r.kind, r.sessions, r.engagedSessions, r.engagementRate, r.leads, r.accounts, r.checkoutStarts, r.ctaClicksAll, r.purchases]),
                         // Carimbo de conta em toda linha: o arquivo passa a dizer
                         // sozinho de qual property ele veio, sem depender do nome.
                         {
@@ -409,13 +454,17 @@ export function SpacesView({
                       </tr>
                     </thead>
                     <tbody>
-                      {rowsVisiveis.map((r) => (
+                      {rowsVisiveis.map((r) => {
+                        const suspeita = trafego.suspeitas.get(chaveDaPeca(r.space, r.bannerName));
+                        return (
                         <Fragment key={`${r.space}||${r.bannerName}`}>
                         <tr
                           onClick={() => setEspacoAberto((v) => (v === r.space ? null : r.space))}
-                          title={`Ver as ${r.pecasNoEspaco} peças de ${r.space}`}
+                          title={suspeita ? suspeita.motivo : `Ver as ${r.pecasNoEspaco} peças de ${r.space}`}
                           className={`border-b border-[color:var(--border)] last:border-0 cursor-pointer ${
-                            espacoAberto === r.space
+                            suspeita
+                              ? "bg-red-50/70 hover:bg-red-50"
+                              : espacoAberto === r.space
                               ? "bg-[#7c5cff]/[0.06]"
                               : "hover:bg-[color:var(--muted)]/40"
                           }`}
@@ -447,7 +496,17 @@ export function SpacesView({
                             )}
                           </td>
                           <PecaCell row={r} />
-                          <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmt(r.sessions)}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums font-semibold">
+                            {suspeita && (
+                              <span
+                                className="mr-1.5 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-red-600 text-white align-middle"
+                                title={suspeita.motivo}
+                              >
+                                suspeito
+                              </span>
+                            )}
+                            {fmt(r.sessions)}
+                          </td>
                           <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.engagementRate)}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-emerald-700">
                             {fmt(r.leads)}
@@ -491,7 +550,8 @@ export function SpacesView({
                           </tr>
                         )}
                         </Fragment>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
