@@ -103,9 +103,50 @@ export async function GET(req: NextRequest) {
     return { data: quebra === "date" ? formatarData(d) : d, dataISO: d, ...valores, total: soma };
   });
 
+  /**
+   * ⚠️ A MEDIA POR TOTAL DE DIAS MENTE, E ME FEZ ERRAR EM 21/09/2026.
+   *
+   * Reportei que o evento `teste` do Status Invest continuava disparando
+   * 12.311 vezes por dia. Ele tinha sido removido em 24/08 e a janela pedida
+   * comecava em 22/08: tres dias anteriores a remocao respondiam por 348.935
+   * dos 369.316 eventos. O ritmo real na data do relato era 95 por dia.
+   *
+   * Por isso a resposta traz o ULTIMO DIA, a media so dos dias em que o evento
+   * apareceu, e a comparacao entre o comeco e o fim da janela. Media anual de
+   * evento que morreu no meio do caminho e numero certo respondendo a pergunta
+   * errada.
+   */
   const porEvento = nomes.map((nome) => {
-    const total = dias.reduce((s, d) => s + (porDia.get(d)?.get(nome) || 0), 0);
-    return { evento: nome, total, mediaDiaria: dias.length ? Math.round(total / dias.length) : 0 };
+    const valores = dias.map((d) => porDia.get(d)?.get(nome) || 0);
+    const total = valores.reduce((a, b) => a + b, 0);
+    const comEvento = valores.filter((v) => v > 0).length;
+    const ultimoIdx = valores.map((v, i) => (v > 0 ? i : -1)).filter((i) => i >= 0).pop() ?? -1;
+    const primeiroIdx = valores.findIndex((v) => v > 0);
+    // Compara a primeira com a ultima semana da janela, quando ha as duas.
+    const n = Math.min(7, Math.floor(dias.length / 2));
+    const inicio = n > 0 ? valores.slice(0, n).reduce((a, b) => a + b, 0) / n : 0;
+    const fim = n > 0 ? valores.slice(-n).reduce((a, b) => a + b, 0) / n : 0;
+    const variacao = inicio > 0 ? Number((((fim - inicio) / inicio) * 100).toFixed(1)) : null;
+    return {
+      evento: nome,
+      total,
+      mediaDiaria: dias.length ? Math.round(total / dias.length) : 0,
+      diasComEvento: comEvento,
+      mediaNosDiasComEvento: comEvento ? Math.round(total / comEvento) : 0,
+      primeiroDia: primeiroIdx >= 0 ? formatarData(dias[primeiroIdx]) : null,
+      ultimoDia: ultimoIdx >= 0 ? formatarData(dias[ultimoIdx]) : null,
+      ultimoValor: ultimoIdx >= 0 ? valores[ultimoIdx] : 0,
+      mediaPrimeirosDias: Math.round(inicio),
+      mediaUltimosDias: Math.round(fim),
+      variacaoPct: variacao,
+      /** Texto pronto, para ninguem repetir o numero errado por descuido. */
+      leitura:
+        variacao !== null && variacao <= -80
+          ? `Praticamente parou: caiu de ${Math.round(inicio)} para ${Math.round(fim)} por dia na janela. NAO use a media da janela como ritmo atual; o ritmo atual e ${valores[valores.length - 1]} por dia.`
+          : variacao !== null && variacao >= 200
+            ? `Disparou na janela: subiu de ${Math.round(inicio)} para ${Math.round(fim)} por dia. A media da janela subestima o ritmo atual.`
+            : null,
+    };
   }).sort((a, b) => b.total - a.total);
 
   return NextResponse.json({
