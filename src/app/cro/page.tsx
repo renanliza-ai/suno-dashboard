@@ -152,6 +152,22 @@ export default function CROPage() {
   const [comunicacao, setComunicacao] = useState<{ achados: Achado[]; erro: string | null; pecas: number } | null>(null);
 
   /**
+   * Achados que cruzam a fricção medida com o CONTEÚDO da página.
+   *
+   * Fecha a lacuna que fazia o Clarity dizer "15% de dead click" sem dizer em
+   * quê. Só roda para páginas que JÁ têm fricção medida: a página nunca vira
+   * achado sozinha, senão a aba viraria uma lista de opiniões sobre LPs que
+   * talvez não tenham problema nenhum.
+   */
+  const [conteudo, setConteudo] = useState<{
+    achados: Achado[];
+    naoLegiveis: number;
+    lidas: number;
+    aviso: string | null;
+  } | null>(null);
+  const [lendoConteudo, setLendoConteudo] = useState(false);
+
+  /**
    * Estado real de cada LP no servidor.
    *
    * Pedido do Renan em 15/09/2026, depois de aposentar dezenas de LPs antigas
@@ -307,9 +323,55 @@ export default function CROPage() {
     return () => { cancelado = true; };
   }, [data]);
 
+  /**
+   * Lê o conteúdo das páginas que já acusaram fricção.
+   *
+   * Roda depois de `data` porque depende dos achados de página existirem: a
+   * entrada aqui é a lista de URLs com problema medido, não o inventário de LPs.
+   */
+  useEffect(() => {
+    const deFriccao = (data?.achados || []).filter((a) => a.superficie === "pagina");
+    if (!deFriccao.length) { setConteudo(null); return; }
+    let cancelado = false;
+
+    // Uma entrada por URL, com a fricção que ela acusou.
+    const porUrl = new Map<string, { url: string; pageViews: number; deadRate: number | null; rageRate: number | null; quickbackRate: number | null; conversoes: number; objetivo: "captacao" | "venda" | "indefinido" }>();
+    for (const a of deFriccao) {
+      if (!/^https?:\/\//.test(a.pagina)) continue;
+      const atual = porUrl.get(a.pagina) || {
+        url: a.pagina, pageViews: 0, deadRate: null, rageRate: null, quickbackRate: null,
+        conversoes: 0, objetivo: "indefinido" as const,
+      };
+      // As taxas vêm no texto da evidência do Clarity; o motor de conteúdo só
+      // precisa saber QUAL fricção disparou, então a marca vem do id do achado.
+      if (a.id.startsWith("dead:")) atual.deadRate = 100;
+      if (a.id.startsWith("rage:")) atual.rageRate = 100;
+      if (a.id.startsWith("quick:")) atual.quickbackRate = 100;
+      porUrl.set(a.pagina, atual);
+    }
+    const paginas = Array.from(porUrl.values()).slice(0, 60);
+    if (!paginas.length) { setConteudo(null); return; }
+
+    setLendoConteudo(true);
+    fetch("/api/cro/conteudo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paginas, janela: data?.janela }),
+    })
+      .then((r) => r.json())
+      .then((d) => { if (!cancelado) setConteudo(d); })
+      .catch(() => { if (!cancelado) setConteudo(null); })
+      .finally(() => { if (!cancelado) setLendoConteudo(false); });
+
+    return () => { cancelado = true; };
+  }, [data]);
+
   const todosAchados = useMemo(
-    () => [...(data?.achados || []), ...(comunicacao?.achados || [])].sort((a, b) => b.prioridade - a.prioridade),
-    [data, comunicacao]
+    () =>
+      [...(data?.achados || []), ...(comunicacao?.achados || []), ...(conteudo?.achados || [])].sort(
+        (a, b) => b.prioridade - a.prioridade
+      ),
+    [data, comunicacao, conteudo]
   );
 
   /** LP que o servidor já disse que não recebe mais tráfego. */

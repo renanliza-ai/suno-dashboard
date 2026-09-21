@@ -38,7 +38,12 @@ export type Superficie = "pagina" | "banner" | "popup";
 
 export type Evidencia = {
   /** De onde veio o número. Nunca vazio. */
-  fonte: "Clarity" | "GA4" | "Clarity + GA4";
+  /**
+   * "Página" entrou em 21/09/2026: é fato CONTADO no HTML servido, não medição
+   * de comportamento. Fica como fonte própria de propósito, para o leitor saber
+   * que aquela linha vem da leitura da página e não do Clarity nem do GA4.
+   */
+  fonte: "Clarity" | "GA4" | "Clarity + GA4" | "Página";
   /** O número em si, já formatado para leitura. */
   valor: string;
   /** Tamanho da amostra sobre a qual o número foi calculado. */
