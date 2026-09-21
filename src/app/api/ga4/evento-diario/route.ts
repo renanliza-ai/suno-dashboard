@@ -42,6 +42,13 @@ export async function GET(req: NextRequest) {
   const endDate = req.nextUrl.searchParams.get("endDate");
   const eventosParam = req.nextUrl.searchParams.get("eventos") || "";
   const debug = req.nextUrl.searchParams.get("debug") === "1";
+  /**
+   * Quebra alternativa. `data` responde "quanto por dia"; `hostName` e
+   * `pagePath` respondem "de ONDE dispara", que e a pergunta quando o time
+   * nao reconhece um evento que aparece no relatorio.
+   */
+  const quebraRaw = req.nextUrl.searchParams.get("quebra") || "date";
+  const quebra = ["date", "hostName", "pagePath"].includes(quebraRaw) ? quebraRaw : "date";
 
   if (!propertyId) return NextResponse.json({ error: "propertyId required" }, { status: 400 });
   if (!startDate || !endDate) {
@@ -54,9 +61,9 @@ export async function GET(req: NextRequest) {
 
   const res = await runReport(propertyId, {
     dateRanges: [{ startDate, endDate }],
-    dimensions: [{ name: "date" }, { name: "eventName" }],
+    dimensions: [{ name: quebra }, { name: "eventName" }],
     metrics: [{ name: "eventCount" }, { name: "totalUsers" }],
-    orderBys: [{ dimension: { dimensionName: "date" } }],
+    orderBys: quebra === "date" ? [{ dimension: { dimensionName: "date" } }] : [{ metric: { metricName: "eventCount" }, desc: true }],
     limit: 20000,
   });
 
@@ -93,7 +100,7 @@ export async function GET(req: NextRequest) {
       valores[nome] = v;
       soma += v;
     }
-    return { data: formatarData(d), dataISO: d, ...valores, total: soma };
+    return { data: quebra === "date" ? formatarData(d) : d, dataISO: d, ...valores, total: soma };
   });
 
   const porEvento = nomes.map((nome) => {
@@ -104,6 +111,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     propertyId,
     janela: { startDate, endDate, dias: dias.length },
+    quebra,
     eventosPedidos: prefixos,
     eventosEncontrados: nomes,
     porEvento,
