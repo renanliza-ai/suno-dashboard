@@ -222,23 +222,37 @@ export function classificarFricção(
      * o próprio arquivo já ensina que resultado desaparecendo em silêncio é a
      * pior saída, porque quem olha conclui "não há achado".
      */
-    const acimaDoLimiarMasSemBase =
+    const sinalAbaixoDoPiso =
       (l.deadRate !== null && l.deadRate >= LIMIAR.deadClick && !taxaConfiavel(l.deadRate, l.deadBase, l.deadClicks)) ||
       (l.rageRate !== null && l.rageRate >= LIMIAR.rageClick && !taxaConfiavel(l.rageRate, l.rageBase, l.rageClicks)) ||
-      (l.quickbackRate !== null && l.quickbackRate >= LIMIAR.quickback && !taxaConfiavel(l.quickbackRate, l.quickbackBase, l.quickbacks));
-    if (acimaDoLimiarMasSemBase) semVolume.push(l);
+      (l.quickbackRate !== null && l.quickbackRate >= LIMIAR.quickback && !taxaConfiavel(l.quickbackRate, l.quickbackBase, l.quickbacks)) ||
+      (l.scriptErrors > 0 && l.scriptErrors < PISO_OCORRENCIAS);
+    if (sinalAbaixoDoPiso) semVolume.push(l);
 
     const sessoesPorDia = dias > 0 ? Math.round(l.pageViews / dias) : 0;
 
     // ---- Erro de script: o mais grave, porque quebra funcionalidade ----
-    if (l.scriptErrors > 0) {
+    /**
+     * ⚠️ O PISO AQUI FALTOU NA PRIMEIRA PASSADA, em 22/09/2026.
+     *
+     * A condição era `scriptErrors > 0`, e depois de apertar os pisos das outras
+     * três fricções a tela ainda mostrava "1 ocorrências de erro de script" na
+     * /acoes/petr4 e "6 ocorrências" na home, ambas classificadas como CORRIGIR.
+     * Uma ocorrência isolada em 5.491 pageviews não sustenta tarefa: é navegador
+     * exótico, extensão do usuário ou acaso, e mandar o dev caçar isso é o mesmo
+     * desperdício que o piso das outras fricções acabou de eliminar.
+     *
+     * Erro de script não é taxa, então não tem base para exigir. O que vale aqui
+     * é o mesmo mínimo absoluto de ocorrências das demais.
+     */
+    if (l.scriptErrors >= PISO_OCORRENCIAS) {
       achados.push({
         id: `erro:${l.url}`,
         superficie: "pagina",
         pagina: l.url,
         titulo: "Erro de JavaScript na página",
         evidencias: [
-          { fonte: "Clarity", valor: `${l.scriptErrors} ocorrências de erro de script`, amostra: `${l.pageViews.toLocaleString("pt-BR")} pageviews`, janela },
+          { fonte: "Clarity", valor: `${l.scriptErrors.toLocaleString("pt-BR")} ${l.scriptErrors === 1 ? "ocorrência" : "ocorrências"} de erro de script`, amostra: `${l.pageViews.toLocaleString("pt-BR")} pageviews`, janela },
         ],
         hipotese: "Existe erro de JavaScript disparando nesta página. Parte deles quebra funcionalidade sem deixar rastro no GA4; parte é ruído conhecido de biblioteca. A mensagem é que separa os dois.",
         classificacao: "corrigir",
