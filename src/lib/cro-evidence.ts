@@ -185,13 +185,41 @@ export function classificarFricção(
         evidencias: [
           { fonte: "Clarity", valor: `${l.scriptErrors} ocorrências de erro de script`, amostra: `${l.pageViews.toLocaleString("pt-BR")} pageviews`, janela },
         ],
-        hipotese: "Existe erro de JavaScript quebrando funcionalidade nesta página. Pode estar impedindo conversão sem deixar rastro no GA4.",
+        hipotese: "Existe erro de JavaScript disparando nesta página. Parte deles quebra funcionalidade sem deixar rastro no GA4; parte é ruído conhecido de biblioteca. A mensagem é que separa os dois.",
         classificacao: "corrigir",
-        porque: "Erro de JavaScript não é hipótese de UX, é defeito. Não se testa em A/B se o código deve funcionar.",
+        porque: "Erro de JavaScript não é hipótese de UX, é defeito. Não se testa em A/B se o código deve funcionar. Mas antes de abrir tarefa, leia a MENSAGEM: ela decide se é bug de verdade ou ruído.",
+        /**
+         * ⚠️ ESTES PASSOS FORAM REESCRITOS EM 22/09/2026 POR UM MOTIVO CONCRETO.
+         *
+         * A versão anterior dizia apenas "filtrar gravações por erro de
+         * JavaScript nesta URL". Um analista fez exatamente isso na tela de
+         * Gravações do Clarity, com "Qualquer erro de JS" e janela de 60 dias,
+         * e recebeu "nenhuma gravação encontrada". A conclusão natural foi que o
+         * painel tinha inventado o número.
+         *
+         * O número estava certo: /acoes/cmig4 tinha 364 erros em 3.043 sessões
+         * na janela, confirmado depois na própria API do Clarity, com as
+         * mensagens nomeadas ("Cannot read properties of null (reading
+         * 'dataset')", 152 ocorrências, entre outras).
+         *
+         * A diferença é de NATUREZA do dado, e é a armadilha que esta lista
+         * agora antecipa: a CONTAGEM de erro vem de telemetria de todas as
+         * sessões; a GRAVAÇÃO é amostra. Procurar gravação com filtro genérico
+         * em janela longa devolve vazio com facilidade, e esse vazio NÃO
+         * desmente a contagem.
+         *
+         * Regra que fica para qualquer achado deste painel: quando o próximo
+         * passo manda conferir em outra ferramenta, ele tem que dizer ONDE a
+         * confirmação existe de fato. Mandar o time para uma tela onde o dado
+         * não mora é pior do que não dar passo nenhum: destrói a confiança no
+         * número que estava certo.
+         */
         proximoPasso: [
-          "Abrir o Clarity e filtrar gravações por erro de JavaScript nesta URL",
-          "Identificar a mensagem e em qual navegador ou sistema ela aparece",
-          "Corrigir e confirmar que o erro sumiu na janela seguinte",
+          "No Clarity, abrir Painel (não Gravações) e a seção de erros de JavaScript: é ali que a MENSAGEM do erro aparece, com a contagem por página",
+          "Separar bug de ruído pela mensagem. 'ResizeObserver loop completed with undelivered notifications' é ruído conhecido e não quebra nada; 'Cannot read properties of null' e 'X is not defined' são bug real",
+          "Só então procurar gravação, com a URL no filtro e a MESMA janela da análise. Atenção: filtrar 'Qualquer erro de JS' em janela longa costuma voltar vazio, porque gravação é amostra e a contagem é de todas as sessões. Vazio ali não desmente a contagem",
+          "Abrir a tarefa para o dev com a MENSAGEM exata, não com a contagem",
+          "Confirmar que o erro sumiu na janela seguinte",
         ],
         prioridade: 100 + Math.min(l.scriptErrors, 500),
         teste: null,

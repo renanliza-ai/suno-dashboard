@@ -10,6 +10,7 @@ import { classificarComunicacao, type PecaComunicacao } from "@/lib/cro-comunica
 import { useGA4 } from "@/lib/ga4-context";
 import { DataStatus, SkeletonBlock } from "@/components/data-status";
 import { clarityLinksFor } from "@/lib/clarity";
+import { escopoDaPagina } from "@/lib/cro-gates";
 
 /**
  * Aba de CRO, reconstruída em 15/09/2026.
@@ -33,6 +34,35 @@ import { clarityLinksFor } from "@/lib/clarity";
  *
  * A página antiga está preservada em `_page-legado.tsx.bak` no mesmo diretório.
  */
+
+/**
+ * Rótulo da superfície de página.
+ *
+ * ⚠️ NASCEU DE UM DEFEITO REAL, em 22/09/2026. A tela chamava de "LP" TODA
+ * página com achado. O time abriu uma tarefa sobre
+ * `statusinvest.com.br/acoes/cmig4` rotulada "LP", que é a página de cotação da
+ * CMIG4, e não landing page nenhuma. O número do achado estava certo (359 erros
+ * de script, confirmados no Clarity), mas o rótulo errado fez o card inteiro
+ * parecer inventado.
+ *
+ * O painel já tinha a função certa em `cro-gates.ts` e simplesmente não a usava
+ * aqui. Rótulo errado não é detalhe cosmético: é o que faz quem recebe a tarefa
+ * duvidar do dado que está do lado.
+ */
+function rotuloDePagina(url: string): string {
+  try {
+    const u = new URL(url);
+    switch (escopoDaPagina(u.hostname, u.pathname)) {
+      case "lp": return "LP";
+      case "institucional": return "Institucional";
+      case "checkout": return "Checkout";
+      case "logado": return "Área logada";
+      default: return "Página";
+    }
+  } catch {
+    return "Página";
+  }
+}
 
 type Evidencia = { fonte: string; valor: string; amostra: string; janela: string };
 type Classificacao =
@@ -707,7 +737,7 @@ export default function CROPage() {
                           </p>
                           <p className="text-xs text-[color:var(--muted-foreground)] truncate mt-0.5" title={a.pagina}>
                             <span className="font-semibold text-[10px] uppercase tracking-wider mr-1.5 opacity-70">
-                              {a.superficie === "pagina" ? "LP" : a.superficie === "banner" ? "Banner" : "Pop-up"}
+                              {a.superficie === "pagina" ? rotuloDePagina(a.pagina) : a.superficie === "banner" ? "Banner" : "Pop-up"}
                             </span>
                             {a.pagina}
                           </p>
