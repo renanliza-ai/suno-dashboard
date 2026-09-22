@@ -57,6 +57,25 @@ export type ClarityPageRow = {
   rageRate: number | null;
   deadRate: number | null;
   quickbackRate: number | null;
+  /**
+   * ⚠️ O DENOMINADOR REAL DE CADA TAXA. Adicionado em 22/09/2026 por um defeito
+   * que chegou em produção.
+   *
+   * A tela mostrava "quickback em 20% dos pageviews (1 de 5.479 pageviews)" na
+   * /acoes/petr4. As duas metades vinham de universos diferentes: o 20% é
+   * `sessionsWithMetricPercentage` calculado sobre as POUCAS sessões que a linha
+   * de fricção trouxe, e o 5.479 é o pageview estimado do Traffic. Lidas juntas,
+   * sugeriam ~1.096 pageviews com quickback. O número real de ocorrências era 1.
+   *
+   * Taxa sem o próprio denominador ao lado não é evidência: é um percentual
+   * solto que o leitor ancora no primeiro número grande que encontrar. Estes
+   * campos existem para que quem exibe a taxa seja obrigado a exibir a base
+   * sobre a qual ela foi calculada, e para que o piso de confiabilidade possa
+   * olhar a base certa em vez do volume da página.
+   */
+  rageBase: number | null;
+  deadBase: number | null;
+  quickbackBase: number | null;
 };
 
 export type ClarityFetchResult =
@@ -178,6 +197,7 @@ export async function fetchClarityPages(
     rageClicks: 0, deadClicks: 0, excessiveScrolls: 0,
     quickbacks: 0, scriptErrors: 0, errorClicks: 0,
     rageRate: null, deadRate: null, quickbackRate: null,
+    rageBase: null, deadBase: null, quickbackBase: null,
   });
 
   /**
@@ -258,11 +278,21 @@ export async function fetchClarityPages(
       if (!v || v.den <= 0) return null;
       return Number(((v.num / v.den) * 100).toFixed(2));
     };
+    // Base = sessões que entraram no cálculo da taxa. É o denominador real,
+    // e não tem relação com pageViews: sai das linhas da métrica de fricção.
+    const base = (metrica: string): number | null => {
+      const v = acc[metrica];
+      if (!v || v.den <= 0) return null;
+      return Math.round(v.den);
+    };
     return {
       ...r,
       rageRate: taxa("RageClickCount"),
       deadRate: taxa("DeadClickCount"),
       quickbackRate: taxa("QuickbackClick"),
+      rageBase: base("RageClickCount"),
+      deadBase: base("DeadClickCount"),
+      quickbackBase: base("QuickbackClick"),
     };
   });
 

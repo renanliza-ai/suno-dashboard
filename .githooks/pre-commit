@@ -1,0 +1,34 @@
+#!/bin/sh
+# Recusa commit que adiciona arquivo VAZIO na raiz do repositorio.
+#
+# POR QUE EXISTE
+# "node -e" escrito no shell faz o > e o => virarem redirecionamento, e cada um
+# cria um arquivo vazio com nome de fragmento de codigo ("console.log(", "0)",
+# "a+b.sessions", "`${space}").
+#
+# Ja aconteceu duas vezes neste repo, que e PUBLICO:
+#   - 09/2026: 84 arquivos commitados. Quebraram o scan de conteudo do Tailwind
+#     e o Turbopack, e nem tsc, nem lint, nem build acusaram qualquer coisa.
+#   - 22/09/2026: a limpeza anterior deixou 24 para tras e apareceram 2 novos.
+#
+# Nenhum arquivo legitimo deste projeto tem 0 byte na raiz, entao a regra nao
+# tem falso positivo conhecido.
+#
+# Para pular num caso legitimo: git commit --no-verify
+
+vazios=$(git diff --cached --name-only --diff-filter=A | grep -v '/' | while IFS= read -r f; do
+  if [ -f "$f" ] && [ ! -s "$f" ]; then printf '%s\n' "$f"; fi
+done)
+
+if [ -n "$vazios" ]; then
+  echo "commit recusado: arquivo(s) vazio(s) na raiz do repositorio"
+  echo ""
+  printf '%s\n' "$vazios" | sed 's/^/  /'
+  echo ""
+  echo "Isso costuma ser lixo de redirecionamento de shell (node -e com > ou =>)."
+  echo "Limpar com:  find . -maxdepth 1 -type f -empty -delete"
+  echo "Se for intencional:  git commit --no-verify"
+  exit 1
+fi
+
+exit 0

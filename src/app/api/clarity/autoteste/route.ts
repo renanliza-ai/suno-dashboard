@@ -183,6 +183,7 @@ async function testarBU(propertyName: string, rotulo: string) {
     r.rows.map((x) => ({
       url: x.url, pageViews: x.pageViews,
       deadRate: x.deadRate, rageRate: x.rageRate, quickbackRate: x.quickbackRate,
+      deadBase: x.deadBase, rageBase: x.rageBase, quickbackBase: x.quickbackBase,
       deadClicks: x.deadClicks, rageClicks: x.rageClicks, quickbacks: x.quickbacks,
       scriptErrors: x.scriptErrors,
     })),

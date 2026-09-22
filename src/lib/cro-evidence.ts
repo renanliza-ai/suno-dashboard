@@ -86,6 +86,45 @@ export type DimensionamentoTeste = {
 export const PISO_PAGEVIEWS = 1000;
 
 /**
+ * ⚠️ OS DOIS PISOS QUE FALTAVAM, adicionados em 22/09/2026.
+ *
+ * O DEFEITO: a home do Status apareceu como "CORRIGIR - dead click em 12,5% dos
+ * pageviews (1 de 101.736 pageviews)" e a /acoes/petr4 como "quickback em 20%
+ * dos pageviews (1 de 5.479 pageviews)". Frases que se contradizem sozinhas: se
+ * fosse 12,5% de 101.736, seriam 12.717 ocorrências, não 1.
+ *
+ * A CAUSA: `PISO_PAGEVIEWS` olhava o volume da PÁGINA, que era enorme, e nada
+ * olhava a base da TAXA, que era minúscula. A taxa vem pronta da API calculada
+ * sobre as sessões da linha de fricção; uma linha com 5 sessões e 1 quickback dá
+ * 20% legítimos e completamente inúteis. Página grande com fricção rara passava
+ * pelo piso e virava tarefa de correção com uma única ocorrência.
+ *
+ * POR QUE ESTES VALORES: com base 5 e proporção 20%, o intervalo de confiança de
+ * 95% vai de ~0% a ~55%, ou seja, a taxa não distingue nada. Base 100 põe a
+ * margem em torno de 8 pontos, que já sustenta comparação, e 10 ocorrências é o
+ * mínimo para o time achar o elemento no heatmap em vez de caçar um clique
+ * isolado. Os dois são exigidos JUNTOS: base alta com 2 ocorrências continua
+ * sendo ruído, e 50 ocorrências numa base de 8 sessões continua sendo amostra
+ * que não representa a página.
+ *
+ * Apertar isto esvazia parte da aba, e está certo que esvazie. O que ficar de
+ * fora vai para `semVolume` com o motivo, em vez de sumir calado.
+ */
+export const PISO_BASE_TAXA = 100;
+export const PISO_OCORRENCIAS = 10;
+
+/** Um achado de fricção só nasce se as duas condições valerem. */
+function taxaConfiavel(taxa: number | null, base: number | null, ocorrencias: number): boolean {
+  return taxa !== null && (base ?? 0) >= PISO_BASE_TAXA && ocorrencias >= PISO_OCORRENCIAS;
+}
+
+/** Amostra honesta: a taxa sempre acompanhada do denominador que a produziu. */
+function amostraDaTaxa(ocorrencias: number, base: number | null): string {
+  const b = base ?? 0;
+  return `${ocorrencias.toLocaleString("pt-BR")} ocorrência(s) em ${b.toLocaleString("pt-BR")} sessões medidas`;
+}
+
+/**
  * Limiares. Todos calibrados contra a medição de 15/09/2026 nas três B.U.s,
  * não são números de manual:
  *   dead click  - mediana das páginas com volume ficou entre 2% e 6%;
@@ -147,6 +186,10 @@ type EntradaClarity = {
   deadRate: number | null;
   rageRate: number | null;
   quickbackRate: number | null;
+  /** Denominador real de cada taxa (sessões medidas). Ver clarity-api.ts. */
+  deadBase: number | null;
+  rageBase: number | null;
+  quickbackBase: number | null;
   deadClicks: number;
   rageClicks: number;
   quickbacks: number;
@@ -172,6 +215,18 @@ export function classificarFricção(
       semVolume.push(l);
       continue;
     }
+
+    /**
+     * Página com volume, fricção acima do limiar, mas base de taxa fraca demais
+     * para sustentar decisão. Vai para a lista de sinal fraco em vez de sumir:
+     * o próprio arquivo já ensina que resultado desaparecendo em silêncio é a
+     * pior saída, porque quem olha conclui "não há achado".
+     */
+    const acimaDoLimiarMasSemBase =
+      (l.deadRate !== null && l.deadRate >= LIMIAR.deadClick && !taxaConfiavel(l.deadRate, l.deadBase, l.deadClicks)) ||
+      (l.rageRate !== null && l.rageRate >= LIMIAR.rageClick && !taxaConfiavel(l.rageRate, l.rageBase, l.rageClicks)) ||
+      (l.quickbackRate !== null && l.quickbackRate >= LIMIAR.quickback && !taxaConfiavel(l.quickbackRate, l.quickbackBase, l.quickbacks));
+    if (acimaDoLimiarMasSemBase) semVolume.push(l);
 
     const sessoesPorDia = dias > 0 ? Math.round(l.pageViews / dias) : 0;
 
@@ -227,14 +282,14 @@ export function classificarFricção(
     }
 
     // ---- Dead click: elemento que parece clicável e não é ----
-    if (l.deadRate !== null && l.deadRate >= LIMIAR.deadClick) {
+    if (l.deadRate !== null && l.deadRate >= LIMIAR.deadClick && taxaConfiavel(l.deadRate, l.deadBase, l.deadClicks)) {
       achados.push({
         id: `dead:${l.url}`,
         superficie: "pagina",
         pagina: l.url,
         titulo: "Gente clicando em algo que não responde",
         evidencias: [
-          { fonte: "Clarity", valor: `dead click em ${l.deadRate.toString().replace(".", ",")}% dos pageviews`, amostra: `${l.deadClicks.toLocaleString("pt-BR")} de ${l.pageViews.toLocaleString("pt-BR")} pageviews`, janela },
+          { fonte: "Clarity", valor: `dead click em ${l.deadRate.toString().replace(".", ",")}% das sessões medidas`, amostra: amostraDaTaxa(l.deadClicks, l.deadBase), janela },
         ],
         hipotese: `Existe um elemento nesta página que parece clicável e não é. Em página de listagem costuma ser cabeçalho de tabela, número ou card: a pessoa espera abrir o detalhe e nada acontece.`,
         classificacao: "corrigir",
@@ -250,14 +305,14 @@ export function classificarFricção(
     }
 
     // ---- Rage click: frustração explícita ----
-    if (l.rageRate !== null && l.rageRate >= LIMIAR.rageClick) {
+    if (l.rageRate !== null && l.rageRate >= LIMIAR.rageClick && taxaConfiavel(l.rageRate, l.rageBase, l.rageClicks)) {
       achados.push({
         id: `rage:${l.url}`,
         superficie: "pagina",
         pagina: l.url,
         titulo: "Clique repetido de frustração",
         evidencias: [
-          { fonte: "Clarity", valor: `rage click em ${l.rageRate.toString().replace(".", ",")}% dos pageviews`, amostra: `${l.rageClicks.toLocaleString("pt-BR")} de ${l.pageViews.toLocaleString("pt-BR")} pageviews`, janela },
+          { fonte: "Clarity", valor: `rage click em ${l.rageRate.toString().replace(".", ",")}% das sessões medidas`, amostra: amostraDaTaxa(l.rageClicks, l.rageBase), janela },
         ],
         hipotese: "A pessoa clica várias vezes no mesmo lugar porque a resposta não vem ou demora. Costuma ser botão sem retorno visual, ou ação lenta sem estado de carregando.",
         classificacao: "corrigir",
@@ -273,14 +328,14 @@ export function classificarFricção(
     }
 
     // ---- Quickback: a página não entrega o que prometeu ----
-    if (l.quickbackRate !== null && l.quickbackRate >= LIMIAR.quickback) {
+    if (l.quickbackRate !== null && l.quickbackRate >= LIMIAR.quickback && taxaConfiavel(l.quickbackRate, l.quickbackBase, l.quickbacks)) {
       achados.push({
         id: `quick:${l.url}`,
         superficie: "pagina",
         pagina: l.url,
         titulo: "Abre e volta imediatamente",
         evidencias: [
-          { fonte: "Clarity", valor: `quickback em ${l.quickbackRate.toString().replace(".", ",")}% dos pageviews`, amostra: `${l.quickbacks.toLocaleString("pt-BR")} de ${l.pageViews.toLocaleString("pt-BR")} pageviews`, janela },
+          { fonte: "Clarity", valor: `quickback em ${l.quickbackRate.toString().replace(".", ",")}% das sessões medidas`, amostra: amostraDaTaxa(l.quickbacks, l.quickbackBase), janela },
         ],
         hipotese: "A página não entrega no primeiro viewport o que o clique prometeu, e a pessoa percebe isso em segundos.",
         classificacao: "investigar",
@@ -373,8 +428,8 @@ export const ROTULO_CLASSIFICACAO: Record<Classificacao, { texto: string; cor: s
     explica: "Hipótese clara, volume suficiente e teste que cabe no calendário.",
   },
   sem_volume: {
-    texto: "Sem volume",
+    texto: "Sinal fraco",
     cor: "slate",
-    explica: `Abaixo de ${PISO_PAGEVIEWS} pageviews na janela. Taxa aqui não é confiável.`,
+    explica: `Abaixo de ${PISO_PAGEVIEWS} pageviews na janela, OU com fricção acima do limiar mas medida sobre menos de ${PISO_BASE_TAXA} sessões ou menos de ${PISO_OCORRENCIAS} ocorrências. Nos dois casos a taxa não sustenta decisão.`,
   },
 };

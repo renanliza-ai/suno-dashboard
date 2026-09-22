@@ -1,0 +1,4 @@
+# Hooks de git sao shell scripts: precisam de fim de linha LF.
+# Com CRLF o shebang vira "#!/bin/sh\r" e o hook falha em qualquer ambiente
+# que nao seja o Git Bash do Windows, sem mensagem util.
+.githooks/* text eol=lf
