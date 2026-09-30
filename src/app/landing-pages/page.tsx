@@ -47,8 +47,21 @@ const LEAD_SOURCE_LABEL: Record<string, string> = {
 
 export default function LandingPagesPage() {
   const { useRealData, selected, periodLabel, customRange, days } = useGA4();
-  const [assetOnly, setAssetOnly] = useState(false);
-  const { data, meta, error, loading } = useLPPerformance(assetOnly ? "/asset/" : "");
+  /**
+   * Recorte do Suno Asset. Três estados, e o do meio é o que faltava.
+   *
+   * O Asset não tem property GA4 própria: vive dentro da Research em /asset/*.
+   * Uma única LP dele (`/asset/snel11/`) teve 264.982 sessões em setembro de
+   * 2026, contra 8.340 da segunda colocada. Com ela dentro, todo agregado da
+   * tela vira "o retrato do SNEL11", e as outras 139 LPs somem no arredondamento.
+   * Por isso agora dá para tirá-lo, não só isolá-lo.
+   *
+   * "so" continua filtrando no SERVIDOR (é o que o hook aceita). "sem" filtra
+   * aqui, porque a rota não tem parâmetro de exclusão e o recorte de cliente é
+   * suficiente: as linhas já vêm todas.
+   */
+  const [assetModo, setAssetModo] = useState<"todas" | "so" | "sem">("todas");
+  const { data, meta, error, loading } = useLPPerformance(assetModo === "so" ? "/asset/" : "");
 
   // Aceita ?q= vindo do copiloto ("abrir a LP X"). Lido de window em vez de
   // useSearchParams para não exigir Suspense boundary no build.
@@ -129,6 +142,7 @@ export default function LandingPagesPage() {
         return e !== "aposentada" && e !== "fora";
       });
     }
+    if (assetModo === "sem") filtered = filtered.filter((r) => !r.path.startsWith("/asset/"));
     const get = (r: LPPerfRow, k: SortKey): number => {
       const v = r[k];
       return typeof v === "number" ? v : -1;
@@ -137,7 +151,71 @@ export default function LandingPagesPage() {
       const d = get(a, sortKey) - get(b, sortKey);
       return sortDesc ? -d : d;
     });
-  }, [data, q, objFilter, sortKey, sortDesc, soNoAr, estadoLP]);
+  }, [data, q, objFilter, sortKey, sortDesc, soNoAr, estadoLP, assetModo]);
+
+  /**
+   * ⚠️ OS NÚMEROS DO TOPO SAEM DAQUI, E NÃO MAIS DO SERVIDOR. Corrigido em
+   * 30/09/2026 por defeito relatado pelo Renan: "as infos estão redundantes,
+   * elas precisam bater".
+   *
+   * A tela tinha TRÊS fontes de número e duas ignoravam os filtros:
+   *   - os KPIs do topo liam `data.totals`      (servidor, sem filtro)
+   *   - o bloco de estratégia lia `objectiveSummary` (servidor, sem filtro)
+   *   - só a tabela usava `rows`                (com filtro)
+   *
+   * Com "Só LPs no ar" ligado, o topo dizia 140 landing pages e 453.888 sessões
+   * enquanto a tabela logo abaixo mostrava 80 LPs. Os dois números estavam
+   * certos para universos diferentes, que é a pior categoria de erro de painel:
+   * ninguém consegue apontar qual está errado, e a tela inteira perde crédito.
+   *
+   * Agora tudo deriva das MESMAS linhas visíveis. Se a tabela mostra 80 LPs, o
+   * topo fala das mesmas 80. A regra vale para qualquer filtro futuro: entrou na
+   * lista, entra no agregado; saiu da lista, sai do agregado.
+   */
+  const totaisVisiveis = useMemo(() => {
+    const n = (v: number | null | undefined) => (typeof v === "number" ? v : 0);
+    const sessions = rows.reduce((s, r) => s + n(r.sessions), 0);
+    const engagedSessions = rows.reduce((s, r) => s + n(r.engagedSessions), 0);
+    const leads = rows.reduce((s, r) => s + n(r.leads), 0);
+    const qualified = rows.reduce((s, r) => s + n(r.qualified), 0);
+    const ctaClicks = rows.reduce((s, r) => s + n(r.ctaClicks), 0);
+    const checkoutStarts = rows.reduce((s, r) => s + n(r.checkoutStarts), 0);
+    const taxa = (num: number, den: number) =>
+      den > 0 ? Number(((num / den) * 100).toFixed(2)) : null;
+    return {
+      landingPages: rows.length,
+      sessions,
+      engagedSessions,
+      engagementRate: taxa(engagedSessions, sessions),
+      leads,
+      qualified,
+      qualificationRate: taxa(qualified, leads),
+      ctaClicks,
+      connectRate: taxa(leads, sessions),
+      ctaRate: taxa(ctaClicks, sessions),
+      checkoutStarts,
+      checkoutRate: taxa(checkoutStarts, sessions),
+    };
+  }, [rows]);
+
+  /** Mesmo princípio para o bloco de estratégia: conta só o que está na tabela. */
+  const resumoVisivel = useMemo(() => {
+    const n = (v: number | null | undefined) => (typeof v === "number" ? v : 0);
+    const cap = rows.filter((r) => r.objective === "captacao");
+    const ven = rows.filter((r) => r.objective === "venda");
+    const ind = rows.filter((r) => r.objective === "indefinido");
+    return {
+      captacao: cap.length,
+      venda: ven.length,
+      indefinido: ind.length,
+      inferidoPorDado: rows.filter((r) => r.objectiveFrom === "dado").length,
+      comAlarme: rows.filter((r) => r.mismatch).length,
+      leadsDeCaptacao: cap.reduce((s, r) => s + n(r.leads), 0),
+      sessoesDeCaptacao: cap.reduce((s, r) => s + n(r.sessions), 0),
+      checkoutDeVenda: ven.reduce((s, r) => s + n(r.checkoutStarts), 0),
+      sessoesDeVenda: ven.reduce((s, r) => s + n(r.sessions), 0),
+    };
+  }, [rows]);
 
   // Volta para 10 sempre que o recorte muda, senão o usuário fica com uma
   // janela grande herdada de outro filtro e acha que a lista é maior.
@@ -298,43 +376,43 @@ export default function LandingPagesPage() {
               className="grid grid-cols-2 md:grid-cols-4 lg:[grid-template-columns:repeat(var(--kpis),minmax(0,1fr))] gap-3 mb-5"
               style={{ ["--kpis" as string]: nKpis }}
             >
-              <Kpi label="Landing pages" value={fmt(data.totals.landingPages)} />
-              <Kpi label="Sessões" value={fmt(data.totals.sessions)} />
+              <Kpi label="Landing pages" value={fmt(totaisVisiveis.landingPages)} />
+              <Kpi label="Sessões" value={fmt(totaisVisiveis.sessions)} />
               <Kpi
                 label="Sessões engajadas"
-                value={fmt(data.totals.engagedSessions)}
-                sub={pct(data.totals.engagementRate)}
+                value={fmt(totaisVisiveis.engagedSessions)}
+                sub={pct(totaisVisiveis.engagementRate)}
               />
               <Kpi
                 label="Leads"
-                value={fmt(data.totals.leads)}
+                value={fmt(totaisVisiveis.leads)}
                 sub={LEAD_SOURCE_LABEL[data.rows[0]?.leadsSource || "indisponivel"]}
               />
               {isMQL ? (
                 <>
-                  <Kpi label="MQL (qualificados)" value={fmt(data.totals.qualified)} accent />
+                  <Kpi label="MQL (qualificados)" value={fmt(totaisVisiveis.qualified)} accent />
                   <Kpi
                     label="Taxa de qualificação"
-                    value={pct(data.totals.qualificationRate)}
+                    value={pct(totaisVisiveis.qualificationRate)}
                     sub="MQL ÷ leads"
                     accent
                   />
                 </>
               ) : (
                 <>
-                  <Kpi label="Connect rate" value={pct(data.totals.connectRate)} sub="leads ÷ sessões" />
+                  <Kpi label="Connect rate" value={pct(totaisVisiveis.connectRate)} sub="leads ÷ sessões" />
                   {hasCta && (
                     <Kpi
                       label="Cliques em CTA"
-                      value={fmt(data.totals.ctaClicks)}
-                      sub={`${pct(data.totals.ctaRate)} · todos os CTAs`}
+                      value={fmt(totaisVisiveis.ctaClicks)}
+                      sub={`${pct(totaisVisiveis.ctaRate)} · todos os CTAs`}
                     />
                   )}
-                  {data.totals.checkoutStarts !== null && (
+                  {totaisVisiveis.checkoutStarts !== null && (
                     <Kpi
                       label="Chegou ao checkout"
-                      value={fmt(data.totals.checkoutStarts)}
-                      sub={`${pct(data.totals.checkoutRate)} · begin_checkout`}
+                      value={fmt(totaisVisiveis.checkoutStarts)}
+                      sub={`${pct(totaisVisiveis.checkoutRate)} · begin_checkout`}
                       accent
                     />
                   )}
@@ -362,17 +440,17 @@ export default function LandingPagesPage() {
                     /cl/ /lm/ /ebook- /minicurso- /planilha- /whatsapp- /lista-vip-
                   </p>
                   <p className="text-sm">
-                    <b className="text-lg tabular-nums">{data.objectiveSummary.captacao}</b> LPs ·{" "}
-                    <b className="tabular-nums">{fmt(data.objectiveSummary.leadsDeCaptacao)}</b> leads em{" "}
-                    {fmt(data.objectiveSummary.sessoesDeCaptacao)} sessões
-                    {data.objectiveSummary.sessoesDeCaptacao > 0 && (
+                    <b className="text-lg tabular-nums">{resumoVisivel.captacao}</b> LPs ·{" "}
+                    <b className="tabular-nums">{fmt(resumoVisivel.leadsDeCaptacao)}</b> leads em{" "}
+                    {fmt(resumoVisivel.sessoesDeCaptacao)} sessões
+                    {resumoVisivel.sessoesDeCaptacao > 0 && (
                       <>
                         {" "}
                         ({pct(
                           Number(
                             (
-                              (data.objectiveSummary.leadsDeCaptacao /
-                                data.objectiveSummary.sessoesDeCaptacao) *
+                              (resumoVisivel.leadsDeCaptacao /
+                                resumoVisivel.sessoesDeCaptacao) *
                               100
                             ).toFixed(2)
                           )
@@ -390,17 +468,17 @@ export default function LandingPagesPage() {
                     /especial-
                   </p>
                   <p className="text-sm">
-                    <b className="text-lg tabular-nums">{data.objectiveSummary.venda}</b> LPs ·{" "}
-                    <b className="tabular-nums">{fmt(data.objectiveSummary.checkoutDeVenda)}</b> chegadas ao
-                    checkout em {fmt(data.objectiveSummary.sessoesDeVenda)} sessões
-                    {data.objectiveSummary.sessoesDeVenda > 0 && (
+                    <b className="text-lg tabular-nums">{resumoVisivel.venda}</b> LPs ·{" "}
+                    <b className="tabular-nums">{fmt(resumoVisivel.checkoutDeVenda)}</b> chegadas ao
+                    checkout em {fmt(resumoVisivel.sessoesDeVenda)} sessões
+                    {resumoVisivel.sessoesDeVenda > 0 && (
                       <>
                         {" "}
                         ({pct(
                           Number(
                             (
-                              (data.objectiveSummary.checkoutDeVenda /
-                                data.objectiveSummary.sessoesDeVenda) *
+                              (resumoVisivel.checkoutDeVenda /
+                                resumoVisivel.sessoesDeVenda) *
                               100
                             ).toFixed(2)
                           )
@@ -411,16 +489,16 @@ export default function LandingPagesPage() {
                 </div>
               </div>
               <p className="text-[11px] text-[color:var(--muted-foreground)] mt-2.5">
-                {data.objectiveSummary.indefinido} LP{data.objectiveSummary.indefinido === 1 ? "" : "s"} com
+                {resumoVisivel.indefinido} LP{resumoVisivel.indefinido === 1 ? "" : "s"} com
                 padrão fora da lista oficial ficam sem métrica primária eleita, e a tabela mostra as duas.
-                {data.objectiveSummary.inferidoPorDado > 0 && (
-                  <> {data.objectiveSummary.inferidoPorDado} foram desambiguadas pelo dado (o /ao/ só é captação quando tem formulário).</>
+                {resumoVisivel.inferidoPorDado > 0 && (
+                  <> {resumoVisivel.inferidoPorDado} foram desambiguadas pelo dado (o /ao/ só é captação quando tem formulário).</>
                 )}
-                {data.objectiveSummary.comAlarme > 0 && (
+                {resumoVisivel.comAlarme > 0 && (
                   <>
                     {" "}
                     <b className="text-red-600">
-                      {data.objectiveSummary.comAlarme} LP{data.objectiveSummary.comAlarme === 1 ? "" : "s"} com
+                      {resumoVisivel.comAlarme} LP{resumoVisivel.comAlarme === 1 ? "" : "s"} com
                       objetivo declarado e conversão zerada.
                     </b>
                   </>
@@ -510,18 +588,30 @@ export default function LandingPagesPage() {
                 </button>
               ))}
             </div>
+            {/* Suno Asset: incluir, isolar ou tirar. Uma LP dele (/asset/snel11/)
+                teve 264.982 sessões em set/26, 32x a segunda colocada: dentro do
+                agregado, ela apaga as outras 139 LPs. */}
             {isResearch && (
-              <button
-                onClick={() => setAssetOnly((v) => !v)}
-                className={`px-3 py-2 text-xs font-semibold rounded-xl border transition ${
-                  assetOnly
-                    ? "bg-[#ede9fe] border-[#7c5cff] text-[#7c5cff]"
-                    : "bg-white border-[color:var(--border)] text-[color:var(--muted-foreground)]"
-                }`}
-                title="O Suno Asset não tem property GA4 própria: vive dentro da Research em /asset/*"
-              >
-                Só Suno Asset (/asset/)
-              </button>
+              <div className="inline-flex rounded-xl border border-[color:var(--border)] overflow-hidden">
+                {([
+                  ["todas", "Com Asset", "Inclui as LPs do Suno Asset (/asset/*) no agregado e na tabela"],
+                  ["so", "Só Asset", "Mostra apenas as LPs do Suno Asset. Ele não tem property GA4 própria: vive dentro da Research em /asset/*"],
+                  ["sem", "Sem Asset", "Tira as LPs do Suno Asset. Uma delas sozinha respondeu por 264.982 sessões em setembro de 2026 e distorce qualquer média da Research"],
+                ] as const).map(([valor, rotulo, dica]) => (
+                  <button
+                    key={valor}
+                    onClick={() => { setAssetModo(valor); resetPaginacao(); }}
+                    title={dica}
+                    className={`px-3 py-2 text-xs font-semibold transition border-r last:border-r-0 border-[color:var(--border)] ${
+                      assetModo === valor
+                        ? "bg-[#ede9fe] text-[#7c5cff]"
+                        : "bg-white text-[color:var(--muted-foreground)] hover:bg-[color:var(--muted)]/40"
+                    }`}
+                  >
+                    {rotulo}
+                  </button>
+                ))}
+              </div>
             )}
             {/* Higienização: o GA4 é histórico, quem sabe se a LP está no ar é
                 o servidor. Rótulo diz o que o filtro FAZ, não o que ele esconde. */}
