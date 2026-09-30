@@ -75,16 +75,23 @@ const paraData = (aaaammdd: string): Date | null => {
 
 const DIA_MS = 86_400_000;
 
-/** Mediana de uma lista de pares (valor, peso). Não é a média, e é de propósito. */
-function medianaPonderada(pares: Array<{ valor: number; peso: number }>): number | null {
+/**
+ * Percentil ponderado. `p` de 0 a 1, então 0.5 é a mediana.
+ *
+ * ⚠️ MEDIÇÃO DE 30/09/2026: a mediana deu ZERO nos cinco eventos, porque a
+ * maioria converte no mesmo dia da primeira sessão. Mediana zero é verdadeira e
+ * inútil: não separa quem decide na hora de quem leva três meses. Por isso a
+ * resposta traz também P75 e P90, que são onde a cauda aparece.
+ */
+function percentilPonderado(pares: Array<{ valor: number; peso: number }>, p: number): number | null {
   if (pares.length === 0) return null;
   const ordenado = [...pares].sort((a, b) => a.valor - b.valor);
-  const total = ordenado.reduce((s, p) => s + p.peso, 0);
+  const total = ordenado.reduce((s, x) => s + x.peso, 0);
   if (total <= 0) return null;
   let acumulado = 0;
-  for (const p of ordenado) {
-    acumulado += p.peso;
-    if (acumulado >= total / 2) return p.valor;
+  for (const x of ordenado) {
+    acumulado += x.peso;
+    if (acumulado >= total * p) return x.valor;
   }
   return ordenado[ordenado.length - 1].valor;
 }
@@ -156,10 +163,27 @@ export async function GET(req: NextRequest) {
     string,
     { total: number; usuarios: number; pares: Array<{ valor: number; peso: number }>; faixas: number[] }
   >();
+  /**
+   * ⚠️ DESCARTE SE MEDE EM EVENTOS, NÃO EM LINHAS. Corrigido em 30/09/2026.
+   *
+   * A primeira versão contava só `linhasDescartadas`. Na primeira medição real
+   * isso deu "402 linhas", que soa pequeno, mas UMA dessas linhas sozinha tinha
+   * 1.662 eventos: era `(not set)` no firstSessionDate. Contar linha em vez de
+   * volume esconde exatamente o tamanho do buraco que o leitor precisa conhecer
+   * para saber se pode confiar no resto.
+   *
+   * `(not set)` aqui é usuário para quem o GA4 não sabe dizer a primeira sessão.
+   * Ele NÃO entra no cálculo (não dá para medir latência sem data de origem), e
+   * a resposta declara quanto do volume ficou de fora por esse motivo.
+   */
   let linhasDescartadas = 0;
+  let eventosSemPrimeiraSessao = 0;
+  let eventosLatenciaNegativa = 0;
+  let eventosComputados = 0;
 
   for (const r of linhas) {
-    const primeira = paraData(r.dimensionValues?.[0]?.value || "");
+    const brutoPrimeira = r.dimensionValues?.[0]?.value || "";
+    const primeira = paraData(brutoPrimeira);
     const doEvento = paraData(r.dimensionValues?.[1]?.value || "");
     const evento = r.dimensionValues?.[2]?.value || "";
     const contagem = Number(r.metricValues?.[0]?.value || 0);
@@ -167,14 +191,17 @@ export async function GET(req: NextRequest) {
 
     if (!primeira || !doEvento || !evento) {
       linhasDescartadas++;
+      eventosSemPrimeiraSessao += contagem;
       continue;
     }
     const dias = Math.round((doEvento.getTime() - primeira.getTime()) / DIA_MS);
     // Latência negativa não existe: se aparecer, é defeito de dado, não sinal.
     if (dias < 0) {
       linhasDescartadas++;
+      eventosLatenciaNegativa += contagem;
       continue;
     }
+    eventosComputados += contagem;
 
     const atual =
       porEvento.get(evento) || { total: 0, usuarios: 0, pares: [], faixas: FAIXAS.map(() => 0) };
@@ -190,7 +217,9 @@ export async function GET(req: NextRequest) {
     .map(([evento, d]) => {
       const somaPonderada = d.pares.reduce((s, p) => s + p.valor * p.peso, 0);
       const media = d.total > 0 ? somaPonderada / d.total : null;
-      const mediana = medianaPonderada(d.pares);
+      const mediana = percentilPonderado(d.pares, 0.5);
+      const p75 = percentilPonderado(d.pares, 0.75);
+      const p90 = percentilPonderado(d.pares, 0.9);
       const mesmoDia = d.total > 0 ? (d.faixas[0] / d.total) * 100 : 0;
       return {
         evento,
@@ -198,6 +227,9 @@ export async function GET(req: NextRequest) {
         usuarios: d.usuarios,
         mediaDias: media === null ? null : Number(media.toFixed(1)),
         medianaDias: mediana,
+        /** Onde a cauda aparece. Com mediana 0, estes é que informam. */
+        p75Dias: p75,
+        p90Dias: p90,
         pctMesmoDia: Number(mesmoDia.toFixed(1)),
         faixas: FAIXAS.map((f, i) => ({
           rotulo: f.rotulo,
@@ -207,9 +239,11 @@ export async function GET(req: NextRequest) {
         baseFraca: d.total < PISO_EVENTOS,
         /** Texto pronto, para ninguem ler a media sem a mediana do lado. */
         leitura:
-          media !== null && mediana !== null && media > mediana * 3
-            ? `A media (${media.toFixed(1)} dias) e muito maior que a mediana (${mediana} dias): a distribuicao tem cauda longa, e um punhado de gente que demorou meses puxa a media. Use a MEDIANA para falar de "quanto tempo leva".`
-            : null,
+          mediana === 0
+            ? `Mediana ZERO: mais da metade converte no mesmo dia da primeira visita (${mesmoDia.toFixed(1)}%). Nao use a media de ${media?.toFixed(1)} dias como "quanto tempo leva", porque ela e puxada pela cauda: 75% converte em ate ${p75} dia(s) e 90% em ate ${p90}. O que decide aqui e a FAIXA, nao a media.`
+            : media !== null && mediana !== null && media > mediana * 3
+              ? `A media (${media.toFixed(1)} dias) e muito maior que a mediana (${mediana} dias): cauda longa. Use a MEDIANA para falar de "quanto tempo leva".`
+              : null,
       };
     })
     .sort((a, b) => b.total - a.total);
@@ -221,6 +255,22 @@ export async function GET(req: NextRequest) {
     porEvento: resultado,
     linhasLidas: linhas.length,
     linhasDescartadas,
+    /**
+     * O tamanho do buraco, em EVENTOS. Sem isto, "402 linhas descartadas" soa
+     * irrelevante quando pode ser dezenas de milhares de eventos.
+     */
+    cobertura: {
+      eventosComputados,
+      eventosSemPrimeiraSessao,
+      eventosLatenciaNegativa,
+      pctForaDaMedicao: Number(
+        (((eventosSemPrimeiraSessao + eventosLatenciaNegativa) /
+          Math.max(1, eventosComputados + eventosSemPrimeiraSessao + eventosLatenciaNegativa)) *
+          100).toFixed(1)
+      ),
+      explica:
+        "eventosSemPrimeiraSessao sao os usuarios cujo firstSessionDate o GA4 devolve como (not set): sem data de origem nao ha latencia para calcular, entao eles ficam fora. Se pctForaDaMedicao passar de 10%, a leitura de tempo vale so para a parte medida e precisa ser dita com essa ressalva.",
+    },
     piso: PISO_EVENTOS,
     limitacoes: [
       `A latencia maxima observavel e o tamanho da janela (${janelaDias ?? "?"} dias). Conversao de quem chegou antes disso aparece, mas so porque o GA4 guarda a primeira sessao do usuario fora da janela.`,
