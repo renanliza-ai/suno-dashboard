@@ -154,6 +154,46 @@ export default function LandingPagesPage() {
   }, [data, q, objFilter, sortKey, sortDesc, soNoAr, estadoLP, assetModo]);
 
   /**
+   * ⚠️ O QUE O FILTRO "SÓ LPs NO AR" ESTÁ ESCONDENDO, EM NÚMEROS.
+   *
+   * Defeito relatado em 30/09/2026: `/cl/arsenal-independencia/` captou 812
+   * leads em setembro (780 confirmados no Salesforce) e não aparecia na tela.
+   *
+   * A causa não é contagem: a LP responde 301 para `/pv/arsenal-independencia-897/`
+   * HOJE, então o verificador a marca como aposentada e o filtro a remove. Mas
+   * ela estava no ar em setembro, captando. O painel estava aplicando o estado
+   * de HOJE a dados do PASSADO, e apagando história real sem avisar.
+   *
+   * O filtro continua útil para higiene (não sugerir ação em LP morta), mas
+   * quando a janela é passada ele esconde resultado legítimo. Some calado é o
+   * pior desfecho: o número fica menor e ninguém sabe por quê.
+   *
+   * Então agora ele declara o que tirou: quantas LPs, quantos leads e quantas
+   * sessões. Quem lê decide se quer o recorte de higiene ou o de relatório.
+   */
+  const ocultadasPorEstado = useMemo(() => {
+    if (!soNoAr) return null;
+    const base = data?.rows || [];
+    const needle = q.trim().toLowerCase();
+    let candidatas = needle ? base.filter((r) => r.path.toLowerCase().includes(needle)) : base;
+    if (objFilter === "alarme") candidatas = candidatas.filter((r) => r.mismatch);
+    else if (objFilter !== "todos") candidatas = candidatas.filter((r) => r.objective === objFilter);
+    if (assetModo === "sem") candidatas = candidatas.filter((r) => !r.path.startsWith("/asset/"));
+    const fora = candidatas.filter((r) => {
+      const e = estadoLP[chaveEstado(r.host, r.path)]?.estado;
+      return e === "aposentada" || e === "fora";
+    });
+    if (fora.length === 0) return null;
+    const n = (v: number | null | undefined) => (typeof v === "number" ? v : 0);
+    return {
+      lps: fora.length,
+      leads: fora.reduce((s, r) => s + n(r.leads), 0),
+      sessoes: fora.reduce((s, r) => s + n(r.sessions), 0),
+      topLeads: [...fora].sort((a, b) => n(b.leads) - n(a.leads)).slice(0, 5),
+    };
+  }, [data, q, objFilter, assetModo, soNoAr, estadoLP]);
+
+  /**
    * ⚠️ OS NÚMEROS DO TOPO SAEM DAQUI, E NÃO MAIS DO SERVIDOR. Corrigido em
    * 30/09/2026 por defeito relatado pelo Renan: "as infos estão redundantes,
    * elas precisam bater".
@@ -504,6 +544,40 @@ export default function LandingPagesPage() {
                   </>
                 )}
               </p>
+            </div>
+          )}
+
+          {/* LP aposentada HOJE que produziu resultado NO PERÍODO. O filtro de
+              higiene não pode apagar história sem dizer o tamanho do que apagou. */}
+          {ocultadasPorEstado && (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 mb-3">
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={18} className="text-rose-600 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-rose-900 text-sm mb-1">
+                    &quot;Só LPs no ar&quot; está escondendo {ocultadasPorEstado.lps} LP
+                    {ocultadasPorEstado.lps === 1 ? "" : "s"} que produziram{" "}
+                    {fmt(ocultadasPorEstado.leads)} lead
+                    {ocultadasPorEstado.leads === 1 ? "" : "s"} e {fmt(ocultadasPorEstado.sessoes)}{" "}
+                    sessões neste período
+                  </p>
+                  <p className="text-xs text-rose-900/80 leading-relaxed mb-2">
+                    Elas redirecionam <b>hoje</b>, mas estavam no ar <b>na janela consultada</b> e o
+                    resultado delas é real. O filtro serve para higiene (não cuidar de LP morta), não
+                    para relatório histórico. Desligue-o para fechar número com o GA4 ou com o CRM.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {ocultadasPorEstado.topLeads.map((r) => (
+                      <span
+                        key={r.url}
+                        className="text-[11px] px-2 py-1 rounded-lg bg-white border border-rose-200 text-rose-900"
+                      >
+                        {r.path} <b>{fmt(r.leads)} leads</b>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
