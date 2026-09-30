@@ -59,12 +59,52 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "eventos obrigatorio (lista separada por virgula)" }, { status: 400 });
   }
 
+  /**
+   * ⚠️ O FILTRO PRECISA IR NA CONSULTA, NÃO SÓ NO JAVASCRIPT. Corrigido em
+   * 30/09/2026, e o defeito me fez afirmar um número errado para o Renan.
+   *
+   * A versão anterior pedia TODOS os eventos e filtrava depois, casando por
+   * prefixo em memória. Como a consulta vinha ordenada por `eventCount` e o
+   * limite é de 20.000 linhas, quem domina o ranking ocupa tudo: medido nesta
+   * property, `/asset/snel11/` sozinho tinha 272.299 `page_view` e 262.372
+   * `session_start`. As linhas de `generate_lead`, que são pequenas, ficavam
+   * FORA das 20.000 e simplesmente não chegavam.
+   *
+   * O resultado não parecia defeito: a rota devolvia 6 páginas com
+   * `generate_lead` na Suno Research, número plausível, e eu reportei como
+   * fato. O GA4 mostra 71. Faltavam 65 páginas porque a consulta nunca as pediu.
+   *
+   * Agora o filtro entra no `dimensionFilter`, então o limite de 20.000 se
+   * aplica só ao que interessa. O casamento por PREFIXO é preservado com
+   * BEGINS_WITH, que é o que permite achar `add_to_cart` e `add_to_cart_oficial`
+   * juntos numa migração de tagueamento.
+   */
+  const filtroEventos =
+    prefixos.length === 1
+      ? {
+          filter: {
+            fieldName: "eventName",
+            stringFilter: { matchType: "BEGINS_WITH" as const, value: prefixos[0], caseSensitive: false },
+          },
+        }
+      : {
+          orGroup: {
+            expressions: prefixos.map((p) => ({
+              filter: {
+                fieldName: "eventName",
+                stringFilter: { matchType: "BEGINS_WITH" as const, value: p, caseSensitive: false },
+              },
+            })),
+          },
+        };
+
   const res = await runReport(propertyId, {
     dateRanges: [{ startDate, endDate }],
     dimensions: [{ name: quebra }, { name: "eventName" }],
     metrics: [{ name: "eventCount" }, { name: "totalUsers" }],
     orderBys: quebra === "date" ? [{ dimension: { dimensionName: "date" } }] : [{ metric: { metricName: "eventCount" }, desc: true }],
     limit: 20000,
+    dimensionFilter: filtroEventos,
   });
 
   if (res.error) return NextResponse.json({ propertyId, error: res.error }, { status: 200 });

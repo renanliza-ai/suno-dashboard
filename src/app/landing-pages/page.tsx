@@ -516,15 +516,25 @@ export default function LandingPagesPage() {
                 <AlertTriangle size={18} className="text-sky-600 shrink-0 mt-0.5" />
                 <div className="min-w-0 flex-1">
                   <p className="font-semibold text-sky-900 text-sm mb-1">
-                    O GA4 conta {fmt(data.cobertura.totalNaProperty)} {data.cobertura.evento} nesta
-                    janela; a tabela atribui {fmt(data.cobertura.atribuidoAPaginas)} a uma LP (
+                    Na property inteira, sem filtro: o GA4 conta{" "}
+                    {fmt(data.cobertura.totalNaProperty)} {data.cobertura.evento} nesta janela e a
+                    atribuição por página alcança {fmt(data.cobertura.atribuidoAPaginas)} (
                     {data.cobertura.pctAtribuido}%)
                   </p>
                   <p className="text-xs text-sky-900/80 leading-relaxed">
                     Os {fmt(data.cobertura.naoAtribuido)} restantes não sumiram e não são erro de
                     contagem: o GA4 devolve menos evento quanto mais fina a quebra, e saber QUAL
-                    página captou exige quebrar por página. Para <b>total de leads</b>, o número do
-                    GA4 é o certo. Para <b>distribuição por LP</b>, use a tabela.
+                    página captou exige quebrar por página.{" "}
+                    {totaisVisiveis.leads !== data.cobertura.atribuidoAPaginas && (
+                      <>
+                        <b>
+                          O card acima mostra {fmt(totaisVisiveis.leads)}, que é o recorte que você
+                          está vendo ({rows.length} LPs), não a property inteira.
+                        </b>{" "}
+                      </>
+                    )}
+                    Para <b>total de leads da property</b>, o número do GA4 é o certo. Para{" "}
+                    <b>distribuição por LP</b>, use a tabela.
                   </p>
                 </div>
               </div>
