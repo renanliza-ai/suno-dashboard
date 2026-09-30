@@ -507,6 +507,30 @@ export default function LandingPagesPage() {
             </div>
           )}
 
+          {/* Cobertura da atribuição: o total do GA4 contra o que a tabela alcança.
+              Existe porque a comparação com o GA4 (e com o CRM) não batia, e o
+              painel ficava mudo sobre o porquê. Ver /api/lp/performance. */}
+          {data.cobertura && data.cobertura.pctAtribuido < 98 && (
+            <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 mb-3">
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={18} className="text-sky-600 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-sky-900 text-sm mb-1">
+                    O GA4 conta {fmt(data.cobertura.totalNaProperty)} {data.cobertura.evento} nesta
+                    janela; a tabela atribui {fmt(data.cobertura.atribuidoAPaginas)} a uma LP (
+                    {data.cobertura.pctAtribuido}%)
+                  </p>
+                  <p className="text-xs text-sky-900/80 leading-relaxed">
+                    Os {fmt(data.cobertura.naoAtribuido)} restantes não sumiram e não são erro de
+                    contagem: o GA4 devolve menos evento quanto mais fina a quebra, e saber QUAL
+                    página captou exige quebrar por página. Para <b>total de leads</b>, o número do
+                    GA4 é o certo. Para <b>distribuição por LP</b>, use a tabela.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Vazamento por barra final: LP viva perdendo o tráfego sem barra */}
           {comVazamento.length > 0 && (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 mb-3">

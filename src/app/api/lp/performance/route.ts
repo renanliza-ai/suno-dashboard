@@ -206,7 +206,7 @@ export async function GET(req: NextRequest) {
         }
       : hostFilter;
 
-  const [sessionsRes, eventsRes, servedRes, sourceRes, mediumRes] = await Promise.all([
+  const [sessionsRes, eventsRes, totalEventosRes, servedRes, sourceRes, mediumRes] = await Promise.all([
     runReport(propertyId, {
       dateRanges: [dateRange],
       dimensions: [{ name: "hostName" }, { name: "landingPage" }],
@@ -252,6 +252,39 @@ export async function GET(req: NextRequest) {
           metrics: [{ name: "eventCount" }],
           orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
           limit: 2000,
+          dimensionFilter: eventFilter,
+        })
+      : Promise.resolve({ data: null, error: null }),
+    /**
+     * ⚠️ O MESMO EVENTO, TOTAL SEM QUEBRA NENHUMA. Adicionado em 30/09/2026.
+     *
+     * O Renan comparou a tela com o GA4 e viu que não batia, e estava certo.
+     * Medido em setembro de 2026, `generate_lead` na Suno Research:
+     *
+     *   GA4 sem quebra ......... 5.005
+     *   API por hostName ....... 5.141
+     *   API por pagePath ....... 3.528
+     *
+     * É o mesmo evento, na mesma janela. Quanto mais fina a quebra, menos o
+     * GA4 devolve, porque a cardinalidade obriga a agrupar. Como esta rota
+     * atribui evento à página (única forma de dizer QUAL LP captou), ela herda
+     * a perda, e os totais dela sempre foram "o que deu para atribuir", não "o
+     * que aconteceu".
+     *
+     * Isso nunca esteve errado, mas estava mudo, e mudo é pior: quem comparava
+     * com o GA4 ou com o CRM achava que o painel tinha um defeito de contagem.
+     *
+     * Esta consulta traz o total verdadeiro, e a resposta passa a declarar a
+     * COBERTURA: quanto dos eventos a atribuição por página alcançou. A
+     * distribuição por LP continua sendo a melhor aproximação disponível; o que
+     * muda é que agora a tela sabe, e diz, de quanto ela está falando.
+     */
+    events.length > 0
+      ? runReport(propertyId, {
+          dateRanges: [dateRange],
+          dimensions: [{ name: "eventName" }],
+          metrics: [{ name: "eventCount" }],
+          limit: 100,
           dimensionFilter: eventFilter,
         })
       : Promise.resolve({ data: null, error: null }),
@@ -704,6 +737,38 @@ export async function GET(req: NextRequest) {
   const tCheckout = checkoutAttribution ? sum((r) => r.checkoutStarts || 0) : null;
   const tPurchases = checkoutAttribution ? sum((r) => r.purchases || 0) : null;
 
+  /**
+   * COBERTURA DA ATRIBUIÇÃO POR PÁGINA.
+   *
+   * Compara o total verdadeiro de cada evento na property com o que a
+   * atribuição por página conseguiu alcançar. A diferença não é erro de
+   * contagem: é o preço de saber QUAL página captou, e agora ele é declarado.
+   */
+  type LinhaEv = { dimensionValues?: { value?: string }[]; metricValues?: { value?: string }[] };
+  const totalPorEvento: Record<string, number> = {};
+  for (const r of ((totalEventosRes?.data?.rows || []) as LinhaEv[])) {
+    const nome = r.dimensionValues?.[0]?.value || "";
+    if (nome) totalPorEvento[nome] = Number(r.metricValues?.[0]?.value || 0);
+  }
+  const leadEvt = profile.leadEvent || "";
+  const totalLeadsProperty = leadEvt ? totalPorEvento[leadEvt] ?? null : null;
+  const cobertura =
+    totalLeadsProperty && totalLeadsProperty > 0
+      ? {
+          evento: leadEvt,
+          totalNaProperty: totalLeadsProperty,
+          atribuidoAPaginas: tLeads,
+          naoAtribuido: Math.max(0, totalLeadsProperty - tLeads),
+          pctAtribuido: Number(((tLeads / totalLeadsProperty) * 100).toFixed(1)),
+          explica:
+            `O GA4 registrou ${totalLeadsProperty.toLocaleString("pt-BR")} eventos de ${leadEvt} nesta janela. ` +
+            `A tabela consegue atribuir ${tLeads.toLocaleString("pt-BR")} a uma landing page especifica. ` +
+            `A diferenca some na quebra por pagina: quanto mais fina a dimensao, menos o GA4 devolve, por cardinalidade. ` +
+            `Nao e evento perdido nem erro de contagem, e o limite de saber QUAL pagina captou. ` +
+            `Para total de leads, use o numero do GA4; para distribuicao por LP, use a tabela.`,
+        }
+      : null;
+
   const totals = {
     landingPages: rows.length,
     sessions: tSessions,
@@ -757,6 +822,7 @@ export async function GET(req: NextRequest) {
       blocked: null,
       rows,
       totals,
+      cobertura,
       range: dateRange,
       meta: {
         eventsQueried: events,

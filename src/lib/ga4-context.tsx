@@ -1305,6 +1305,20 @@ export type LPPerfData = {
     checkoutDeVenda: number; sessoesDeVenda: number;
   } | null;
   range: { startDate: string; endDate: string };
+  /**
+   * Quanto da contagem real de leads a atribuição por página alcançou.
+   * Ver o comentário longo em /api/lp/performance: o GA4 devolve menos evento
+   * quanto mais fina a quebra, então a tabela por LP sempre mostra menos que o
+   * total da property. Isso é limite do método, não erro, e agora é declarado.
+   */
+  cobertura?: {
+    evento: string;
+    totalNaProperty: number;
+    atribuidoAPaginas: number;
+    naoAtribuido: number;
+    pctAtribuido: number;
+    explica: string;
+  } | null;
   meta?: { eventsQueried: string[]; thankPagesExcluded: boolean; rowsReturnedByGa4: number; truncated: boolean };
   error?: string;
 };
