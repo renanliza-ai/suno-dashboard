@@ -189,7 +189,27 @@ export async function GET(req: NextRequest) {
    * leads que o Salesforce recebeu, entre eles uma calculadora que sozinha fez
    * 344 e seria a quinta maior captadora do mês.
    */
-  const hostsConsultados = [...profile.lpHosts, ...(profile.captureHosts || [])];
+  /**
+   * ⚠️ REVERTIDO EM 01/10/2026, UMA HORA DEPOIS DE SUBIR. Ler antes de tentar
+   * de novo.
+   *
+   * Incluir `captureHosts` aqui para trazer a captação por calculadora
+   * QUEBROU a tela: de 141 linhas para 22. O portal tem milhares de páginas e
+   * elas ocuparam o limite da consulta, expulsando as próprias landing pages.
+   * A guarda que descarta página de portal sem conversão rodou DEPOIS, quando o
+   * estrago já estava feito: ela descartou 958 páginas, mas as LPs perdidas não
+   * voltam, porque nunca chegaram.
+   *
+   * É o mesmo erro que eu tinha acabado de corrigir em /api/ga4/evento-diario:
+   * ampliar o escopo sem ajustar o limite faz o que importa cair fora, e o
+   * resultado parece plausível (a tela carrega, com números menores).
+   *
+   * O jeito certo é consulta SEPARADA para os hosts de captação, com filtro de
+   * evento, e juntar depois. Não dá para fazer numa consulta só enquanto o
+   * limite for compartilhado. `captureHosts` fica declarado em bu.ts esperando
+   * essa implementação.
+   */
+  const hostsConsultados = profile.lpHosts;
   const hostFilter = {
     filter: {
       fieldName: "hostName",
