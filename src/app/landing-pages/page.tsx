@@ -217,6 +217,7 @@ export default function LandingPagesPage() {
     const sessions = rows.reduce((s, r) => s + n(r.sessions), 0);
     const engagedSessions = rows.reduce((s, r) => s + n(r.engagedSessions), 0);
     const leads = rows.reduce((s, r) => s + n(r.leads), 0);
+    const leadEvents = rows.reduce((s, r) => s + n(r.leadEvents), 0);
     const qualified = rows.reduce((s, r) => s + n(r.qualified), 0);
     const ctaClicks = rows.reduce((s, r) => s + n(r.ctaClicks), 0);
     const checkoutStarts = rows.reduce((s, r) => s + n(r.checkoutStarts), 0);
@@ -228,6 +229,7 @@ export default function LandingPagesPage() {
       engagedSessions,
       engagementRate: taxa(engagedSessions, sessions),
       leads,
+      leadEvents,
       qualified,
       qualificationRate: taxa(qualified, leads),
       ctaClicks,
@@ -424,9 +426,13 @@ export default function LandingPagesPage() {
                 sub={pct(totaisVisiveis.engagementRate)}
               />
               <Kpi
-                label="Leads"
+                label="Leads (pessoas)"
                 value={fmt(totaisVisiveis.leads)}
-                sub={LEAD_SOURCE_LABEL[data.rows[0]?.leadsSource || "indisponivel"]}
+                sub={
+                  totaisVisiveis.leadEvents > totaisVisiveis.leads
+                    ? `${fmt(totaisVisiveis.leadEvents)} disparos · ${LEAD_SOURCE_LABEL[data.rows[0]?.leadsSource || "indisponivel"]}`
+                    : LEAD_SOURCE_LABEL[data.rows[0]?.leadsSource || "indisponivel"]
+                }
               />
               {isMQL ? (
                 <>
@@ -754,7 +760,8 @@ export default function LandingPagesPage() {
                       "Sessoes",
                       "Sessoes engajadas",
                       "% engajamento",
-                      "Leads",
+                      "Leads (pessoas)",
+                      "Eventos de lead (disparos)",
                       "Origem do lead",
                       "MQL",
                       "% qualificacao",
@@ -776,6 +783,7 @@ export default function LandingPagesPage() {
                       r.engagedSessions,
                       r.engagementRate,
                       r.leads,
+                      r.leadEvents,
                       r.leadsSource,
                       r.qualified,
                       r.qualificationRate,
@@ -868,7 +876,19 @@ export default function LandingPagesPage() {
                         <td className="px-3 py-2.5 text-right tabular-nums">{fmt(r.sessions)}</td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{fmt(r.engagedSessions)}</td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.engagementRate)}</td>
-                        <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmt(r.leads)}</td>
+                        {/* Pessoas em cima (fecha com o CRM), disparos embaixo.
+                            A razão entre os dois é reenvio de formulário. */}
+                        <td className="px-3 py-2.5 text-right tabular-nums font-semibold">
+                          {fmt(r.leads)}
+                          {r.leadEvents > r.leads && (
+                            <span
+                              className="block text-[10px] font-normal text-[color:var(--muted-foreground)]"
+                              title={`${fmt(r.leadEvents)} disparos do evento para ${fmt(r.leads)} pessoas: ${fmt(r.leadEvents - r.leads)} reenvio(s) de formulário`}
+                            >
+                              {fmt(r.leadEvents)} eventos
+                            </span>
+                          )}
+                        </td>
                         {isMQL ? (
                           <>
                             <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-[#7c5cff]">

@@ -1258,7 +1258,7 @@ export type LPPerfRow = {
   host: string; path: string; url: string;
   sessions: number; engagedSessions: number; engagementRate: number | null;
   users: number; avgSessionDuration: number; bounceRate: number;
-  leads: number; leadsSource: string;
+  leads: number; leadEvents: number; leadsSource: string;
   qualified: number | null; disqualified: number | null; qualificationRate: number | null;
   ctaClicks: number | null; checkoutStarts: number | null; purchases: number | null;
   connectRate: number | null; ctaRate: number | null; checkoutRate: number | null;
@@ -1380,7 +1380,7 @@ export type SpaceRow = {
   space: string; rawMediums: string[]; kind: "banner" | "popup" | "outro";
   bannerName: string; named: boolean;
   sessions: number; engagedSessions: number; engagementRate: number | null;
-  leads: number; leadsSource: string;
+  leads: number; leadEvents: number; leadsSource: string;
   accounts: number | null;
   checkoutStarts: number | null; ctaClicksAll: number | null; purchases: number | null;
   sharePct: number | null; pecasNoEspaco: number;

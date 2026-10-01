@@ -64,6 +64,8 @@ type LPRow = {
   avgSessionDuration: number;
   bounceRate: number;
   leads: number;
+  /** Disparos do evento de lead. leadEvents > leads indica reenvio de formulario. */
+  leadEvents: number;
   leadsSource: string;
   qualified: number | null;
   disqualified: number | null;
@@ -249,7 +251,7 @@ export async function GET(req: NextRequest) {
             { name: "pagePath" },
             { name: "eventName" },
           ],
-          metrics: [{ name: "eventCount" }],
+          metrics: [{ name: "eventCount" }, { name: "totalUsers" }],
           orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
           limit: 2000,
           dimensionFilter: eventFilter,
@@ -363,6 +365,21 @@ export async function GET(req: NextRequest) {
   const normPath = (p: string) => (p.length > 1 ? p.replace(/\/+$/, "") : p);
 
   const evMap = new Map<string, Record<string, number>>();
+  /**
+   * ⚠️ PESSOAS, EM PARALELO AOS EVENTOS. Adicionado em 30/09/2026.
+   *
+   * O CRM conta PESSOA e o GA4 conta DISPARO. Medido na
+   * `/cl/arsenal-independencia/` em setembro: 819 eventos, 777 usuários, e 780
+   * leads no Salesforce. Comparar evento com CRM produzia uma diferença de 32
+   * que parecia perda de dado e era só unidade diferente; contra usuário a
+   * diferença cai para 3.
+   *
+   * A partir daqui `leads` passa a ser PESSOAS, que é o que fecha com o CRM e
+   * responde a pergunta de negócio ("quanta gente captei"). `leadEvents` guarda
+   * o disparo, que continua útil: a razão entre os dois é reenvio de formulário,
+   * ou seja, sinal de fricção.
+   */
+  const evMapUsuarios = new Map<string, Record<string, number>>();
   /** Total por evento, para conferir quanto sobrou fora das landing pages. */
   const evTotalMedido: Record<string, number> = {};
   for (const r of eventsRes.data?.rows || []) {
@@ -372,11 +389,15 @@ export async function GET(req: NextRequest) {
     const path = normPath(rawPath);
     const ev = r.dimensionValues?.[2]?.value || "";
     const n = Number(r.metricValues?.[0]?.value || 0);
+    const u = Number(r.metricValues?.[1]?.value || 0);
     evTotalMedido[ev] = (evTotalMedido[ev] || 0) + n;
     const key = `${host}|${path}`;
     const bucket = evMap.get(key) || {};
     bucket[ev] = (bucket[ev] || 0) + n;
     evMap.set(key, bucket);
+    const bucketU = evMapUsuarios.get(key) || {};
+    bucketU[ev] = (bucketU[ev] || 0) + u;
+    evMapUsuarios.set(key, bucketU);
   }
 
   /**
@@ -514,7 +535,16 @@ export async function GET(req: NextRequest) {
       // tela mostrava 0,9% de rejeição em LP com 9,2% de engajamento, ou seja,
       // cem vezes menor e com cara de excelente.
       bounceRate: Number((Number(r.metricValues?.[4]?.value || 0) * 100).toFixed(1)),
-      leads: conv.leads,
+      /**
+       * PESSOAS, não disparos. Ver o comentário em evMapUsuarios: é esta a
+       * unidade que fecha com o CRM, e era a troca dela por evento que fazia o
+       * painel parecer errado contra o Salesforce.
+       */
+      leads: profile.leadEvent
+        ? (evMapUsuarios.get(chaveEvento) || {})[profile.leadEvent] || 0
+        : conv.leads,
+      /** O disparo. leadEvents > leads significa reenvio de formulário. */
+      leadEvents: conv.leads,
       leadsSource: conv.leadsSource,
       qualified: conv.qualified,
       disqualified: conv.disqualified,
