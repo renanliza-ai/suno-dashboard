@@ -714,13 +714,24 @@ export default function LandingPagesPage() {
                     <b>separada</b>, com limite próprio: primeiro pergunta quais páginas
                     converteram, depois pede a sessão só delas. Por isso nenhuma landing page
                     sai da lista por causa delas.
+                    {/* Duas causas distintas para a taxa não existir. Contá-las
+                        juntas dava a explicação errada para metade das páginas. */}
                     {data.capturaForaDeLP.semSessaoDeEntrada > 0 && (
                       <>
                         {" "}
                         <b>{data.capturaForaDeLP.semSessaoDeEntrada}</b> dessas páginas não
                         receberam nenhuma sessão de <b>entrada</b> no período, o que é esperado
                         em ferramenta alcançada por navegação interna: a conversão é real e a
-                        taxa fica sem denominador, declarada linha a linha.
+                        taxa fica sem denominador.
+                      </>
+                    )}
+                    {data.capturaForaDeLP.descartadasPorHostCruzado > 0 && (
+                      <>
+                        {" "}
+                        Em <b>{data.capturaForaDeLP.descartadasPorHostCruzado}</b>, a sessão de
+                        entrada que o GA4 creditou era maior que os pageviews que o host serviu
+                        na página, o que é impossível: essas sessões entraram por outro host e o
+                        denominador foi descartado. A conversão continua valendo.
                       </>
                     )}
                   </p>

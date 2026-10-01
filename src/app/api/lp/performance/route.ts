@@ -75,24 +75,28 @@ export async function GET(req: NextRequest) {
   const limit = Math.min(Number(sp.get("limit") || 200), 1000);
   const includeThankPages = sp.get("includeThankPages") === "true";
   /**
-   * GUARDA DE IMPLANTAÇÃO da captação fora de LP. Padrão DESLIGADO.
+   * KILL-SWITCH da captação fora de LP: `?capturaForaDeLP=0` desliga.
    *
-   * Não é teimosia: hoje NÃO existe forma de medir esta rota fora de
-   * produção. O token do Google (`BRIEFING_REFRESH_TOKEN`) só está no ambiente
-   * de produção da Vercel e é do tipo `sensitive`, então nem o preview nem o
-   * servidor local conseguem falar com o GA4: os dois respondem
-   * `auth_no_session`.
+   * Subiu DESLIGADA primeiro, de propósito. Hoje não existe forma de medir
+   * esta rota fora de produção: o token do Google (`BRIEFING_REFRESH_TOKEN`)
+   * só está no ambiente de produção da Vercel e é do tipo `sensitive`, então
+   * o preview e o servidor local respondem `auth_no_session`. E em 01/10/2026
+   * eu já tinha derrubado esta tabela de 141 linhas para 22 subindo sem medir.
    *
-   * Em 01/10/2026 eu subi uma mudança nesta rota sem conseguir medir antes, e
-   * ela derrubou a tabela de 141 linhas para 22. Com o padrão desligado, o
-   * deploy que carrega este código NÃO muda nada do que está na tela: dá para
-   * medir o caminho novo em produção, pelo parâmetro, antes de ligá-lo para
-   * todo mundo.
+   * Então o caminho novo foi medido em produção, pelo parâmetro, antes de
+   * virar padrão. O que a medição mostrou, na Research de setembro de 2026:
    *
-   * ⚠️ Para remover: quando o padrão virar ligado, este parâmetro vira
-   * kill-switch (`?capturaForaDeLP=0`) e o comentário acima deve ser atualizado.
+   *   landing pages na tabela ....... 140 -> 140   (nenhuma sumiu)
+   *   LPs com número alterado ....... 0
+   *   páginas de ferramenta ......... 0 -> 11      (543 pessoas, 640 disparos)
+   *   cobertura da atribuição ....... 78,5% -> 88,7%
+   *   tempo de resposta (quente) .... +221ms
+   *
+   * O kill-switch fica porque a consulta depende do GA4 responder bem a um
+   * `inListFilter` com dezenas de caminhos, e é melhor ter como desligar sem
+   * deploy do que descobrir isso num dia de pico.
    */
-  const capturaForaDeLPLigada = sp.get("capturaForaDeLP") === "1";
+  const capturaForaDeLPLigada = sp.get("capturaForaDeLP") !== "0";
 
   if (!propertyId) {
     return NextResponse.json({ error: "propertyId required" }, { status: 400 });

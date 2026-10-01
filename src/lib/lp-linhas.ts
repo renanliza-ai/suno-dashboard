@@ -147,9 +147,18 @@ export type ResumoCaptacaoForaDeLP = {
   pessoas: number;
   /** Disparos do evento. */
   eventos: number;
-  /** Páginas descartadas porque a sessão de entrada não era possível naquele host. */
+  /**
+   * Páginas cuja sessão de entrada foi RECUSADA por ser aritmeticamente
+   * impossível naquele host (entrou por outro host). A linha fica, a sessão
+   * vira zero. Não se sobrepõe a `semSessaoDeEntrada`.
+   */
   descartadasPorHostCruzado: number;
-  /** Páginas que captaram mas não receberam nenhuma sessão de ENTRADA. */
+  /**
+   * Páginas para as quais o GA4 não devolveu sessão de entrada nenhuma. É o
+   * caso da ferramenta alcançada por navegação interna. Não se sobrepõe a
+   * `descartadasPorHostCruzado`: as duas causas são distintas e já foram
+   * confundidas uma vez.
+   */
   semSessaoDeEntrada: number;
   explica: string;
 };
@@ -410,18 +419,36 @@ export async function captacaoForaDeLP(args: {
     let sessions = entrada?.sessions ?? 0;
     let engagedSessions = entrada?.engagedSessions ?? 0;
 
-    // Contaminação cruzada: a sessão de entrada não cabe nos pageviews que
-    // este host serviu, então ela entrou por outro host. Zera a SESSÃO e
-    // mantém a linha, porque a conversão continua sendo desta página.
-    if (sessions > 0) {
+    /**
+     * ⚠️ DUAS CAUSAS DIFERENTES PARA "SEM SESSÃO", E ELAS NÃO PODEM SER
+     * CONTADAS JUNTAS.
+     *
+     * Na primeira medição as duas davam 5, e eram as MESMAS 5 páginas: quem
+     * tinha a sessão descartada caía também no balde de "não recebeu sessão".
+     * Isso contava a página duas vezes e, pior, fazia a tela dar a explicação
+     * errada ("é ferramenta alcançada por navegação interna") para uma página
+     * cuja sessão existia e foi RECUSADA por outro motivo.
+     *
+     *   descartada  = o GA4 devolveu sessão de entrada, mas ela não cabe nos
+     *                 pageviews que este host serviu, então entrou por OUTRO
+     *                 host. Contaminação cruzada, mesma guarda da rota.
+     *   sem entrada = o GA4 não devolveu sessão nenhuma para esta página. É o
+     *                 caso da ferramenta alcançada por navegação interna.
+     *
+     * Nos dois a linha FICA, porque a conversão é desta página de qualquer
+     * forma. O que muda é o motivo que a tela declara.
+     */
+    const tinhaEntrada = sessions > 0;
+    if (tinhaEntrada) {
       const views = servidos.get(chave) || 0;
       if (views < sessions) {
         descartadasPorHostCruzado++;
         sessions = 0;
         engagedSessions = 0;
       }
+    } else {
+      semSessaoDeEntrada++;
     }
-    if (sessions === 0) semSessaoDeEntrada++;
 
     const conv = computeLPConversion(profile, {
       sessions,
@@ -433,8 +460,10 @@ export async function captacaoForaDeLP(args: {
 
     let rateCaveat: string | null = null;
     if (sessions === 0) {
-      rateCaveat =
-        "Taxa não calculada: esta página captou, mas nenhuma sessão ENTROU por ela no período. É o caso típico de ferramenta do portal, que recebe tráfego por navegação interna. A conversão é real; o denominador de \"sessões de entrada\" é que não existe aqui.";
+      // O motivo tem que ser o certo: ver o comentário das duas causas acima.
+      rateCaveat = tinhaEntrada
+        ? "Taxa não calculada: o GA4 creditou sessões de entrada a esta página, mas em número maior que os pageviews que este host serviu nela. Isso é impossível, e significa que essas sessões entraram por OUTRO host e só passaram por aqui. A conversão é real; o denominador foi descartado por não ser confiável."
+        : "Taxa não calculada: esta página captou, mas nenhuma sessão ENTROU por ela no período. É o caso típico de ferramenta do portal, que recebe tráfego por navegação interna. A conversão é real; o denominador de \"sessões de entrada\" é que não existe aqui.";
       conv.connectRate = null;
       conv.ctaRate = null;
     } else if (conv.leads > sessions) {
@@ -504,7 +533,10 @@ export async function captacaoForaDeLP(args: {
       `Elas somam ${pessoas.toLocaleString("pt-BR")} pessoas e ${eventos.toLocaleString("pt-BR")} disparos, e esses leads chegam ao CRM. ` +
       `Vêm de uma consulta SEPARADA, com limite próprio, que pergunta primeiro QUAIS páginas converteram e só depois pede a sessão delas: por isso o portal não disputa espaço com a lista de LP. ` +
       (semSessaoDeEntrada > 0
-        ? `${semSessaoDeEntrada} delas não receberam nenhuma sessão de ENTRADA no período, o que é esperado em ferramenta alcançada por navegação interna: a conversão é real e a taxa fica sem denominador, declarada linha a linha. `
+        ? `${semSessaoDeEntrada} delas não receberam nenhuma sessão de ENTRADA no período, o que é esperado em ferramenta alcançada por navegação interna: a conversão é real e a taxa fica sem denominador. `
+        : "") +
+      (descartadasPorHostCruzado > 0
+        ? `Em ${descartadasPorHostCruzado}, a sessão de entrada que o GA4 creditou era maior que os pageviews servidos pelo host, o que é impossível: essas sessões entraram por outro host e o denominador foi descartado. `
         : "") +
       `⚠️ Somar a coluna de leads continua dando mais que as PESSOAS ÚNICAS da property: quem captou em duas páginas conta uma vez em cada linha.`,
   };
