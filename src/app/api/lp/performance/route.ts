@@ -7,8 +7,19 @@ import {
   resolveBU,
   resolveObjective,
   type BUProfile,
-  type LPObjective,
 } from "@/lib/bu";
+/**
+ * `LPRow` e `TrafficSlice` moravam aqui dentro até 01/10/2026. Saíram para
+ * `lp-linhas.ts` quando passou a existir uma SEGUNDA origem de linha: a
+ * captação que acontece fora dos hosts de landing page. O formato precisa ser
+ * um só, senão as duas origens divergem em silêncio.
+ */
+import {
+  captacaoForaDeLP,
+  type LPRow,
+  type ResumoCaptacaoForaDeLP,
+  type TrafficSlice,
+} from "@/lib/lp-linhas";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -52,84 +63,6 @@ export const maxDuration = 60;
  *   limit         (default 200)
  *   includeThankPages=true (opcional) — só para depuração
  */
-
-type LPRow = {
-  host: string;
-  path: string;
-  url: string;
-  sessions: number;
-  engagedSessions: number;
-  engagementRate: number | null;
-  users: number;
-  avgSessionDuration: number;
-  bounceRate: number;
-  leads: number;
-  /** Disparos do evento de lead. leadEvents > leads indica reenvio de formulario. */
-  leadEvents: number;
-  leadsSource: string;
-  qualified: number | null;
-  disqualified: number | null;
-  qualificationRate: number | null;
-  /** Todos os cliques em CTA da LP. ⚠️ NÃO é só checkout, ver comentário abaixo. */
-  ctaClicks: number | null;
-  /** begin_checkout atribuído a esta LP: quem REALMENTE chegou ao checkout. */
-  checkoutStarts: number | null;
-  /**
-   * COMPRAS atribuídas a esta LP.
-   *
-   * Pedido do Renan em 09/09/2026: "faça um cruzamento se aquela LP teve alguma
-   * influência no purchase". A âncora é a mesma do checkout: o `purchase`
-   * atribuído à landing page de ENTRADA da sessão. Ou seja, a sessão que
-   * começou naquela LP terminou comprando.
-   *
-   * ⚠️ É influência de ÚLTIMA SESSÃO, não modelo multi-toque. Compra que
-   * acontece numa sessão POSTERIOR (a pessoa entrou pela LP hoje e comprou
-   * amanhã por e-mail) não aparece aqui, aparece na LP daquela outra sessão.
-   * Some a isso o problema conhecido do cookie _ga no checkout, que joga parte
-   * da atribuição em (not set). Ou seja: este número é PISO de influência.
-   */
-  purchases: number | null;
-  connectRate: number | null;
-  ctaRate: number | null;
-  /** begin_checkout ÷ sessões. */
-  checkoutRate: number | null;
-  /**
-   * Objetivo da LP pela regra universal Suno (o padrão da URL diz qual é).
-   * captacao -> conversão é generate_lead. venda -> conversão é chegada ao checkout.
-   */
-  objective: LPObjective;
-  objectiveFrom: "url" | "dado" | "nenhum";
-  /** Métrica que DEVE ser lida como conversão desta linha. */
-  primaryMetric: "leads" | "checkoutStarts" | "ambas";
-  /** Valor da métrica primária, já resolvido, para ordenar e comparar. */
-  primaryValue: number | null;
-  primaryRate: number | null;
-  /** Preenchido quando o objetivo declarado não bate com o dado. É alarme. */
-  mismatch: string | null;
-  /**
-   * Preenchido quando a TAXA não pode ser calculada com honestidade.
-   *
-   * Efeito colateral legítimo do escopo misto: sessão vem da ENTRADA
-   * (landingPage) e o evento vem da PÁGINA onde disparou (pagePath). Se a
-   * pessoa entrou por outra página e converteu nesta, o numerador existe e o
-   * denominador não. Aí a taxa passaria de 100%, que é visivelmente errado.
-   * Nesse caso a taxa vira null e o motivo fica aqui.
-   */
-  rateCaveat: string | null;
-  /**
-   * De onde vem o tráfego DESTA LP. `sessionSource` e `sessionMedium` são
-   * dimensões de SESSÃO, o mesmo escopo de `landingPage`, então a junção é
-   * coerente: a origem é a da sessão que ENTROU por esta página.
-   */
-  topSource: TrafficSlice | null;
-  sources: TrafficSlice[];
-  topMedium: TrafficSlice | null;
-  mediums: TrafficSlice[];
-  isThankPage: boolean;
-};
-
-/** Uma fatia de origem ou meio, já com share dentro da própria LP. */
-type TrafficSlice = { label: string; sessions: number; sharePct: number };
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -184,30 +117,19 @@ export async function GET(req: NextRequest) {
   }
 
   /**
-   * Hosts consultados = landing pages + hosts que captam sem ser LP.
-   * Ver o comentário de `captureHosts` em bu.ts: sem isso a tela perdia 481
-   * leads que o Salesforce recebeu, entre eles uma calculadora que sozinha fez
-   * 344 e seria a quinta maior captadora do mês.
-   */
-  /**
-   * ⚠️ REVERTIDO EM 01/10/2026, UMA HORA DEPOIS DE SUBIR. Ler antes de tentar
-   * de novo.
+   * ⚠️ AQUI SÓ ENTRA HOST DE LANDING PAGE. Ler antes de tentar incluir outro.
    *
-   * Incluir `captureHosts` aqui para trazer a captação por calculadora
-   * QUEBROU a tela: de 141 linhas para 22. O portal tem milhares de páginas e
-   * elas ocuparam o limite da consulta, expulsando as próprias landing pages.
-   * A guarda que descarta página de portal sem conversão rodou DEPOIS, quando o
-   * estrago já estava feito: ela descartou 958 páginas, mas as LPs perdidas não
-   * voltam, porque nunca chegaram.
+   * Em 01/10/2026 eu somei `captureHosts` a esta lista para trazer a captação
+   * por calculadora. QUEBROU a tela: de 141 linhas para 22. A consulta de
+   * sessão abaixo pede `landingPage` SEM filtro de evento, e o portal tem
+   * milhares de páginas de notícia com sessão: elas ocuparam o limite antes
+   * das landing pages aparecerem. A guarda que descartava página de portal sem
+   * conversão rodava DEPOIS, quando o estrago já estava feito.
    *
-   * É o mesmo erro que eu tinha acabado de corrigir em /api/ga4/evento-diario:
-   * ampliar o escopo sem ajustar o limite faz o que importa cair fora, e o
-   * resultado parece plausível (a tela carrega, com números menores).
-   *
-   * O jeito certo é consulta SEPARADA para os hosts de captação, com filtro de
-   * evento, e juntar depois. Não dá para fazer numa consulta só enquanto o
-   * limite for compartilhado. `captureHosts` fica declarado em bu.ts esperando
-   * essa implementação.
+   * A captação fora de LP é atendida por consulta SEPARADA, com limite
+   * próprio, em `captacaoForaDeLP` (lp-linhas.ts). Lá a ordem é invertida:
+   * pergunta primeiro QUAIS páginas converteram, e só depois pede a sessão
+   * delas. Nada daquela consulta pode tirar linha desta.
    */
   const hostsConsultados = profile.lpHosts;
   const hostFilter = {
@@ -229,6 +151,37 @@ export async function GET(req: NextRequest) {
           andGroup: {
             expressions: [
               hostFilter,
+              { filter: { fieldName: "eventName", inListFilter: { values: events } } },
+            ],
+          },
+        }
+      : hostFilter;
+
+  /**
+   * FILTRO DO TOTAL: landing page MAIS hosts de captação.
+   *
+   * Este é usado só pela consulta de total por evento, que não tem dimensão de
+   * página (só `eventName`). Sem página não há cardinalidade para estourar nem
+   * limite para disputar, então incluir o portal aqui é seguro, ao contrário
+   * do que acontece com a consulta de sessão.
+   *
+   * E é OBRIGATÓRIO incluir: o bloco de cobertura compara a soma da coluna da
+   * tabela com este total. Se a tabela passasse a mostrar a captação do portal
+   * e o total continuasse só em host de LP, a soma ficaria MAIOR que o total e
+   * a cobertura passaria de 100%, que é visivelmente errado.
+   */
+  const hostsDoTotal = [...profile.lpHosts, ...(profile.captureHosts || [])];
+  const eventFilterTotal =
+    events.length > 0
+      ? {
+          andGroup: {
+            expressions: [
+              {
+                filter: {
+                  fieldName: "hostName",
+                  inListFilter: { values: hostsDoTotal, caseSensitive: false },
+                },
+              },
               { filter: { fieldName: "eventName", inListFilter: { values: events } } },
             ],
           },
@@ -314,7 +267,10 @@ export async function GET(req: NextRequest) {
           dimensions: [{ name: "eventName" }],
           metrics: [{ name: "eventCount" }, { name: "totalUsers" }],
           limit: 100,
-          dimensionFilter: eventFilter,
+          // ⚠️ `eventFilterTotal`, não `eventFilter`: inclui os hosts de
+          // captação, porque a tabela agora mostra as páginas deles. Ver o
+          // comentário onde ele é montado.
+          dimensionFilter: eventFilterTotal,
         })
       : Promise.resolve({ data: null, error: null }),
     /**
@@ -598,6 +554,35 @@ export async function GET(req: NextRequest) {
   }
 
   /**
+   * ═══════════════════════════════════════════════════════════════════════
+   * CAPTAÇÃO QUE ACONTECE FORA DOS HOSTS DE LANDING PAGE
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Consulta SEPARADA, com limite próprio. Ver o comentário longo em
+   * lp-linhas.ts: ela pergunta primeiro QUAIS páginas converteram e só depois
+   * pede a sessão dessas páginas, então o portal não tem como ocupar o limite
+   * da lista de LP. Foi tentar fazer numa consulta só que derrubou a tela de
+   * 141 linhas para 22 em 01/10/2026.
+   *
+   * Entra AQUI, antes do begin_checkout e da resolução de objetivo, para que
+   * estas linhas participem de tudo que vem depois sem nenhum caso especial:
+   * objetivo, métrica primária, alarme de divergência e totais.
+   *
+   * Falha desta consulta NÃO derruba a tela: ela devolve lista vazia e a
+   * tabela fica como era antes. É complemento, não dependência.
+   */
+  const captura = await captacaoForaDeLP({
+    propertyId,
+    profile,
+    dateRange,
+    events,
+    pathContains,
+    includeThankPages,
+  });
+  if (captura.linhas.length > 0) rows = rows.concat(captura.linhas);
+  const capturaForaDeLP: ResumoCaptacaoForaDeLP | null = captura.resumo;
+
+  /**
    * QUEM REALMENTE CHEGOU AO CHECKOUT.
    *
    * Pedido do Renan em 08/09/2026: a coluna de CTA deveria mostrar só clique que
@@ -733,26 +718,19 @@ export async function GET(req: NextRequest) {
    * tem formulário, e isso se desambigua pelo dado.
    */
   /**
-   * ⚠️ GUARDA DO PORTAL. Página de `captureHosts` só fica se CONVERTEU.
+   * A GUARDA DO PORTAL SAIU DAQUI, e não foi esquecimento.
    *
-   * `www.suno.com.br` entrou na consulta para não perder a captação por
-   * calculadora e ferramenta (481 leads que o Salesforce recebia e a tela não
-   * mostrava). Mas o portal tem milhares de páginas de notícia, e trazê-las
-   * todas afogaria a lista e inflaria o denominador de qualquer taxa.
+   * Ela filtrava, DEPOIS da consulta, as páginas de `captureHosts` que não
+   * tinham convertido. Era remendo: as notícias do portal já tinham ocupado o
+   * limite da consulta e expulsado as landing pages, e filtrar no fim não
+   * trazia de volta o que nunca chegou.
    *
-   * Então: landing page entra sempre, porque existe para converter e conversão
-   * zero nela é informação. Página de portal entra só quando captou, porque aí
-   * ela está cumprindo papel de captação e pertence a esta tela.
+   * Agora a regra é imposta na PERGUNTA, não na resposta: `captacaoForaDeLP`
+   * filtra por evento de conversão na própria consulta ao GA4, então página de
+   * portal sem conversão não existe para ser descartada. Filtrar aqui de novo
+   * seria pior que redundante: derrubaria página que converteu só em
+   * `cta_click`, que a guarda antiga não olhava.
    */
-  const ehHostDeCaptura = (host: string) =>
-    (profile.captureHosts || []).some((h) => h.toLowerCase() === host.toLowerCase());
-  const antesDaGuarda = rows.length;
-  rows = rows.filter((r) => {
-    if (!ehHostDeCaptura(r.host)) return true;
-    return (r.leads || 0) > 0 || (r.qualified || 0) > 0 || (r.checkoutStarts || 0) > 0;
-  });
-  const descartadasDoPortal = antesDaGuarda - rows.length;
-
   for (const row of rows) {
     const { objective, inferredFrom } = resolveObjective(row.path, {
       leads: row.leads,
@@ -962,7 +940,11 @@ export async function GET(req: NextRequest) {
       totals,
       cobertura,
       qualidadeGA4,
-      descartadasDoPortal,
+      /**
+       * Captação fora dos hosts de LP (ferramentas e calculadoras do portal).
+       * null quando a B.U. não declara `captureHosts`. Ver lp-linhas.ts.
+       */
+      capturaForaDeLP,
       range: dateRange,
       meta: {
         eventsQueried: events,

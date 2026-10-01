@@ -1273,6 +1273,12 @@ export type LPPerfRow = {
   topMedium: TrafficSlice | null;
   mediums: TrafficSlice[];
   isThankPage: boolean;
+  /**
+   * TRUE quando a linha NÃO é landing page: é página de ferramenta ou
+   * calculadora do portal que capta lead. Vem de consulta separada. A tela
+   * precisa saber para rotular e para poder excluir do recorte.
+   */
+  foraDeLP?: boolean;
 };
 
 export type LPPerfData = {
@@ -1327,6 +1333,21 @@ export type LPPerfData = {
   qualidadeGA4?: {
     perdaPorCardinalidade: boolean;
     amostrado: boolean;
+    explica: string;
+  } | null;
+  /**
+   * Captação que acontece FORA dos hosts de landing page: ferramentas e
+   * calculadoras do portal. Vem de consulta separada, com limite próprio, e
+   * por isso não disputa espaço com a lista de LP. null quando a B.U. não
+   * declara hosts de captação.
+   */
+  capturaForaDeLP?: {
+    hosts: string[];
+    paginas: number;
+    pessoas: number;
+    eventos: number;
+    descartadasPorHostCruzado: number;
+    semSessaoDeEntrada: number;
     explica: string;
   } | null;
   meta?: { eventsQueried: string[]; thankPagesExcluded: boolean; rowsReturnedByGa4: number; truncated: boolean };

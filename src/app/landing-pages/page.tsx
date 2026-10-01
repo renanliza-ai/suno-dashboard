@@ -96,6 +96,14 @@ export default function LandingPagesPage() {
    */
   const [soNoAr, setSoNoAr] = useState(false);
   /**
+   * Captação que acontece FORA dos hosts de landing page: ferramentas e
+   * calculadoras do portal. Ligado por padrão, porque esses leads chegam ao
+   * Salesforce e escondê-los é justamente o que fazia a tela não fechar com o
+   * CRM. Desligar dá o recorte "só landing page de verdade", que é legítimo
+   * para avaliar a fábrica de LP, e por isso o botão existe.
+   */
+  const [incluirForaDeLP, setIncluirForaDeLP] = useState(true);
+  /**
    * ⚠️ VERIFICAR 141 LPs DE UMA VEZ TRAVA A TELA.
    *
    * Cada verificação é uma requisição HTTP contra o WordPress, que responde
@@ -170,6 +178,10 @@ export default function LandingPagesPage() {
       });
     }
     if (assetModo === "sem") filtered = filtered.filter((r) => !r.path.startsWith("/asset/"));
+    // Captação fora de LP (ferramenta e calculadora do portal). Entra por
+    // padrão, porque esses leads chegam ao CRM e sem eles a tela não fecha com
+    // o Salesforce. Quem quiser o recorte "só landing page de verdade" desliga.
+    if (!incluirForaDeLP) filtered = filtered.filter((r) => !r.foraDeLP);
     const get = (r: LPPerfRow, k: SortKey): number => {
       const v = r[k];
       return typeof v === "number" ? v : -1;
@@ -178,7 +190,7 @@ export default function LandingPagesPage() {
       const d = get(a, sortKey) - get(b, sortKey);
       return sortDesc ? -d : d;
     });
-  }, [data, q, objFilter, sortKey, sortDesc, soNoAr, estadoLP, assetModo]);
+  }, [data, q, objFilter, sortKey, sortDesc, soNoAr, estadoLP, assetModo, incluirForaDeLP]);
 
   /**
    * ⚠️ O QUE O FILTRO "SÓ LPs NO AR" ESTÁ ESCONDENDO, EM NÚMEROS.
@@ -206,6 +218,7 @@ export default function LandingPagesPage() {
     if (objFilter === "alarme") candidatas = candidatas.filter((r) => r.mismatch);
     else if (objFilter !== "todos") candidatas = candidatas.filter((r) => r.objective === objFilter);
     if (assetModo === "sem") candidatas = candidatas.filter((r) => !r.path.startsWith("/asset/"));
+    if (!incluirForaDeLP) candidatas = candidatas.filter((r) => !r.foraDeLP);
     const fora = candidatas.filter((r) => {
       const e = estadoLP[chaveEstado(r.host, r.path)]?.estado;
       return e === "aposentada" || e === "fora";
@@ -218,7 +231,7 @@ export default function LandingPagesPage() {
       sessoes: fora.reduce((s, r) => s + n(r.sessions), 0),
       topLeads: [...fora].sort((a, b) => n(b.leads) - n(a.leads)).slice(0, 5),
     };
-  }, [data, q, objFilter, assetModo, soNoAr, estadoLP]);
+  }, [data, q, objFilter, assetModo, soNoAr, estadoLP, incluirForaDeLP]);
 
   /**
    * ⚠️ OS NÚMEROS DO TOPO SAEM DAQUI, E NÃO MAIS DO SERVIDOR. Corrigido em
@@ -245,7 +258,7 @@ export default function LandingPagesPage() {
    * só resta a soma das linhas, que repete quem captou em mais de uma página.
    */
   const semFiltroAtivo =
-    !q.trim() && objFilter === "todos" && !soNoAr && assetModo === "todas";
+    !q.trim() && objFilter === "todos" && !soNoAr && assetModo === "todas" && incluirForaDeLP;
 
   const totaisVisiveis = useMemo(() => {
     const n = (v: number | null | undefined) => (typeof v === "number" ? v : 0);
@@ -678,6 +691,48 @@ export default function LandingPagesPage() {
             </div>
           )}
 
+          {/* Captação que não é de landing page. Declarada porque muda a
+              leitura da tabela: parte dos leads vem de ferramenta do portal, e
+              algumas dessas páginas não têm taxa, por não serem página de
+              entrada de ninguém. Ver lp-linhas.ts. */}
+          {data.capturaForaDeLP && data.capturaForaDeLP.paginas > 0 && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 mb-3">
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-amber-900 text-sm mb-1">
+                    {data.capturaForaDeLP.paginas} página
+                    {data.capturaForaDeLP.paginas === 1 ? "" : "s"} de{" "}
+                    {data.capturaForaDeLP.hosts.join(", ")} captaram{" "}
+                    {fmt(data.capturaForaDeLP.pessoas)} lead
+                    {data.capturaForaDeLP.pessoas === 1 ? "" : "s"} sem ser landing page
+                    {incluirForaDeLP ? "" : " (fora da tabela agora)"}
+                  </p>
+                  <p className="text-xs text-amber-900 leading-relaxed">
+                    São ferramentas e calculadoras do portal. Esses leads chegam ao CRM, então
+                    sem elas a tela não fecha com o Salesforce. Vêm de uma consulta{" "}
+                    <b>separada</b>, com limite próprio: primeiro pergunta quais páginas
+                    converteram, depois pede a sessão só delas. Por isso nenhuma landing page
+                    sai da lista por causa delas.
+                    {data.capturaForaDeLP.semSessaoDeEntrada > 0 && (
+                      <>
+                        {" "}
+                        <b>{data.capturaForaDeLP.semSessaoDeEntrada}</b> dessas páginas não
+                        receberam nenhuma sessão de <b>entrada</b> no período, o que é esperado
+                        em ferramenta alcançada por navegação interna: a conversão é real e a
+                        taxa fica sem denominador, declarada linha a linha.
+                      </>
+                    )}
+                  </p>
+                  <p className="text-[11px] text-amber-800 mt-1.5">
+                    Use o botão <b>Ferramentas do portal</b> nos filtros para tirá-las e ver só a
+                    fábrica de LP.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Cobertura da atribuição: o total do GA4 contra o que a tabela alcança.
               Existe porque a comparação com o GA4 (e com o CRM) não batia, e o
               painel ficava mudo sobre o porquê. Ver /api/lp/performance. */}
@@ -828,6 +883,25 @@ export default function LandingPagesPage() {
                 ))}
               </div>
             )}
+            {/* Captação fora de LP: ferramenta e calculadora do portal que
+                captam lead. Só aparece quando a B.U. tem isso, e o rótulo diz
+                quantas páginas são, para o botão não ser abstrato. */}
+            {data.capturaForaDeLP && data.capturaForaDeLP.paginas > 0 && (
+              <button
+                onClick={() => { setIncluirForaDeLP((v) => !v); resetPaginacao(); }}
+                className={`px-3 py-2 text-xs font-semibold rounded-xl border transition ${
+                  incluirForaDeLP
+                    ? "bg-amber-50 border-amber-300 text-amber-900"
+                    : "bg-white border-[color:var(--border)] text-[color:var(--muted-foreground)]"
+                }`}
+                title={`Ferramentas e calculadoras em ${data.capturaForaDeLP.hosts.join(", ")} que captam lead sem ser landing page. Esses leads chegam ao CRM. Vêm de consulta separada, com limite próprio, então não tiram nenhuma LP da lista.`}
+              >
+                {incluirForaDeLP ? "✓ " : ""}Ferramentas do portal
+                <span className="ml-1.5 opacity-70">
+                  ({data.capturaForaDeLP.paginas} pág · {fmt(data.capturaForaDeLP.pessoas)} leads)
+                </span>
+              </button>
+            )}
             {/* Higienização: o GA4 é histórico, quem sabe se a LP está no ar é
                 o servidor. Rótulo diz o que o filtro FAZ, não o que ele esconde. */}
             <button
@@ -970,6 +1044,17 @@ export default function LandingPagesPage() {
                             <ExternalLink size={11} className="shrink-0 opacity-40" />
                           </a>
                           <span className="text-[10px] text-[color:var(--muted-foreground)]">{r.host}</span>
+                          {/* Não é landing page: é ferramenta do portal que
+                              capta. Sem este rótulo a linha passaria por LP e
+                              a leitura da tabela ficaria errada. */}
+                          {r.foraDeLP && (
+                            <span
+                              className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-900 align-middle"
+                              title="Não é landing page: é página do portal (ferramenta ou calculadora) que capta lead. Vem de consulta separada. A taxa pode não existir quando ninguém ENTRA por ela, porque o tráfego chega por navegação interna."
+                            >
+                              ferramenta
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-2.5">
                           <ObjectiveBadge row={r} />
