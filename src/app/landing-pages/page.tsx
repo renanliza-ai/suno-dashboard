@@ -125,7 +125,7 @@ export default function LandingPagesPage() {
     if (soNoAr) return todas.map((r) => ({ host: r.host, path: r.path }));
     return todas.slice(0, visiveis + PASSO).map((r) => ({ host: r.host, path: r.path }));
   }, [data, soNoAr, visiveis]);
-  const { mapa: estadoLP, verificando: verificandoEstado, pendentes: estadoPendentes } =
+  const { mapa: estadoLP, verificando: verificandoEstado, pendentes: estadoPendentes, completo: estadoCompleto } =
     useEstadoLP(paginasParaVerificar);
 
   /** Quantas LPs o servidor já confirmou que não recebem mais tráfego. */
@@ -172,10 +172,35 @@ export default function LandingPagesPage() {
     // LP que o servidor já disse que redireciona ou sumiu sai da lista. O que
     // ainda NÃO foi verificado permanece: sumir por falta de verificação seria
     // esconder LP viva.
-    if (soNoAr) {
+    /**
+     * ⚠️ DUAS CONDIÇÕES NOVAS, as duas vindas de medição em 01/10/2026.
+     *
+     * 1. SÓ FILTRA COM O MAPA COMPLETO. Antes filtrava com o que tivesse.
+     *    Como ligar o botão derrubava a rota de verificação (504 em 8 de 8
+     *    chamadas), o mapa congelava nas 20 primeiras linhas e o filtro
+     *    escondia 6 das 60 LPs aposentadas, justamente as de MAIOR volume,
+     *    deixando as outras 54 na tela. O botão fazia o inverso da promessa
+     *    nos dois sentidos ao mesmo tempo, e em silêncio.
+     *
+     * 2. NÃO ESCONDE LINHA QUE PRODUZIU NA JANELA. O estado é de HOJE e o
+     *    relatório é do PASSADO. /cl/arsenal-independencia redireciona hoje,
+     *    mas captou 776 leads em setembro, e /cl/aniversario-premium-2026
+     *    captou 779: juntas, 33% do mês. Escondê-las de um relatório de
+     *    setembro apaga história real, e o substituto não compensa, porque
+     *    /pv/arsenal-independencia-897 tem 1.765 sessões e ZERO lead (a LP de
+     *    captação foi trocada por uma de venda).
+     *
+     *    Então a regra é: aposentada que não produziu nada na janela é peso
+     *    morto e sai; aposentada que produziu é o resultado do mês e fica,
+     *    marcada, porque não é alvo de trabalho daqui para a frente.
+     */
+    if (soNoAr && estadoCompleto) {
       filtered = filtered.filter((r) => {
         const e = estadoLP[chaveEstado(r.host, r.path)]?.estado;
-        return e !== "aposentada" && e !== "fora";
+        if (e !== "aposentada" && e !== "fora") return true;
+        const produziu =
+          (r.leads || 0) > 0 || (r.checkoutStarts || 0) > 0 || (r.purchases || 0) > 0;
+        return produziu;
       });
     }
     if (assetModo === "sem") filtered = filtered.filter((r) => !r.path.startsWith("/asset/"));
@@ -191,7 +216,7 @@ export default function LandingPagesPage() {
       const d = get(a, sortKey) - get(b, sortKey);
       return sortDesc ? -d : d;
     });
-  }, [data, q, objFilter, sortKey, sortDesc, soNoAr, estadoLP, assetModo, incluirForaDeLP]);
+  }, [data, q, objFilter, sortKey, sortDesc, soNoAr, estadoLP, estadoCompleto, assetModo, incluirForaDeLP]);
 
   /**
    * ⚠️ O QUE O FILTRO "SÓ LPs NO AR" ESTÁ ESCONDENDO, EM NÚMEROS.
@@ -220,9 +245,13 @@ export default function LandingPagesPage() {
     else if (objFilter !== "todos") candidatas = candidatas.filter((r) => r.objective === objFilter);
     if (assetModo === "sem") candidatas = candidatas.filter((r) => !r.path.startsWith("/asset/"));
     if (!incluirForaDeLP) candidatas = candidatas.filter((r) => !r.foraDeLP);
+    // Mesmo predicado do filtro, senão o aviso declara um conjunto diferente do
+    // que a tabela realmente escondeu, que é pior que não avisar.
     const fora = candidatas.filter((r) => {
       const e = estadoLP[chaveEstado(r.host, r.path)]?.estado;
-      return e === "aposentada" || e === "fora";
+      if (e !== "aposentada" && e !== "fora") return false;
+      const produziu = (r.leads || 0) > 0 || (r.checkoutStarts || 0) > 0 || (r.purchases || 0) > 0;
+      return !produziu;
     });
     if (fora.length === 0) return null;
     const n = (v: number | null | undefined) => (typeof v === "number" ? v : 0);
@@ -928,12 +957,27 @@ export default function LandingPagesPage() {
                   ? "bg-emerald-50 border-emerald-300 text-emerald-800"
                   : "bg-white border-[color:var(--border)] text-[color:var(--muted-foreground)]"
               }`}
-              title="Confere no servidor se a LP responde 200 no próprio endereço. LP que redireciona ou some do ar sai da lista."
+              title="Confere no servidor se a LP responde 200 no próprio endereço e tira da lista a que redireciona ou sumiu. LP aposentada que PRODUZIU nesta janela continua aparecendo, marcada: o estado é de hoje e o relatório é do período escolhido, então esconder apagaria resultado real."
             >
-              {soNoAr ? "✓ " : ""}Só LPs no ar
-              {verificandoEstado && <span className="ml-1.5 opacity-60">verificando…</span>}
-              {!verificandoEstado && aposentadasContadas > 0 && (
-                <span className="ml-1.5 opacity-70">({aposentadasContadas} fora)</span>
+              {/* ⚠️ O rótulo era "Só LPs no ar" e prometia o que não entregava.
+                  Aposentada que captou na janela permanece de propósito, então
+                  "só no ar" seria mentira. O nome agora descreve a AÇÃO. */}
+              {soNoAr ? "✓ " : ""}Limpar aposentadas sem resultado
+              {verificandoEstado && (
+                <span className="ml-1.5 opacity-60">
+                  verificando {Object.keys(estadoLP).length} de {paginasParaVerificar.length}…
+                </span>
+              )}
+              {/* Verificação incompleta precisa aparecer no próprio botão: antes
+                  ela falhava inteira e o indicador sumia como se tivesse
+                  concluído, e o filtro decidia sobre um mapa de 20 de 151. */}
+              {!verificandoEstado && soNoAr && !estadoCompleto && (
+                <span className="ml-1.5 text-rose-700">
+                  (não aplicado: faltam {Math.max(0, paginasParaVerificar.length - Object.keys(estadoLP).length)})
+                </span>
+              )}
+              {!verificandoEstado && estadoCompleto && aposentadasContadas > 0 && (
+                <span className="ml-1.5 opacity-70">({aposentadasContadas} aposentadas)</span>
               )}
             </button>
             <div className="ml-auto flex items-center gap-2">

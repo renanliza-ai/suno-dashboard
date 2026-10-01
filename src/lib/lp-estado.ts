@@ -48,7 +48,37 @@ export type ResultadoEstado = {
 
 const UA =
   "Mozilla/5.0 (compatible; SunoDashboardHealthCheck/1.0; +https://suno-dashboard-painel.vercel.app)";
-const TIMEOUT_MS = 20000;
+/**
+ * ⚠️ CAIU DE 20s PARA 6s EM 01/10/2026, e a retentativa deixou de valer para
+ * timeout. Os dois juntos eram o que derrubava a rota.
+ *
+ * A conta antiga: `bater` retentava QUALQUER erro, inclusive AbortError, então
+ * uma URL lenta custava 20s + 20s = 40s. `verificarEstado` faz duas batidas em
+ * SÉRIE, logo até 80s numa LP só, contra um maxDuration de 60s.
+ *
+ * Medido: 15 das 151 LPs da Research estouram sempre (as aulas do minicurso de
+ * dividendos, os ebooks de renda fixa e macro, entre outras). Sozinhas elas
+ * derrubavam a rota: 504 em 60,3s, duas vezes seguidas, com só essas 15.
+ *
+ * Retentar timeout nunca fez sentido aqui: a retentativa existe porque
+ * `fetch failed` aparecia em URL que o curl abria no mesmo minuto, ou seja
+ * soluço de REDE. Timeout repetido não é soluço, é servidor lento de verdade,
+ * e insistir só dobra a espera. Soluço de rede continua tendo segunda chance.
+ */
+const TIMEOUT_MS = 6000;
+
+/**
+ * Teto de tempo de UMA página, derivado do timeout real.
+ *
+ * `verificarEstado` faz até duas batidas em SÉRIE (a canônica e a sem barra),
+ * e timeout não retenta mais. A margem cobre DNS e TLS.
+ *
+ * ⚠️ É exportado de propósito: a rota precisa RESERVAR este custo antes de
+ * abrir um lote, e reserva com número solto já quase congelou a rota em zero
+ * (alguém reservaria o pior caso teórico de 80s contra um orçamento de 42s, e
+ * nenhum lote abriria nunca). Reserva e teto têm que sair da mesma fonte.
+ */
+export const CUSTO_MAX_POR_PAGINA_MS = TIMEOUT_MS * 2 + 1000;
 
 /** Host + caminho sem barra final, em minúsculas. É a identidade da página. */
 export function chaveDeUrl(u: string): string | null {
@@ -76,11 +106,15 @@ async function bater(url: string, tentativa = 0): Promise<Batida> {
     return { status: res.status, final: res.url || url, erro: null };
   } catch (e) {
     clearTimeout(t);
+    const nome = (e as Error).name;
     // Uma segunda tentativa porque `fetch failed` apareceu em URLs que o curl
     // abriu sem problema no mesmo minuto: erro de rede em lote não é estado da
     // página, e classificar por ele removeria LP viva.
-    if (tentativa < 1) return bater(url, tentativa + 1);
-    const nome = (e as Error).name;
+    //
+    // ⚠️ MAS NÃO PARA TIMEOUT. Ver o comentário em TIMEOUT_MS: timeout repetido
+    // não é soluço de rede, é servidor lento, e retentar só dobra a espera. Era
+    // essa retentativa que fazia uma LP lenta custar 40s e estourar a função.
+    if (tentativa < 1 && nome !== "AbortError") return bater(url, tentativa + 1);
     return {
       status: null,
       final: null,

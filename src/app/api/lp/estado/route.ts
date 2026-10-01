@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   verificarEstado,
   aptaParaTrafego,
+  CUSTO_MAX_POR_PAGINA_MS,
   type EstadoLP,
   type ResultadoEstado,
 } from "@/lib/lp-estado";
@@ -31,6 +32,11 @@ export const maxDuration = 60;
  */
 
 const TTL_SEG = 60 * 60 * 12; // 12h: o time mexe em redirect no máximo algumas vezes por dia
+/**
+ * TTL curto para o `indeterminado`. Ver o comentário no ponto de gravação:
+ * não cachear NADA custava 40s fixos em toda chamada e derrubava a rota.
+ */
+const TTL_INDETERMINADO_SEG = 10 * 60;
 const ORCAMENTO_MS = 42_000; // margem sob o maxDuration de 60s
 const CONCORRENCIA = 8;
 
@@ -87,34 +93,76 @@ export async function POST(req: NextRequest) {
   // 2. Verifica o que falta, até o orçamento de tempo acabar.
   let pendentes = 0;
   for (let i = 0; i < faltando.length; i += CONCORRENCIA) {
-    if (Date.now() - inicio > ORCAMENTO_MS) {
+    /**
+     * ⚠️ A GUARDA RESERVA O CUSTO DO LOTE QUE VAI COMEÇAR. Olhar só o relógio
+     * passado era o defeito que estourava a função.
+     *
+     * Antes: `if (Date.now() - inicio > ORCAMENTO_MS)`. Um lote que começava em
+     * 41,9s passava na guarda e podia rodar mais 40s, terminando aos 82s contra
+     * um maxDuration de 60s. Resultado medido: 504 em 8 de 8 chamadas com as
+     * 151 páginas da Research, e a tela recebia erro em vez de resposta parcial.
+     *
+     * O custo reservado vem de `CUSTO_MAX_POR_PAGINA_MS`, a MESMA constante que
+     * limita a batida, e o lote é cortado por `Promise.race` nesse mesmo valor.
+     * Reservar um número e deixar o lote correr por outro não protege nada.
+     */
+    if (Date.now() - inicio + CUSTO_MAX_POR_PAGINA_MS > ORCAMENTO_MS) {
       pendentes = faltando.length - i;
       break;
     }
     const lote = faltando.slice(i, i + CONCORRENCIA);
-    const novos = await Promise.all(
-      lote.map((p) =>
-        verificarEstado(p.host, p.path).catch(
-          (e): ResultadoEstado => ({
-            host: p.host,
-            path: p.path,
-            estado: "indeterminado",
-            status: null,
-            destino: null,
-            destinoSemBarra: null,
-            erro: String((e as Error)?.message || e),
-            verificadoEm: Date.now(),
-          })
+    const naoDecidiu = (p: Entrada, motivo: string): ResultadoEstado => ({
+      host: p.host,
+      path: p.path,
+      estado: "indeterminado",
+      status: null,
+      destino: null,
+      destinoSemBarra: null,
+      erro: motivo,
+      verificadoEm: Date.now(),
+    });
+    /**
+     * Teto duro do lote, no MESMO valor que a guarda reservou. Sem isso a
+     * reserva seria só uma intenção: bastaria uma batida se comportar fora do
+     * previsto para o lote passar do que foi reservado e a função estourar.
+     */
+    const novos = await Promise.race([
+      Promise.all(
+        lote.map((p) =>
+          verificarEstado(p.host, p.path).catch((e) =>
+            naoDecidiu(p, String((e as Error)?.message || e))
+          )
         )
-      )
-    );
+      ),
+      new Promise<ResultadoEstado[]>((resolve) =>
+        setTimeout(
+          () => resolve(lote.map((p) => naoDecidiu(p, "lote passou do teto de tempo"))),
+          CUSTO_MAX_POR_PAGINA_MS
+        )
+      ),
+    ]);
     resultados.push(...novos);
-    // Grava só o que foi decidido. `indeterminado` NÃO entra no cache: se foi
-    // falha de rede, cachear por 12h transformaria um soluço em diagnóstico.
+    /**
+     * ⚠️ `indeterminado` AGORA ENTRA NO CACHE, com TTL curto. Não cachear era
+     * a causa raiz do 504.
+     *
+     * A intenção original estava certa: cachear por 12h uma falha de rede
+     * transformaria um soluço em diagnóstico. Mas não cachear NADA tem o preço
+     * oposto, e ele foi medido: 15 das 151 LPs da Research estouram sempre, e
+     * como nunca entravam no cache, TODA chamada pagava os 40s delas de novo,
+     * para sempre. Sozinhas, essas 15 derrubavam a rota em 60s.
+     *
+     * 10 minutos resolve os dois lados: o custo fixo some e um soluço se
+     * corrige sozinho na próxima visita, em vez de ficar meio dia no ar.
+     */
     await Promise.all(
-      novos
-        .filter((r) => r.estado !== "indeterminado")
-        .map((r) => kv.set(chaveKV(r.host, r.path), r, { ex: TTL_SEG }).catch(() => null))
+      novos.map((r) =>
+        kv
+          .set(chaveKV(r.host, r.path), r, {
+            ex: r.estado === "indeterminado" ? TTL_INDETERMINADO_SEG : TTL_SEG,
+          })
+          .catch(() => null)
+      )
     );
   }
 
