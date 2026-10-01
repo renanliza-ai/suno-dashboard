@@ -95,10 +95,27 @@ export default function LandingPagesPage() {
    * LP morta; quem quer fechar número com GA4 ou CRM já abre com tudo.
    */
   const [soNoAr, setSoNoAr] = useState(false);
-  const paginasParaVerificar = useMemo(
-    () => (data?.rows || []).map((r) => ({ host: r.host, path: r.path })),
-    [data]
-  );
+  /**
+   * ⚠️ VERIFICAR 141 LPs DE UMA VEZ TRAVA A TELA.
+   *
+   * Cada verificação é uma requisição HTTP contra o WordPress, que responde
+   * entre 0,6s e 25s (e 125s em caminho frio, ver wp_research_cold_path_524).
+   * Mandar a lista inteira fazia a página não terminar de carregar.
+   *
+   * Com o filtro "Só LPs no ar" DESLIGADO por padrão (01/10/2026), o estado
+   * deixou de ser necessário para montar a lista: ele só pinta o selo de cada
+   * linha. Então basta verificar o que está à vista, mais uma margem para a
+   * próxima página. Quem liga o filtro aí sim precisa de todas, porque o estado
+   * passa a decidir quem fica.
+   */
+  const PASSO = 10;
+  const [visiveis, setVisiveis] = useState(PASSO);
+
+  const paginasParaVerificar = useMemo(() => {
+    const todas = data?.rows || [];
+    if (soNoAr) return todas.map((r) => ({ host: r.host, path: r.path }));
+    return todas.slice(0, visiveis + PASSO).map((r) => ({ host: r.host, path: r.path }));
+  }, [data, soNoAr, visiveis]);
   const { mapa: estadoLP, verificando: verificandoEstado, pendentes: estadoPendentes } =
     useEstadoLP(paginasParaVerificar);
 
@@ -128,8 +145,6 @@ export default function LandingPagesPage() {
   );
   // Tabela carrega 10 linhas e expande por clique. Pedido do Renan: a lista
   // completa empurrava tudo para baixo da dobra.
-  const PASSO = 10;
-  const [visiveis, setVisiveis] = useState(PASSO);
 
   const isMQL = data?.bu.conversionModel === "mql";
   const hasCta = Boolean(data?.bu.ctaEvent);
