@@ -74,6 +74,25 @@ export async function GET(req: NextRequest) {
   const pathContains = (sp.get("pathContains") || "").toLowerCase();
   const limit = Math.min(Number(sp.get("limit") || 200), 1000);
   const includeThankPages = sp.get("includeThankPages") === "true";
+  /**
+   * GUARDA DE IMPLANTAÇÃO da captação fora de LP. Padrão DESLIGADO.
+   *
+   * Não é teimosia: hoje NÃO existe forma de medir esta rota fora de
+   * produção. O token do Google (`BRIEFING_REFRESH_TOKEN`) só está no ambiente
+   * de produção da Vercel e é do tipo `sensitive`, então nem o preview nem o
+   * servidor local conseguem falar com o GA4: os dois respondem
+   * `auth_no_session`.
+   *
+   * Em 01/10/2026 eu subi uma mudança nesta rota sem conseguir medir antes, e
+   * ela derrubou a tabela de 141 linhas para 22. Com o padrão desligado, o
+   * deploy que carrega este código NÃO muda nada do que está na tela: dá para
+   * medir o caminho novo em produção, pelo parâmetro, antes de ligá-lo para
+   * todo mundo.
+   *
+   * ⚠️ Para remover: quando o padrão virar ligado, este parâmetro vira
+   * kill-switch (`?capturaForaDeLP=0`) e o comentário acima deve ser atualizado.
+   */
+  const capturaForaDeLPLigada = sp.get("capturaForaDeLP") === "1";
 
   if (!propertyId) {
     return NextResponse.json({ error: "propertyId required" }, { status: 400 });
@@ -568,19 +587,28 @@ export async function GET(req: NextRequest) {
    * estas linhas participem de tudo que vem depois sem nenhum caso especial:
    * objetivo, métrica primária, alarme de divergência e totais.
    *
-   * Falha desta consulta NÃO derruba a tela: ela devolve lista vazia e a
-   * tabela fica como era antes. É complemento, não dependência.
+   * ⚠️ O try/catch não é decoração. Esta consulta é COMPLEMENTO, e a tabela de
+   * landing page não pode cair por causa dela em nenhuma hipótese: um erro
+   * inesperado aqui deixaria a tela vazia para recuperar leads de calculadora,
+   * que é trocar o essencial pelo acessório. Se falhar, a tela fica como era
+   * antes e o motivo vai declarado no payload.
    */
-  const captura = await captacaoForaDeLP({
-    propertyId,
-    profile,
-    dateRange,
-    events,
-    pathContains,
-    includeThankPages,
-  });
-  if (captura.linhas.length > 0) rows = rows.concat(captura.linhas);
-  const capturaForaDeLP: ResumoCaptacaoForaDeLP | null = captura.resumo;
+  let capturaForaDeLP: ResumoCaptacaoForaDeLP | null = null;
+  let erroDaCaptura: string | null = null;
+  if (capturaForaDeLPLigada) try {
+    const captura = await captacaoForaDeLP({
+      propertyId,
+      profile,
+      dateRange,
+      events,
+      pathContains,
+      includeThankPages,
+    });
+    if (captura.linhas.length > 0) rows = rows.concat(captura.linhas);
+    capturaForaDeLP = captura.resumo;
+  } catch (e) {
+    erroDaCaptura = e instanceof Error ? e.message : "erro desconhecido";
+  }
 
   /**
    * QUEM REALMENTE CHEGOU AO CHECKOUT.
@@ -945,6 +973,12 @@ export async function GET(req: NextRequest) {
        * null quando a B.U. não declara `captureHosts`. Ver lp-linhas.ts.
        */
       capturaForaDeLP,
+      /**
+       * Preenchido só quando a consulta de captação fora de LP falhou. A
+       * tabela de landing page continua correta; o que falta é o complemento.
+       * Fica declarado para a diferença contra o CRM não voltar a ser muda.
+       */
+      erroDaCaptura,
       range: dateRange,
       meta: {
         eventsQueried: events,
