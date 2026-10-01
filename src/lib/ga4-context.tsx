@@ -1319,6 +1319,12 @@ export type LPPerfData = {
     pctAtribuido: number;
     explica: string;
   } | null;
+  /** O que o próprio GA4 declara sobre a qualidade desta resposta. */
+  qualidadeGA4?: {
+    perdaPorCardinalidade: boolean;
+    amostrado: boolean;
+    explica: string;
+  } | null;
   meta?: { eventsQueried: string[]; thankPagesExcluded: boolean; rowsReturnedByGa4: number; truncated: boolean };
   error?: string;
 };

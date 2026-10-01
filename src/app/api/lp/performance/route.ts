@@ -799,6 +799,34 @@ export async function GET(req: NextRequest) {
         }
       : null;
 
+  /**
+   * QUALIDADE DO DADO QUE O PRÓPRIO GA4 DECLARA.
+   *
+   * Três coisas afastam painel e GA4, e nenhuma é erro de leitura:
+   *   1. `(other)`: cardinalidade estourada, parte das linhas vira um balde
+   *   2. amostragem: a resposta foi estimada a partir de uma fração
+   *   3. modelagem por consentimento: a UI do GA4 avisa ("os dados desta
+   *      propriedade estão sendo estimados"), mas a API NÃO expõe sinal disso,
+   *      então aqui ela não pode ser detectada, apenas lembrada
+   *
+   * As duas primeiras vêm medidas da resposta. A terceira entra como ressalva
+   * permanente, porque custou horas de caça a uma diferença de 3% que não tinha
+   * conserto do nosso lado.
+   */
+  const metaSessoes = sessionsRes.data?.metadata;
+  const metaEventos = eventsRes?.data?.metadata;
+  const qualidadeGA4 = {
+    perdaPorCardinalidade: Boolean(
+      metaSessoes?.dataLossFromOtherRow || metaEventos?.dataLossFromOtherRow
+    ),
+    amostrado: Boolean(
+      (metaSessoes?.samplingMetadatas?.length || 0) > 0 ||
+        (metaEventos?.samplingMetadatas?.length || 0) > 0
+    ),
+    explica:
+      "perdaPorCardinalidade=true significa que o GA4 estourou o limite de combinacoes e jogou parte das linhas num balde (other): o total da property fica maior que a soma da tabela. Alem disso, propriedades com Consent Mode ativo tem parte dos numeros MODELADA pelo Google, e a Data API devolve o coletado enquanto a interface mostra o modelado. Por isso painel e GA4 podem divergir alguns por cento sem que nenhum dos dois esteja errado.",
+  };
+
   const totals = {
     landingPages: rows.length,
     sessions: tSessions,
@@ -853,6 +881,7 @@ export async function GET(req: NextRequest) {
       rows,
       totals,
       cobertura,
+      qualidadeGA4,
       range: dateRange,
       meta: {
         eventsQueried: events,

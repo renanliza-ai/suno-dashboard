@@ -154,6 +154,26 @@ type RunReportBody = {
 type GA4ReportResponse = {
   rows?: { dimensionValues?: { value: string }[]; metricValues?: { value: string }[] }[];
   totals?: { metricValues?: { value: string }[] }[];
+  /**
+   * Sinais de qualidade que a Data API devolve e que nunca líamos.
+   *
+   * `dataLossFromOtherRow` é o mais importante: quando true, o GA4 estourou a
+   * cardinalidade e jogou parte das linhas num balde `(other)`. Medido nesta
+   * conta em setembro de 2026, a property da Research teve 3.175.070 sessões
+   * em `(other)`, 72% do mês, e a tela não dizia nada.
+   *
+   * `samplingMetadatas` aparece quando a resposta foi amostrada. Junto com a
+   * modelagem por consentimento (que a UI do GA4 anuncia e a API não expõe),
+   * são as três razões pelas quais painel e GA4 não fecham na quarta casa, e
+   * nenhuma delas é defeito de quem lê.
+   */
+  metadata?: {
+    dataLossFromOtherRow?: boolean;
+    samplingMetadatas?: { samplesReadCount?: string; samplingSpaceSize?: string }[];
+    subjectToThresholding?: boolean;
+    currencyCode?: string;
+    timeZone?: string;
+  };
 };
 
 // GA4 Data API so retorna `totals` quando metricAggregations e pedido. Este

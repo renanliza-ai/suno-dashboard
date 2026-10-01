@@ -82,7 +82,19 @@ export default function LandingPagesPage() {
    * páginas mortas como se ainda fossem alvo de trabalho. Quem responde essa
    * pergunta é o servidor, não o relatório.
    */
-  const [soNoAr, setSoNoAr] = useState(true);
+  /**
+   * ⚠️ DESLIGADO POR PADRÃO desde 01/10/2026, por decisão do Renan.
+   *
+   * Vinha ligado, e escondia LP que redireciona HOJE mas produziu NA JANELA
+   * consultada. A `/cl/arsenal-independencia/` captou 776 pessoas em setembro
+   * (780 no Salesforce) e não aparecia, porque hoje responde 301. Só ela e a
+   * `/cl/aniversario-premium-2026/` somavam mais de 1.500 leads invisíveis.
+   *
+   * O uso mais frequente da tela é relatório, e relatório não pode começar com
+   * dado escondido. Quem quer higiene liga o filtro e continua tendo a lista de
+   * LP morta; quem quer fechar número com GA4 ou CRM já abre com tudo.
+   */
+  const [soNoAr, setSoNoAr] = useState(false);
   const paginasParaVerificar = useMemo(
     () => (data?.rows || []).map((r) => ({ host: r.host, path: r.path })),
     [data]
@@ -552,6 +564,48 @@ export default function LandingPagesPage() {
               </p>
             </div>
           )}
+
+          {/* Por que painel e GA4 não fecham na quarta casa. Fica sempre visível
+              porque a pergunta volta toda vez que alguém compara as duas telas,
+              e a resposta não é "alguém está errado". */}
+          <details className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--muted)]/30 mb-3">
+            <summary className="px-4 py-2.5 text-xs font-semibold cursor-pointer text-[color:var(--muted-foreground)] hover:text-[color:var(--foreground)]">
+              Por que este painel e a tela do GA4 podem divergir alguns por cento
+              {data.qualidadeGA4?.perdaPorCardinalidade && (
+                <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                  cardinalidade estourada nesta janela
+                </span>
+              )}
+              {data.qualidadeGA4?.amostrado && (
+                <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                  resposta amostrada
+                </span>
+              )}
+            </summary>
+            <div className="px-4 pb-3 text-xs text-[color:var(--muted-foreground)] leading-relaxed space-y-2">
+              <p>
+                <b>1. Modelagem por consentimento.</b> Quando o Consent Mode está ativo, o Google
+                estima parte dos números. A interface do GA4 avisa isso no topo (&quot;os dados desta
+                propriedade estão sendo estimados&quot;) e mostra o valor <b>modelado</b>. A API
+                devolve o <b>coletado</b>. Nenhum dos dois está errado, e a API não expõe sinal
+                dessa modelagem, então não dá para reconciliar: é diferença estrutural.
+              </p>
+              <p>
+                <b>2. Cardinalidade.</b> Quanto mais fina a quebra, menos linha o GA4 devolve: o que
+                não cabe vira um balde <code>(other)</code>. Medido nesta conta: o mesmo{" "}
+                <code>generate_lead</code> deu 5.005 sem quebra, 5.141 por host e 3.528 por página.
+                Mesmo evento, mesma janela.
+                {data.qualidadeGA4?.perdaPorCardinalidade && (
+                  <b> O GA4 sinalizou perda por cardinalidade nesta consulta.</b>
+                )}
+              </p>
+              <p>
+                <b>3. Unidade.</b> A coluna Leads conta <b>pessoas</b>, para fechar com o CRM. A tela
+                do GA4 mostra <b>eventos</b> por padrão, e eventos são sempre mais, porque incluem
+                reenvio de formulário. Compare pessoa com pessoa.
+              </p>
+            </div>
+          </details>
 
           {/* LP aposentada HOJE que produziu resultado NO PERÍODO. O filtro de
               higiene não pode apagar história sem dizer o tamanho do que apagou. */}
