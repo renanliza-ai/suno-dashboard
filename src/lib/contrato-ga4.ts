@@ -149,9 +149,26 @@ export function verificarTruncamento(consultas: ConsultaMedida[]): Achado[] {
  * mesmo caminho lendo o mesmo bucket (conversão em dobro), e em 01/10/2026 a
  * tabela passou a incluir hosts de captação enquanto o total ainda contava só
  * host de LP.
+ *
+ * ⚠️⚠️ OS DOIS NÚMEROS TÊM QUE ESTAR EM DISPARO, NUNCA EM PESSOA. Esta regra
+ * custou um falso positivo no ar, em 01/10/2026, na primeira hora de vida do
+ * contrato.
+ *
+ * Eu passei a SOMA DE PESSOAS por página contra as PESSOAS ÚNICAS da property:
+ * 4.708 contra 4.561, e o contrato gritou "103,2%, impossível". Não é
+ * impossível, é o esperado: usuário único NÃO É ADITIVO, e quem captou em duas
+ * páginas conta uma vez em cada linha. O painel chegou a exibir, no MESMO
+ * payload, o bloco de cobertura explicando os 147 duplicados como normal e o
+ * contrato chamando o mesmo fato de defeito.
+ *
+ * Disparo é aditivo, então a comparação fecha: a soma por página só pode ser
+ * MENOR que o total (a quebra perde linha por cardinalidade), nunca maior. Se
+ * for maior, aí sim alguma coisa está contada em dobro.
  */
 export function verificarCobertura(args: {
+  /** Soma dos DISPAROS por linha. Nunca a soma de pessoas. */
   somaDaColuna: number;
+  /** Total de DISPAROS do evento, sem quebra. Nunca pessoas únicas. */
   totalNaProperty: number | null;
   evento: string | null;
 }): Achado[] {

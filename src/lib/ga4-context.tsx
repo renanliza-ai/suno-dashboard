@@ -1375,9 +1375,18 @@ export function useLPPerformance(pathContains: string = "", daysOverride?: numbe
     setMeta({ status: "loading", propertyId: selectedId, propertyName, fetchedAt: null });
     const ctrl = new AbortController();
     const qs = buildDateQS(days, customRange, { propertyId: selectedId, propertyName });
-    // limit explícito: o default 200 da rota escondia mais da metade do
-    // inventário de LP (Research 119 de 226, Status 28 de 74).
-    qs.set("limit", "1000");
+    /**
+     * limit explícito: o default 200 da rota escondia mais da metade do
+     * inventário de LP (Research 119 de 226, Status 28 de 74).
+     *
+     * ⚠️ SUBIU DE 1.000 PARA 25.000 EM 01/10/2026. O contrato de dados acusou
+     * que 1.000 estava cortando: a consulta devolvia exatamente 1.000 linhas
+     * para um teto de 1.000, que é a assinatura de resposta truncada. Como o
+     * GA4 ordena por volume, o que sobrava eram as landing pages maiores e a
+     * cauda sumia sem erro. O Renan viu o sintoma pelo outro lado: LP que
+     * existe e não aparecia na tela.
+     */
+    qs.set("limit", "25000");
     if (pathContains) qs.set("pathContains", pathContains);
     cachedFetch(`/api/lp/performance?${qs.toString()}`, { signal: ctrl.signal })
       .then((r) => r.json())

@@ -770,9 +770,10 @@ export async function GET(req: NextRequest) {
         { nome: "conversão por espaço e peça", linhas: convRes?.data?.rows?.length || 0, limite: 20000 },
         { nome: "sessões por espaço e peça", linhas: campByMedRes.data?.rows?.length || 0, limite: 20000 },
       ]),
+      /** ⚠️ DISPARO contra DISPARO, nunca pessoa. Ver verificarCobertura. */
       ...verificarCobertura({
-        somaDaColuna: somaDeLeads,
-        totalNaProperty: pessoasNoTrafego,
+        somaDaColuna: spaces.reduce((s2, r) => s2 + r.leadEvents, 0),
+        totalNaProperty: disparosNoTrafego,
         evento: eventoDeLead,
       }),
       ...verificarIntegridade({

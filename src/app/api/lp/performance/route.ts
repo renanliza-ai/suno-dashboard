@@ -79,7 +79,33 @@ export async function GET(req: NextRequest) {
   const startDate = sp.get("startDate");
   const endDate = sp.get("endDate");
   const pathContains = (sp.get("pathContains") || "").toLowerCase();
-  const limit = Math.min(Number(sp.get("limit") || 200), 1000);
+  /**
+   * ⚠️ O TETO SUBIU DE 1.000 PARA 25.000 EM 01/10/2026, porque 1.000 estava
+   * CORTANDO.
+   *
+   * O contrato de dados acusou na primeira hora: a consulta de sessão por
+   * landing page devolveu exatamente 1.000 linhas para um limite de 1.000, que
+   * é a assinatura de resposta truncada. O GA4 ordena por volume e corta no
+   * teto, então o que sobrava eram as landing pages MAIORES e a cauda sumia sem
+   * erro nenhum.
+   *
+   * Por que 25.000 e não "estreitar a pergunta", que é o conselho do próprio
+   * contrato: aqui a pergunta JÁ está estreita. O filtro de host cobre só os 3
+   * hosts de landing page, e não existe recorte mais fino sem começar a
+   * esconder LP de propósito, que é exatamente o defeito que o Renan apontou.
+   * Quando o escopo já é o certo, teto baixo não é prudência, é corte cego.
+   *
+   * 25.000 é o teto da API do GA4 por requisição sem paginação. A tabela
+   * continua paginando no cliente, então linha a mais não pesa na tela.
+   *
+   * ⚠️ LIMITE_GA4 é usado nas consultas E na verificação de truncamento do
+   * contrato. Era número solto nos dois lugares, e número solto repetido é
+   * defeito esperando acontecer: bastava alguém subir o teto da consulta e
+   * esquecer o do contrato para a verificação passar a checar um limite que
+   * não existe mais, e o truncamento voltar a ser silencioso.
+   */
+  const LIMITE_GA4 = 25000;
+  const limit = Math.min(Number(sp.get("limit") || 200), LIMITE_GA4);
   const includeThankPages = sp.get("includeThankPages") === "true";
   /**
    * KILL-SWITCH da captação fora de LP: `?capturaForaDeLP=0` desliga.
@@ -263,7 +289,7 @@ export async function GET(req: NextRequest) {
           ],
           metrics: [{ name: "eventCount" }, { name: "totalUsers" }],
           orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
-          limit: 2000,
+          limit: LIMITE_GA4,
           dimensionFilter: eventFilter,
         })
       : Promise.resolve({ data: null, error: null }),
@@ -323,7 +349,7 @@ export async function GET(req: NextRequest) {
       dimensions: [{ name: "hostName" }, { name: "pagePath" }],
       metrics: [{ name: "screenPageViews" }],
       orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }],
-      limit: 3000,
+      limit: LIMITE_GA4,
       dimensionFilter: hostFilter,
     }),
     /**
@@ -340,7 +366,7 @@ export async function GET(req: NextRequest) {
       dimensions: [{ name: "hostName" }, { name: "landingPage" }, { name: "sessionSource" }],
       metrics: [{ name: "sessions" }],
       orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
-      limit: 3000,
+      limit: LIMITE_GA4,
       dimensionFilter: hostFilter,
     }),
     runReport(propertyId, {
@@ -348,7 +374,7 @@ export async function GET(req: NextRequest) {
       dimensions: [{ name: "hostName" }, { name: "landingPage" }, { name: "sessionMedium" }],
       metrics: [{ name: "sessions" }],
       orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
-      limit: 3000,
+      limit: LIMITE_GA4,
       dimensionFilter: hostFilter,
     }),
   ]);
@@ -939,16 +965,26 @@ export async function GET(req: NextRequest) {
     unidadeDeLead: profile.leadEvent ? "pessoas" : "indisponivel",
     assinatura: { linhas: rows.length, sessoes: tSessions, conversao: tLeads },
     achados: [
+      // ⚠️ Os limites vêm de LIMITE_GA4, a MESMA constante que as consultas
+      // usam. Repetir o número aqui já foi defeito: subir o teto da consulta e
+      // esquecer o do contrato faz a verificação checar um limite inexistente.
       ...verificarTruncamento([
         { nome: "sessões por landing page", linhas: sessionsRes.data?.rows?.length || 0, limite: limit },
-        { nome: "eventos por página", linhas: eventsRes?.data?.rows?.length || 0, limite: 2000 },
-        { nome: "pageviews servidos por host", linhas: servedRes.data?.rows?.length || 0, limite: 3000 },
-        { nome: "origem por landing page", linhas: sourceRes.data?.rows?.length || 0, limite: 3000 },
-        { nome: "meio por landing page", linhas: mediumRes.data?.rows?.length || 0, limite: 3000 },
+        { nome: "eventos por página", linhas: eventsRes?.data?.rows?.length || 0, limite: LIMITE_GA4 },
+        { nome: "pageviews servidos por host", linhas: servedRes.data?.rows?.length || 0, limite: LIMITE_GA4 },
+        { nome: "origem por landing page", linhas: sourceRes.data?.rows?.length || 0, limite: LIMITE_GA4 },
+        { nome: "meio por landing page", linhas: mediumRes.data?.rows?.length || 0, limite: LIMITE_GA4 },
       ]),
+      /**
+       * ⚠️ DISPARO contra DISPARO. Ver o comentário em verificarCobertura: na
+       * primeira versão eu comparei soma de PESSOAS com PESSOAS ÚNICAS e o
+       * contrato acusou 103,2% como impossível, quando é o normal (usuário
+       * único não é aditivo). O painel exibiu o falso positivo ao lado do bloco
+       * de cobertura que explicava o mesmo número como esperado.
+       */
       ...verificarCobertura({
-        somaDaColuna: tLeads,
-        totalNaProperty: totalLeadsPessoasProperty,
+        somaDaColuna: sum((r) => r.leadEvents),
+        totalNaProperty: totalLeadsProperty,
         evento: leadEvt || null,
       }),
       ...verificarTaxaImpossivel(
