@@ -47,8 +47,17 @@ export async function GET(req: NextRequest) {
    * `pagePath` respondem "de ONDE dispara", que e a pergunta quando o time
    * nao reconhece um evento que aparece no relatorio.
    */
+  /**
+   * `unifiedPagePathScreen` é a dimensão que a UI do GA4 chama de "Caminho da
+   * página e classe da tela", e é por ela que o time confere na tela do Google.
+   * `pagePath` cobre só web. Manter as duas disponíveis: comparar com o GA4
+   * exige usar a MESMA régua, e usar régua diferente foi o que gerou horas de
+   * "o painel não bate" quando os dois números estavam certos.
+   */
   const quebraRaw = req.nextUrl.searchParams.get("quebra") || "date";
-  const quebra = ["date", "hostName", "pagePath"].includes(quebraRaw) ? quebraRaw : "date";
+  const quebra = ["date", "hostName", "pagePath", "unifiedPagePathScreen"].includes(quebraRaw)
+    ? quebraRaw
+    : "date";
 
   if (!propertyId) return NextResponse.json({ error: "propertyId required" }, { status: 400 });
   if (!startDate || !endDate) {
@@ -116,14 +125,31 @@ export async function GET(req: NextRequest) {
   const porDia = new Map<string, Map<string, number>>();
   const nomesEncontrados = new Set<string>();
   let totalGeral = 0;
+  /**
+   * ⚠️ USUÁRIO NÃO É EVENTO, E ESSA DISTINÇÃO É O QUE FECHA COM O CRM.
+   *
+   * Medido em 30/09/2026 na `/cl/arsenal-independencia/`, setembro:
+   *   eventos (eventCount) .... 819
+   *   usuários (totalUsers) ... 777
+   *   leads no Salesforce ..... 780
+   *
+   * O CRM conta PESSOA, o GA4 conta DISPARO. Quem envia o formulário duas vezes
+   * gera dois eventos e um lead. Comparar eventCount com CRM produz uma
+   * diferença que parece perda de dado e é só unidade diferente.
+   */
+  let totalUsuarios = 0;
+  const usuariosPorChave = new Map<string, number>();
 
   for (const r of linhas) {
     const dia = r.dimensionValues?.[0]?.value || "";
     const evento = r.dimensionValues?.[1]?.value || "";
     if (!casa(evento)) continue;
     const n = Number(r.metricValues?.[0]?.value || 0);
+    const u = Number(r.metricValues?.[1]?.value || 0);
     nomesEncontrados.add(evento);
     totalGeral += n;
+    totalUsuarios += u;
+    usuariosPorChave.set(dia, (usuariosPorChave.get(dia) || 0) + u);
     const m = porDia.get(dia) || new Map<string, number>();
     m.set(evento, (m.get(evento) || 0) + n);
     porDia.set(dia, m);
@@ -140,7 +166,7 @@ export async function GET(req: NextRequest) {
       valores[nome] = v;
       soma += v;
     }
-    return { data: quebra === "date" ? formatarData(d) : d, dataISO: d, ...valores, total: soma };
+    return { data: quebra === "date" ? formatarData(d) : d, dataISO: d, ...valores, total: soma, usuarios: usuariosPorChave.get(d) ?? null };
   });
 
   /**
@@ -198,6 +224,8 @@ export async function GET(req: NextRequest) {
     porEvento,
     serie,
     totalGeral,
+    totalUsuarios,
+    unidade: "totalGeral conta EVENTOS (disparos). totalUsuarios conta PESSOAS. Para conferir com CRM use usuarios, porque o CRM deduplica e o GA4 nao.",
     /**
      * O aviso é obrigatório na tela e em qualquer relato: sem ele, uma property
      * em migração de tagueamento entrega número pela metade ou dobrado, e os
