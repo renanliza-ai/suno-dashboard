@@ -1314,6 +1314,10 @@ export type LPPerfData = {
   cobertura?: {
     evento: string;
     totalNaProperty: number;
+    /** Pessoas únicas. A soma da coluna da tabela dá mais, e não é erro. */
+    pessoasNaProperty: number | null;
+    somaDaColuna: number;
+    duplicadosEntrePaginas: number | null;
     atribuidoAPaginas: number;
     naoAtribuido: number;
     pctAtribuido: number;

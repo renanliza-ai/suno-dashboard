@@ -239,6 +239,14 @@ export default function LandingPagesPage() {
    * topo fala das mesmas 80. A regra vale para qualquer filtro futuro: entrou na
    * lista, entra no agregado; saiu da lista, sai do agregado.
    */
+  /**
+   * Nenhum filtro aplicado: a tabela mostra o conjunto inteiro, então o total
+   * da property é comparável e dá para usar o número deduplicado. Com filtro,
+   * só resta a soma das linhas, que repete quem captou em mais de uma página.
+   */
+  const semFiltroAtivo =
+    !q.trim() && objFilter === "todos" && !soNoAr && assetModo === "todas";
+
   const totaisVisiveis = useMemo(() => {
     const n = (v: number | null | undefined) => (typeof v === "number" ? v : 0);
     const sessions = rows.reduce((s, r) => s + n(r.sessions), 0);
@@ -454,11 +462,25 @@ export default function LandingPagesPage() {
               />
               <Kpi
                 label="Leads (pessoas)"
-                value={fmt(totaisVisiveis.leads)}
+                /**
+                 * ⚠️ SEM FILTRO, mostra PESSOAS ÚNICAS da property, não a soma
+                 * da coluna. Usuário único não é aditivo: quem capta em duas
+                 * páginas conta em cada linha e uma vez só no total. Medido em
+                 * set/26: a soma das linhas dá 4.646 e as pessoas são 4.386.
+                 *
+                 * Com filtro ativo não há como deduplicar (a API só devolve o
+                 * total do conjunto inteiro), então aí mostra a soma e o rótulo
+                 * avisa que é soma.
+                 */
+                value={
+                  semFiltroAtivo && data.cobertura?.pessoasNaProperty != null
+                    ? fmt(data.cobertura.pessoasNaProperty)
+                    : fmt(totaisVisiveis.leads)
+                }
                 sub={
-                  totaisVisiveis.leadEvents > totaisVisiveis.leads
-                    ? `${fmt(totaisVisiveis.leadEvents)} disparos · ${LEAD_SOURCE_LABEL[data.rows[0]?.leadsSource || "indisponivel"]}`
-                    : LEAD_SOURCE_LABEL[data.rows[0]?.leadsSource || "indisponivel"]
+                  semFiltroAtivo && data.cobertura?.pessoasNaProperty != null
+                    ? `${fmt(totaisVisiveis.leadEvents)} disparos · pessoas únicas`
+                    : `soma das ${rows.length} LPs filtradas · pode repetir pessoa`
                 }
               />
               {isMQL ? (
@@ -670,6 +692,16 @@ export default function LandingPagesPage() {
                     atribuição por página alcança {fmt(data.cobertura.atribuidoAPaginas)} (
                     {data.cobertura.pctAtribuido}%)
                   </p>
+                  {data.cobertura.duplicadosEntrePaginas != null &&
+                    data.cobertura.duplicadosEntrePaginas > 0 && (
+                      <p className="text-xs text-sky-900 leading-relaxed mb-1.5 font-semibold">
+                        Somar a coluna Leads da tabela dá {fmt(data.cobertura.somaDaColuna)}, mas as
+                        pessoas únicas são {fmt(data.cobertura.pessoasNaProperty || 0)}. Os{" "}
+                        {fmt(data.cobertura.duplicadosEntrePaginas)} de diferença são gente que
+                        captou em mais de uma página: conta uma vez por linha e uma vez só no total.
+                        Usuário único não é aditivo, então não some a coluna para comparar com o CRM.
+                      </p>
+                    )}
                   <p className="text-xs text-sky-900/80 leading-relaxed">
                     Os {fmt(data.cobertura.naoAtribuido)} restantes não sumiram e não são erro de
                     contagem: o GA4 devolve menos evento quanto mais fina a quebra, e saber QUAL

@@ -54,6 +54,24 @@ export type BUProfile = {
   label: string;
   /** Hosts que servem landing page. Filtro obrigatório: separa LP de portal e de área logada. */
   lpHosts: string[];
+  /**
+   * ⚠️ HOSTS QUE CAPTAM LEAD SEM SEREM LANDING PAGE. Criado em 01/10/2026.
+   *
+   * A tela só olhava `lpHosts`, e com isso perdia captação legítima. Medido no
+   * CSV do GA4 de setembro de 2026 na Suno Research: `www.suno.com.br` respondeu
+   * por 624 `generate_lead`, e a `/ferramentas/calculadora-de-patrimonio-ideal/`
+   * sozinha fez 344 leads, o que a coloca como a QUINTA maior captadora do mês,
+   * à frente de quase toda a lista de LPs.
+   *
+   * Esses leads chegam ao Salesforce normalmente. Então o painel mostrava 4.165
+   * contra 4.646 do GA4 e do CRM, e a diferença de 481 não era erro de
+   * contagem: era escopo. Calculadora não é landing page, mas capta, e quem
+   * pergunta "quantos leads eu fiz" quer os dois.
+   *
+   * Página destes hosts só entra na tabela SE tiver conversão. Sem isso, a lista
+   * encheria com as milhares de páginas de notícia do portal.
+   */
+  captureHosts?: string[];
   conversionModel: ConversionModel;
   /** Evento de lead, quando existe. */
   leadEvent: string | null;
@@ -255,6 +273,8 @@ const PROFILES: Record<Exclude<BUKey, "desconhecida">, BUProfile> = {
     key: "research",
     label: "Suno Research",
     lpHosts: ["lp.suno.com.br", "lp2.suno.com.br", "lps.suno.com.br"],
+    // O portal capta por calculadora e ferramenta: 624 generate_lead em set/26.
+    captureHosts: ["www.suno.com.br"],
     conversionModel: "captacao_venda",
     leadEvent: "generate_lead",
     leadDivisor: 1,

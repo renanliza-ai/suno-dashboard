@@ -183,10 +183,17 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  /**
+   * Hosts consultados = landing pages + hosts que captam sem ser LP.
+   * Ver o comentário de `captureHosts` em bu.ts: sem isso a tela perdia 481
+   * leads que o Salesforce recebeu, entre eles uma calculadora que sozinha fez
+   * 344 e seria a quinta maior captadora do mês.
+   */
+  const hostsConsultados = [...profile.lpHosts, ...(profile.captureHosts || [])];
   const hostFilter = {
     filter: {
       fieldName: "hostName",
-      inListFilter: { values: profile.lpHosts, caseSensitive: false },
+      inListFilter: { values: hostsConsultados, caseSensitive: false },
     },
   };
 
@@ -285,7 +292,7 @@ export async function GET(req: NextRequest) {
       ? runReport(propertyId, {
           dateRanges: [dateRange],
           dimensions: [{ name: "eventName" }],
-          metrics: [{ name: "eventCount" }],
+          metrics: [{ name: "eventCount" }, { name: "totalUsers" }],
           limit: 100,
           dimensionFilter: eventFilter,
         })
@@ -463,7 +470,7 @@ export async function GET(req: NextRequest) {
     }));
   };
 
-  const rows: LPRow[] = [];
+  let rows: LPRow[] = [];
   for (const r of sessionsRes.data?.rows || []) {
     const host = r.dimensionValues?.[0]?.value || "(sem host)";
     if (isJunkHost(host)) continue;
@@ -705,6 +712,27 @@ export async function GET(req: NextRequest) {
    * Roda AQUI, depois do begin_checkout, porque o `/ao/` só é captação quando
    * tem formulário, e isso se desambigua pelo dado.
    */
+  /**
+   * ⚠️ GUARDA DO PORTAL. Página de `captureHosts` só fica se CONVERTEU.
+   *
+   * `www.suno.com.br` entrou na consulta para não perder a captação por
+   * calculadora e ferramenta (481 leads que o Salesforce recebia e a tela não
+   * mostrava). Mas o portal tem milhares de páginas de notícia, e trazê-las
+   * todas afogaria a lista e inflaria o denominador de qualquer taxa.
+   *
+   * Então: landing page entra sempre, porque existe para converter e conversão
+   * zero nela é informação. Página de portal entra só quando captou, porque aí
+   * ela está cumprindo papel de captação e pertence a esta tela.
+   */
+  const ehHostDeCaptura = (host: string) =>
+    (profile.captureHosts || []).some((h) => h.toLowerCase() === host.toLowerCase());
+  const antesDaGuarda = rows.length;
+  rows = rows.filter((r) => {
+    if (!ehHostDeCaptura(r.host)) return true;
+    return (r.leads || 0) > 0 || (r.qualified || 0) > 0 || (r.checkoutStarts || 0) > 0;
+  });
+  const descartadasDoPortal = antesDaGuarda - rows.length;
+
   for (const row of rows) {
     const { objective, inferredFrom } = resolveObjective(row.path, {
       leads: row.leads,
@@ -776,21 +804,53 @@ export async function GET(req: NextRequest) {
    */
   type LinhaEv = { dimensionValues?: { value?: string }[]; metricValues?: { value?: string }[] };
   const totalPorEvento: Record<string, number> = {};
+  /**
+   * ⚠️ USUÁRIO ÚNICO NÃO É ADITIVO, E EU SOMEI. Corrigido em 01/10/2026.
+   *
+   * Quem preenche formulário em duas páginas conta uma vez em CADA linha e uma
+   * vez só no TOTAL. Somar a coluna de usuários da tabela infla o resultado.
+   *
+   * Medido no CSV do GA4 de setembro: a soma das 71 linhas dá 4.646 usuários,
+   * mas o total real da property é 4.386. Os 260 de diferença são pessoas que
+   * captaram em mais de uma página.
+   *
+   * Por isso o total de leads NÃO pode sair de `sum(rows)`: tem que vir desta
+   * consulta, sem quebra nenhuma, que é a única que deduplica de verdade.
+   */
+  const totalUsuariosPorEvento: Record<string, number> = {};
   for (const r of ((totalEventosRes?.data?.rows || []) as LinhaEv[])) {
     const nome = r.dimensionValues?.[0]?.value || "";
-    if (nome) totalPorEvento[nome] = Number(r.metricValues?.[0]?.value || 0);
+    if (!nome) continue;
+    totalPorEvento[nome] = Number(r.metricValues?.[0]?.value || 0);
+    totalUsuariosPorEvento[nome] = Number(r.metricValues?.[1]?.value || 0);
   }
   const leadEvt = profile.leadEvent || "";
   const totalLeadsProperty = leadEvt ? totalPorEvento[leadEvt] ?? null : null;
+  /** Pessoas únicas de verdade. É este o número que fecha com o CRM. */
+  const totalLeadsPessoasProperty = leadEvt ? totalUsuariosPorEvento[leadEvt] ?? null : null;
   const cobertura =
     totalLeadsProperty && totalLeadsProperty > 0
       ? {
           evento: leadEvt,
           totalNaProperty: totalLeadsProperty,
+          /**
+           * PESSOAS ÚNICAS da property. A soma da coluna da tabela dá MAIS que
+           * isto, e não é erro: é gente que captou em mais de uma página sendo
+           * contada uma vez por linha. Este é o número para comparar com o CRM.
+           */
+          pessoasNaProperty: totalLeadsPessoasProperty,
+          somaDaColuna: tLeads,
+          duplicadosEntrePaginas:
+            totalLeadsPessoasProperty !== null
+              ? Math.max(0, tLeads - totalLeadsPessoasProperty)
+              : null,
           atribuidoAPaginas: tLeads,
           naoAtribuido: Math.max(0, totalLeadsProperty - tLeads),
           pctAtribuido: Number(((tLeads / totalLeadsProperty) * 100).toFixed(1)),
           explica:
+            (totalLeadsPessoasProperty !== null && tLeads > totalLeadsPessoasProperty
+              ? `ATENCAO A UNIDADE: somar a coluna de leads da tabela da ${tLeads.toLocaleString("pt-BR")}, mas as PESSOAS UNICAS da property sao ${totalLeadsPessoasProperty.toLocaleString("pt-BR")}. A diferenca de ${(tLeads - totalLeadsPessoasProperty).toLocaleString("pt-BR")} e gente que captou em MAIS DE UMA pagina: conta uma vez por linha e uma vez so no total. Usuario unico nao e aditivo. Para comparar com o CRM use ${totalLeadsPessoasProperty.toLocaleString("pt-BR")}, nunca a soma da coluna. `
+              : "") +
             `O GA4 registrou ${totalLeadsProperty.toLocaleString("pt-BR")} eventos de ${leadEvt} nesta janela. ` +
             `A tabela consegue atribuir ${tLeads.toLocaleString("pt-BR")} a uma landing page especifica. ` +
             `A diferenca some na quebra por pagina: quanto mais fina a dimensao, menos o GA4 devolve, por cardinalidade. ` +
@@ -882,6 +942,7 @@ export async function GET(req: NextRequest) {
       totals,
       cobertura,
       qualidadeGA4,
+      descartadasDoPortal,
       range: dateRange,
       meta: {
         eventsQueried: events,
