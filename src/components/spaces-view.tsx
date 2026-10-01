@@ -6,6 +6,7 @@ import { useGA4, useComunicacaoSpaces, type SpaceRow } from "@/lib/ga4-context";
 import { DataStatus, PeriodBadge, SkeletonBlock, DataErrorCard } from "@/components/data-status";
 import { CollapsibleNote, ShowMore, BotaoExportar, baixarCsv } from "@/components/ui-collapse";
 import { avaliarTrafego, chaveDaPeca } from "@/lib/trafego-suspeito";
+import { SeloContrato } from "@/components/selo-contrato";
 
 /**
  * Visão compartilhada das abas Banners e Pop-ups.
@@ -293,7 +294,14 @@ export function SpacesView({
               sub={data.totals.pecas ? `${nf.format(data.totals.pecas)} peças` : undefined}
             />
             <Kpi label="Cliques" value={fmt(data.totals.sessions)} sub="entraram clicando" />
-            <Kpi label="Leads" value={fmt(data.totals.leads)} sub="generate_lead" accent />
+            {/* PESSOAS desde 01/10/2026, a mesma unidade da aba de Landing
+                Pages e a única que fecha com o Salesforce. */}
+            <Kpi
+              label="Leads"
+              value={fmt(data.totals.leads)}
+              sub={`pessoas · ${data.eventos?.leads || "generate_lead"}`}
+              accent
+            />
             {temConta && (
               <Kpi
                 label="Conta criada"
@@ -312,6 +320,32 @@ export function SpacesView({
             )}
             {hasPurchase && <Kpi label="Compras" value={fmt(data.totals.purchases)} sub="fim do funil" />}
           </div>
+
+          {/* Contrato de dados: primeiro de todos os avisos. Quando reprova, os
+              números abaixo podem estar incompletos, e aí nenhum outro aviso
+              deveria ser lido antes dele. */}
+          <SeloContrato contrato={data.contrato} />
+
+          {/* Cobertura da atribuição por peça. Mesma declaração que a aba de
+              Landing Pages passou a fazer: a tabela mostra o que deu para
+              atribuir a uma peça, e agora diz de quanto está falando em vez de
+              deixar quem compara com o CRM achar que há defeito de contagem. */}
+          {data.cobertura && (data.cobertura.pctAtribuido ?? 100) < 98 && (
+            <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 mb-3">
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={18} className="text-sky-600 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-sky-900 text-sm mb-1">
+                    No tráfego de banner e pop-up o GA4 conta{" "}
+                    {fmt(data.cobertura.disparosNoTrafego)} {data.cobertura.evento} nesta janela,
+                    e a quebra por peça alcança {fmt(data.cobertura.somaDaColuna)}
+                    {data.cobertura.pctAtribuido !== null && <> ({data.cobertura.pctAtribuido}%)</>}
+                  </p>
+                  <p className="text-xs text-sky-900 leading-relaxed">{data.cobertura.explica}</p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Tráfego inválido: vem ANTES da integridade porque, quando aparece,
               é o fato mais importante da tela. Em 18/09/2026 duas peças
@@ -508,8 +542,20 @@ export function SpacesView({
                             {fmt(r.sessions)}
                           </td>
                           <td className="px-3 py-2.5 text-right tabular-nums">{pct(r.engagementRate)}</td>
+                          {/* Pessoas em cima (fecha com o CRM), disparos
+                              embaixo. A razão entre os dois é reenvio de
+                              formulário, que é sinal de fricção. Igual à aba
+                              de Landing Pages. */}
                           <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-emerald-700">
                             {fmt(r.leads)}
+                            {typeof r.leadEvents === "number" && r.leadEvents > r.leads && (
+                              <span
+                                className="block text-[10px] font-normal text-[color:var(--muted-foreground)]"
+                                title={`${fmt(r.leadEvents)} disparos do evento para ${fmt(r.leads)} pessoas: ${fmt(r.leadEvents - r.leads)} reenvio(s) de formulário`}
+                              >
+                                {fmt(r.leadEvents)} disparos
+                              </span>
+                            )}
                           </td>
                           {temConta && (
                             <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-sky-700">

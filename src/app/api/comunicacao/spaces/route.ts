@@ -8,6 +8,13 @@ import {
   type BUProfile,
   type SpaceKind,
 } from "@/lib/bu";
+import {
+  montarContrato,
+  verificarBloqueio,
+  verificarCobertura,
+  verificarIntegridade,
+  verificarTruncamento,
+} from "@/lib/contrato-ga4";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -78,10 +85,22 @@ type SpaceRow = {
   sessions: number;
   engagedSessions: number;
   engagementRate: number | null;
+  /**
+   * PESSOAS que converteram nesta peça, não disparos. Mudou em 01/10/2026
+   * para alinhar com a aba de Landing Pages: era a última tela do painel que
+   * respondia em unidade diferente, e por isso não fechava com o Salesforce.
+   * Exceção declarada: na Consultoria continua em disparo, porque lá o lead é
+   * a SOMA de dois eventos e somar pessoa dos dois contaria em dobro quem
+   * disparou os dois.
+   */
   leads: number;
+  /** O disparo. `leadEvents > leads` significa reenvio de formulário. */
+  leadEvents: number;
   leadsSource: string;
-  /** Conta criada: `lead_create_account`. null quando a B.U. não tem o evento. */
+  /** Conta criada: `lead_create_account`, em PESSOAS. null quando a B.U. não tem o evento. */
   accounts: number | null;
+  /** Os disparos de conta criada, ao lado das pessoas. */
+  accountEvents: number | null;
   /**
    * Chegada ao checkout (`begin_checkout`) atribuída a esta peça.
    *
@@ -234,7 +253,16 @@ export async function GET(req: NextRequest) {
    */
   const wantsCreatives = profile.key === "research" || profile.key === "asset";
 
-  const [medRes, convRes, viewRes, clickRes, creativeRes, promoByMedRes, campByMedRes] = await Promise.all([
+  const [
+    medRes,
+    convRes,
+    viewRes,
+    clickRes,
+    creativeRes,
+    promoByMedRes,
+    campByMedRes,
+    totalPorEventoRes,
+  ] = await Promise.all([
     // 1. Sessões por medium. É o clique: a sessão entrou por aquele espaço.
     //    Fica como TOTAL DE CONTROLE do espaço: a soma das peças tem que bater
     //    com ele, e a diferença vai declarada no meta.
@@ -257,7 +285,23 @@ export async function GET(req: NextRequest) {
             { name: "sessionCampaignName" },
             { name: "eventName" },
           ],
-          metrics: [{ name: "eventCount" }],
+          /**
+           * ⚠️ `totalUsers` junto do `eventCount` desde 01/10/2026, e a ordem
+           * importa: a coluna da tela passa a mostrar PESSOA e o disparo fica
+           * ao lado.
+           *
+           * Até aqui esta aba contava disparo enquanto a de Landing Pages
+           * contava pessoa, ou seja, duas telas do mesmo painel respondiam
+           * números diferentes para a mesma pergunta e nenhuma fechava com o
+           * Salesforce. Medido na /cl/arsenal-independencia em set/2026: 819
+           * disparos, 777 pessoas, 780 leads no CRM.
+           *
+           * ⚠️ Usuário único NÃO É ADITIVO: somar a coluna dá mais que as
+           * pessoas reais, porque quem converteu em duas peças conta uma vez em
+           * cada linha. Por isso existe a consulta de total sem quebra abaixo,
+           * e a cobertura declara a diferença.
+           */
+          metrics: [{ name: "eventCount" }, { name: "totalUsers" }],
           orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
           limit: 20000,
           dimensionFilter: {
@@ -341,6 +385,38 @@ export async function GET(req: NextRequest) {
       limit: 20000,
       dimensionFilter: medFiltro,
     }),
+    /**
+     * TOTAL POR EVENTO, SEM QUEBRA NENHUMA. Adicionado em 01/10/2026.
+     *
+     * Mesma lição que a aba de Landing Pages aprendeu em 30/09: quanto mais
+     * fina a quebra, menos o GA4 devolve, por cardinalidade. A tabela aqui
+     * quebra por espaço × peça × evento, então ela herda essa perda, e o total
+     * dela sempre foi "o que deu para atribuir", não "o que aconteceu".
+     *
+     * Isso nunca esteve errado, mas estava MUDO, e mudo é pior: quem compara
+     * com o GA4 ou com o CRM conclui que o painel tem defeito de contagem.
+     *
+     * Esta consulta não tem dimensão de espaço nem de peça, só o nome do
+     * evento, então não há cardinalidade para estourar. O filtro de medium
+     * continua, porque o universo desta aba é o tráfego que entrou por banner
+     * e pop-up, não a property inteira.
+     */
+    convEvents.length > 0
+      ? runReport(propertyId, {
+          dateRanges: [dateRange],
+          dimensions: [{ name: "eventName" }],
+          metrics: [{ name: "eventCount" }, { name: "totalUsers" }],
+          limit: 100,
+          dimensionFilter: {
+            andGroup: {
+              expressions: [
+                { filter: { fieldName: "eventName", inListFilter: { values: convEvents } } },
+                medFiltro,
+              ],
+            },
+          },
+        })
+      : Promise.resolve({ data: null, error: null }),
   ]);
 
   if (medRes.error) {
@@ -373,17 +449,43 @@ export async function GET(req: NextRequest) {
     return { label: v, named: true };
   };
 
-  // Conversão por espaço × peça × evento.
+  /**
+   * Conversão por espaço × peça × evento, em DUAS unidades.
+   *
+   * `convByPeca` guarda o DISPARO e `usersByPeca` guarda a PESSOA. As duas
+   * existem porque respondem perguntas diferentes: pessoa é o que fecha com o
+   * Salesforce e é o que o negócio pergunta ("quanta gente esse banner me
+   * trouxe"); disparo dividido por pessoa é reenvio de formulário, que é sinal
+   * de fricção.
+   *
+   * ⚠️ Somar `usersByPeca` entre linhas NÃO dá o total de pessoas: quem
+   * converteu em duas peças conta uma vez em cada. É por isso que existe
+   * `totalPorEventoRes`, sem quebra, e a cobertura declara a diferença.
+   */
   const convByPeca = new Map<string, Record<string, number>>();
+  const usersByPeca = new Map<string, Record<string, number>>();
   for (const r of convRes.data?.rows || []) {
     const med = normalizeSpace(r.dimensionValues?.[0]?.value || "");
     const { label } = rotuloPeca(r.dimensionValues?.[1]?.value || "");
     const ev = r.dimensionValues?.[2]?.value || "";
     const n = Number(r.metricValues?.[0]?.value || 0);
+    const u = Number(r.metricValues?.[1]?.value || 0);
     const k = chave(med, label);
     const b = convByPeca.get(k) || {};
     b[ev] = (b[ev] || 0) + n;
     convByPeca.set(k, b);
+    const bu2 = usersByPeca.get(k) || {};
+    bu2[ev] = (bu2[ev] || 0) + u;
+    usersByPeca.set(k, bu2);
+  }
+
+  /** Total por evento sem quebra: o denominador honesto da cobertura. */
+  const totalPorEvento: Record<string, number> = {};
+  const pessoasPorEvento: Record<string, number> = {};
+  for (const r of totalPorEventoRes?.data?.rows || []) {
+    const ev = r.dimensionValues?.[0]?.value || "";
+    totalPorEvento[ev] = Number(r.metricValues?.[0]?.value || 0);
+    pessoasPorEvento[ev] = Number(r.metricValues?.[1]?.value || 0);
   }
 
   /**
@@ -467,6 +569,7 @@ export async function GET(req: NextRequest) {
   const spaces: SpaceRow[] = Array.from(pecas.values())
     .map((v) => {
       const bucket = convByPeca.get(chave(v.space, v.label)) || {};
+      const pessoas = usersByPeca.get(chave(v.space, v.label)) || {};
       const conv = computeLPConversion(profile, {
         sessions: v.sessions,
         leadEventCount: profile.leadEvent ? bucket[profile.leadEvent] || 0 : 0,
@@ -485,9 +588,33 @@ export async function GET(req: NextRequest) {
         engagedSessions: v.engaged,
         engagementRate:
           v.sessions > 0 ? Number(((v.engaged / v.sessions) * 100).toFixed(1)) : null,
-        leads: conv.leads,
+        /**
+         * PESSOAS, não disparos. É a unidade que fecha com o Salesforce, a
+         * mesma que a aba de Landing Pages passou a usar em 30/09/2026.
+         *
+         * Na Consultoria o lead vem da soma dos dois eventos de MQL, e somar
+         * PESSOA de dois eventos contaria duas vezes quem disparou os dois.
+         * Como lá o `generate_lead` está duplicado e a contagem já é o par
+         * qualificado+desqualificado, ali a unidade continua sendo o disparo, e
+         * `unidadeDeLead` declara isso em vez de fingir.
+         */
+        leads: profile.mqlEvents
+          ? conv.leads
+          : profile.leadEvent
+            ? pessoas[profile.leadEvent] || 0
+            : conv.leads,
+        /** O disparo. leadEvents > leads significa reenvio de formulário. */
+        leadEvents: conv.leads,
         leadsSource: conv.leadsSource,
-        accounts: accountEvent ? bucket[accountEvent] || 0 : null,
+        /** Conta criada é fato de PESSOA: uma conta por gente, não por clique. */
+        accounts: accountEvent ? pessoas[accountEvent] || 0 : null,
+        accountEvents: accountEvent ? bucket[accountEvent] || 0 : null,
+        /**
+         * Checkout e compra continuam em EVENTO de propósito: são ocorrências,
+         * não pessoas. A mesma pessoa abre o checkout mais de uma vez, e duas
+         * compras da mesma pessoa são duas compras. É o mesmo critério da aba
+         * de Landing Pages.
+         */
         checkoutStarts: hasPurchase ? bucket["begin_checkout"] || 0 : null,
         ctaClicksAll: profile.ctaEvent ? bucket[profile.ctaEvent] || 0 : null,
         purchases: hasPurchase ? bucket["purchase"] || 0 : null,
@@ -588,6 +715,76 @@ export async function GET(req: NextRequest) {
     };
   }
 
+  /**
+   * COBERTURA DA ATRIBUIÇÃO POR PEÇA. Mesma ideia da aba de Landing Pages.
+   *
+   * A tabela quebra por espaço × peça × evento, e quanto mais fina a quebra
+   * menos o GA4 devolve. Então o total da tabela sempre foi "o que deu para
+   * atribuir a uma peça", não "o que aconteceu no tráfego de banner". Declarar
+   * isso é o que separa "o painel tem um defeito de contagem" de "o painel sabe
+   * de quanto está falando".
+   */
+  const somaDeLeads = spaces.reduce((s2, r) => s2 + r.leads, 0);
+  const eventoDeLead = profile.mqlEvents ? null : profile.leadEvent || null;
+  const pessoasNoTrafego = eventoDeLead ? pessoasPorEvento[eventoDeLead] ?? null : null;
+  const disparosNoTrafego = eventoDeLead ? totalPorEvento[eventoDeLead] ?? null : null;
+
+  const cobertura =
+    eventoDeLead && disparosNoTrafego
+      ? {
+          evento: eventoDeLead,
+          /** Disparos em TODO o tráfego de banner/pop-up, sem quebra por peça. */
+          disparosNoTrafego,
+          /** Pessoas únicas no mesmo recorte. É este o número para o CRM. */
+          pessoasNoTrafego,
+          somaDaColuna: somaDeLeads,
+          duplicadosEntrePecas:
+            pessoasNoTrafego !== null ? Math.max(0, somaDeLeads - pessoasNoTrafego) : null,
+          pctAtribuido:
+            pessoasNoTrafego && pessoasNoTrafego > 0
+              ? Number(((somaDeLeads / pessoasNoTrafego) * 100).toFixed(1))
+              : null,
+          explica:
+            (pessoasNoTrafego !== null && somaDeLeads > pessoasNoTrafego
+              ? `ATENÇÃO À UNIDADE: somar a coluna de leads dá ${somaDeLeads.toLocaleString("pt-BR")}, mas as PESSOAS ÚNICAS que entraram por banner ou pop-up e converteram são ${pessoasNoTrafego.toLocaleString("pt-BR")}. A diferença é gente que converteu em MAIS DE UMA peça: conta uma vez por linha e uma vez só no total. Usuário único não é aditivo. Para comparar com o CRM use o número de pessoas, nunca a soma da coluna. `
+              : "") +
+            `No tráfego de banner e pop-up o GA4 registrou ${disparosNoTrafego.toLocaleString("pt-BR")} disparos de ${eventoDeLead} nesta janela. ` +
+            `A diferença para a soma da tabela some na quebra por peça: quanto mais fina a dimensão, menos o GA4 devolve, por cardinalidade. ` +
+            `Não é evento perdido nem erro de contagem, é o limite de saber QUAL peça converteu.`,
+        }
+      : null;
+
+  const contrato = montarContrato({
+    aba: kindParam === "popup" ? "pop-ups" : kindParam === "banner" ? "banners" : "banners+pop-ups",
+    bu: profile.key,
+    /**
+     * Na Consultoria a unidade continua em disparo por motivo declarado (o lead
+     * é a soma de dois eventos de MQL), então o contrato registra `eventos` e
+     * levanta o alerta, em vez de esconder a exceção.
+     */
+    unidadeDeLead: profile.mqlEvents ? "eventos" : profile.leadEvent ? "pessoas" : "indisponivel",
+    assinatura: { linhas: spaces.length, sessoes: sessoesPorPeca, conversao: somaDeLeads },
+    achados: [
+      ...verificarTruncamento([
+        { nome: "sessões por medium", linhas: medRes.data?.rows?.length || 0, limite: 1000 },
+        { nome: "conversão por espaço e peça", linhas: convRes?.data?.rows?.length || 0, limite: 20000 },
+        { nome: "sessões por espaço e peça", linhas: campByMedRes.data?.rows?.length || 0, limite: 20000 },
+      ]),
+      ...verificarCobertura({
+        somaDaColuna: somaDeLeads,
+        totalNaProperty: pessoasNoTrafego,
+        evento: eventoDeLead,
+      }),
+      ...verificarIntegridade({
+        nome: "peça dentro do espaço",
+        totalSemQuebra: sessoesPorEspaco,
+        somaDasPartes: sessoesPorPeca,
+        tolerancia: 0.005,
+      }),
+      ...verificarBloqueio({ bloqueada: Boolean(profile.blocked), linhas: spaces.length }),
+    ],
+  });
+
   return NextResponse.json(
     {
       propertyId,
@@ -603,7 +800,9 @@ export async function GET(req: NextRequest) {
         pecas: spaces.length,
         pecasNomeadas: spaces.filter((r) => r.named).length,
         sessions: sessoesPorPeca,
-        leads: spaces.reduce((s, r) => s + r.leads, 0),
+        /** Soma da coluna, em PESSOAS. Ver `cobertura`: não é gente única. */
+        leads: somaDeLeads,
+        leadEvents: spaces.reduce((s, r) => s + r.leadEvents, 0),
         accounts: accountEvent ? spaces.reduce((s, r) => s + (r.accounts || 0), 0) : null,
         checkoutStarts: hasPurchase ? spaces.reduce((s, r) => s + (r.checkoutStarts || 0), 0) : null,
         purchases: hasPurchase ? spaces.reduce((s, r) => s + (r.purchases || 0), 0) : null,
@@ -620,6 +819,12 @@ export async function GET(req: NextRequest) {
         diferenca: diferencaQuebra,
         fecha: Math.abs(diferencaQuebra) <= Math.max(1, sessoesPorEspaco * 0.005),
       },
+      cobertura,
+      /**
+       * Estado do contrato de dados desta resposta. Ver lib/contrato-ga4.ts.
+       * `aprovado: false` é defeito para corrigir, não aviso para ignorar.
+       */
+      contrato,
       eventos: {
         cliques: "sessões com este utm_medium (a sessão entrou clicando no espaço)",
         leads: profile.mqlEvents

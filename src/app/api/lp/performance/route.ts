@@ -20,6 +20,13 @@ import {
   type ResumoCaptacaoForaDeLP,
   type TrafficSlice,
 } from "@/lib/lp-linhas";
+import {
+  montarContrato,
+  verificarBloqueio,
+  verificarCobertura,
+  verificarTaxaImpossivel,
+  verificarTruncamento,
+} from "@/lib/contrato-ga4";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -917,6 +924,45 @@ export async function GET(req: NextRequest) {
       "perdaPorCardinalidade=true significa que o GA4 estourou o limite de combinacoes e jogou parte das linhas num balde (other): o total da property fica maior que a soma da tabela. Alem disso, propriedades com Consent Mode ativo tem parte dos numeros MODELADA pelo Google, e a Data API devolve o coletado enquanto a interface mostra o modelado. Por isso painel e GA4 podem divergir alguns por cento sem que nenhum dos dois esteja errado.",
   };
 
+  /**
+   * ═══════════════════════════════════════════════════════════════════════
+   * CONTRATO DE DADOS
+   * ═══════════════════════════════════════════════════════════════════════
+   * Roda AQUI, dentro da rota, porque é aqui que o dado bruto existe: depois
+   * que a resposta sai, ninguém mais sabe quantas linhas o GA4 devolveu nem
+   * qual era o teto de cada consulta. Ver o comentário longo em contrato-ga4.ts.
+   */
+  const contrato = montarContrato({
+    aba: "landing-pages",
+    bu: profile.key,
+    /** Esta aba conta PESSOAS desde 30/09/2026, que é o que fecha com o CRM. */
+    unidadeDeLead: profile.leadEvent ? "pessoas" : "indisponivel",
+    assinatura: { linhas: rows.length, sessoes: tSessions, conversao: tLeads },
+    achados: [
+      ...verificarTruncamento([
+        { nome: "sessões por landing page", linhas: sessionsRes.data?.rows?.length || 0, limite: limit },
+        { nome: "eventos por página", linhas: eventsRes?.data?.rows?.length || 0, limite: 2000 },
+        { nome: "pageviews servidos por host", linhas: servedRes.data?.rows?.length || 0, limite: 3000 },
+        { nome: "origem por landing page", linhas: sourceRes.data?.rows?.length || 0, limite: 3000 },
+        { nome: "meio por landing page", linhas: mediumRes.data?.rows?.length || 0, limite: 3000 },
+      ]),
+      ...verificarCobertura({
+        somaDaColuna: tLeads,
+        totalNaProperty: totalLeadsPessoasProperty,
+        evento: leadEvt || null,
+      }),
+      ...verificarTaxaImpossivel(
+        rows.map((r) => ({
+          conversao: r.leadEvents,
+          sessoes: r.sessions,
+          taxa: r.connectRate,
+          ressalva: r.rateCaveat,
+        }))
+      ),
+      ...verificarBloqueio({ bloqueada: Boolean(profile.blocked), linhas: rows.length }),
+    ],
+  });
+
   const totals = {
     landingPages: rows.length,
     sessions: tSessions,
@@ -972,6 +1018,12 @@ export async function GET(req: NextRequest) {
       totals,
       cobertura,
       qualidadeGA4,
+      /**
+       * Estado do contrato de dados desta resposta. A tela mostra, o cron
+       * compara com o baseline do mês fechado, e `aprovado: false` é defeito
+       * para corrigir, não aviso para ignorar. Ver lib/contrato-ga4.ts.
+       */
+      contrato,
       /**
        * Captação fora dos hosts de LP (ferramentas e calculadoras do portal).
        * null quando a B.U. não declara `captureHosts`. Ver lp-linhas.ts.

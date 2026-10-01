@@ -8,6 +8,7 @@ import { clarityLinksFor } from "@/lib/clarity";
 import { LPChannelComparator } from "@/components/lp-channel-comparator";
 import { CollapsibleNote, ShowMore, BotaoExportar, baixarCsv } from "@/components/ui-collapse";
 import { useEstadoLP, chave as chaveEstado } from "@/lib/use-estado-lp";
+import { SeloContrato } from "@/components/selo-contrato";
 
 /**
  * /landing-pages — desempenho de LP com a regra de conversão da B.U.
@@ -690,6 +691,11 @@ export default function LandingPagesPage() {
               </div>
             </div>
           )}
+
+          {/* Contrato de dados: vem PRIMEIRO entre os avisos. Quando ele
+              reprova, os números abaixo podem estar incompletos, e ler
+              qualquer outro aviso antes desse seria ler na ordem errada. */}
+          <SeloContrato contrato={data.contrato} />
 
           {/* Captação que não é de landing page. Declarada porque muda a
               leitura da tabela: parte dos leads vem de ferramenta do portal, e

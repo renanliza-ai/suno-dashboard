@@ -1335,6 +1335,8 @@ export type LPPerfData = {
     amostrado: boolean;
     explica: string;
   } | null;
+  /** Estado do contrato de dados. Ver lib/contrato-ga4.ts. */
+  contrato?: ContratoDeDados | null;
   /**
    * Captação que acontece FORA dos hosts de landing page: ferramentas e
    * calculadoras do portal. Vem de consulta separada, com limite próprio, e
@@ -1411,10 +1413,31 @@ export type SpaceRow = {
   space: string; rawMediums: string[]; kind: "banner" | "popup" | "outro";
   bannerName: string; named: boolean;
   sessions: number; engagedSessions: number; engagementRate: number | null;
+  /**
+   * PESSOAS, não disparos, desde 01/10/2026. `leadEvents` já era declarado
+   * aqui mas a rota nunca mandava: o campo chegava `undefined`. Agora as duas
+   * unidades existem de verdade, e a razão entre elas é reenvio de formulário.
+   */
   leads: number; leadEvents: number; leadsSource: string;
-  accounts: number | null;
+  accounts: number | null; accountEvents?: number | null;
   checkoutStarts: number | null; ctaClicksAll: number | null; purchases: number | null;
   sharePct: number | null; pecasNoEspaco: number;
+};
+
+/** Estado do contrato de dados de uma resposta. Ver lib/contrato-ga4.ts. */
+export type ContratoDeDados = {
+  aba: string;
+  bu: string;
+  unidadeDeLead: "pessoas" | "eventos" | "indisponivel";
+  assinatura: { linhas: number; sessoes: number; conversao: number };
+  achados: {
+    id: string;
+    severidade: "quebra" | "alerta";
+    titulo: string;
+    evidencia: string;
+    comoCorrigir: string;
+  }[];
+  aprovado: boolean;
 };
 
 export type ImpressionPage = { path: string; views: number; clicks: number; ctr: number | null; implausible: boolean };
@@ -1437,12 +1460,27 @@ export type SpacesData = {
   spaces: SpaceRow[];
   totals: {
     spaces: number; pecas?: number; pecasNomeadas?: number;
-    sessions: number; leads: number; accounts?: number | null;
+    sessions: number; leads: number; leadEvents?: number; accounts?: number | null;
     checkoutStarts: number | null; purchases: number | null;
   };
   integridade?: {
     sessoesPorEspaco: number; sessoesPorPeca: number; diferenca: number; fecha: boolean;
   };
+  /**
+   * Quanto da conversão do tráfego de banner e pop-up a quebra por peça
+   * alcançou. Mesma ideia da aba de Landing Pages: a tabela sempre mostrou "o
+   * que deu para atribuir", e agora diz de quanto está falando.
+   */
+  cobertura?: {
+    evento: string;
+    disparosNoTrafego: number;
+    pessoasNoTrafego: number | null;
+    somaDaColuna: number;
+    duplicadosEntrePecas: number | null;
+    pctAtribuido: number | null;
+    explica: string;
+  } | null;
+  contrato?: ContratoDeDados | null;
   eventos?: {
     cliques: string; leads: string | null; contaCriada: string | null;
     checkout: string | null; compras: string | null; ctaClickObservacao: string | null;
