@@ -9,7 +9,8 @@
     "lint": "eslint",
     "guarda:deploy": "node scripts/guarda-deploy.mjs",
     "guarda:contrato": "node scripts/guarda-contrato.mjs",
-    "guarda": "node scripts/guarda-contrato.mjs && npx tsc --noEmit && npm run build",
+    "contrato:dados": "tsc src/lib/contrato-ga4.ts --outDir tests/.build --module es2022 --target es2022 --moduleResolution bundler --skipLibCheck && node tests/contrato-ga4.test.mjs",
+    "guarda": "node scripts/guarda-contrato.mjs && npm run contrato:dados && npx tsc --noEmit && npm run build",
     "guarda:lint": "eslint"
   },
   "dependencies": {
