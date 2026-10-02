@@ -7,6 +7,8 @@ import {
   Image as ImageIcon, MessageSquare,
 } from "lucide-react";
 import { classificarComunicacao, type PecaComunicacao } from "@/lib/cro-comunicacao";
+import { montarFilaDeConversao, candidatosParaEstado, type EntradaLP, type EstadoDaLP } from "@/lib/cro-conversao";
+import { LIMITE_LINHAS_LP } from "@/lib/bu";
 import { useGA4 } from "@/lib/ga4-context";
 import { DataStatus, SkeletonBlock } from "@/components/data-status";
 import { clarityLinksFor } from "@/lib/clarity";
@@ -180,6 +182,25 @@ export default function CROPage() {
 
   /** Achados de banner e pop-up, calculados a partir da aba de Comunicação. */
   const [comunicacao, setComunicacao] = useState<{ achados: Achado[]; erro: string | null; pecas: number } | null>(null);
+  /**
+   * JANELA DA FILA POR CONVERSAO: 30 dias fechados, terminando em D-1.
+   *
+   * A aba nao tem seletor de data e fixa days=3 para friccao e days=14 para
+   * comunicacao. Para friccao 3 dias basta, porque dead click e rage click
+   * aparecem rapido. Para CONVERSAO nao: com 3 dias quase toda LP teria zero
+   * por falta de amostra, e a fila viraria ruido. 30 dias e a menor janela em
+   * que o zero significa alguma coisa.
+   */
+  const janelaConversao = useMemo(() => {
+    const fim = new Date();
+    fim.setUTCDate(fim.getUTCDate() - 1); // GA4 fecha em D-1
+    const ini = new Date(fim);
+    ini.setUTCDate(ini.getUTCDate() - 29);
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    return { startDate: iso(ini), endDate: iso(fim) };
+  }, []);
+  /** Fila por conversao: trafego que entra e nao devolve nada. Ver cro-conversao.ts. */
+  const [conversao, setConversao] = useState<{ achados: Achado[]; erro: string | null } | null>(null);
 
   /**
    * Achados que cruzam a fricção medida com o CONTEÚDO da página.
@@ -396,12 +417,104 @@ export default function CROPage() {
     return () => { cancelado = true; };
   }, [data]);
 
+  /**
+   * ═════════════════════════════════════════════════════════════════════
+   * FILA POR CONVERSÃO: tráfego que entra e não devolve nada
+   * ═════════════════════════════════════════════════════════════════════
+   * Pedido do Renan em 01/10/2026. Até aqui a aba olhava FRICÇÃO (dead click,
+   * rage, quickback, erro de script) nas páginas que o Clarity enxergou, e
+   * nunca "esta LP recebe tráfego e não converte pelo próprio objetivo".
+   * Medido: `/api/cro/evidence` não tem uma referência a `/api/lp/performance`.
+   *
+   * ⚠️ A verificação de estado roda SÓ sobre os candidatos, não sobre o
+   * inventário: são 171 LPs na Research e cada verificação é uma batida HTTP
+   * contra o WordPress. Ver `candidatosParaEstado`.
+   */
+  useEffect(() => {
+    let cancelado = false;
+    if (!useRealData || !selectedId || !propertyName) { setConversao(null); return; }
+
+    (async () => {
+      try {
+        const janela = janelaConversao;
+        const qsLp = new URLSearchParams({
+          propertyId: selectedId, propertyName,
+          startDate: janela.startDate, endDate: janela.endDate,
+          limit: String(LIMITE_LINHAS_LP),
+        });
+        const dLp = await (await fetch(`/api/lp/performance?${qsLp}`, { cache: "no-store" })).json();
+        if (cancelado) return;
+        if (dLp.blocked || dLp.error) { setConversao({ achados: [], erro: dLp.blocked || dLp.error }); return; }
+        const lps = (dLp.rows || []) as EntradaLP[];
+
+        // Estado só dos candidatos, em fatias: a rota tem orçamento de tempo.
+        const candidatos = candidatosParaEstado(lps);
+        const estadoPorLP: Record<string, EstadoDaLP | undefined> = {};
+        for (let i = 0; i < candidatos.length && !cancelado; i += 30) {
+          const r = await fetch("/api/lp/estado", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ paginas: candidatos.slice(i, i + 30) }),
+          });
+          if (!r.ok) continue; // fatia sem resposta não encerra o trabalho
+          const d = await r.json();
+          for (const x of d.resultados || []) {
+            estadoPorLP[`${x.host}${String(x.path).replace(/\/+$/, "")}`.toLowerCase()] = x.estado;
+          }
+        }
+        if (cancelado) return;
+
+        // Par exibição/clique, só onde ele existe de verdade nesta B.U.
+        const qsSp = new URLSearchParams({
+          propertyId: selectedId, propertyName, kind: "todos",
+          startDate: janela.startDate, endDate: janela.endDate,
+        });
+        const dSp = await (await fetch(`/api/comunicacao/spaces?${qsSp}`, { cache: "no-store" })).json();
+        if (cancelado) return;
+        const imp = dSp?.impressions;
+        const exibicoes = imp
+          ? {
+              paginas: (imp.pages || []).map((x: { path: string; views: number; clicks: number; ctr: number | null }) => ({
+                path: x.path, views: x.views, clicks: x.clicks, ctr: x.ctr,
+              })),
+              rotulo: imp.label as string,
+              aviso: (imp.warning ?? null) as string | null,
+              superficie: (/pop/i.test(imp.label) ? "popup" : "banner") as "banner" | "popup",
+              confiavel: Boolean(imp.ctrTrustworthy),
+            }
+          : null;
+
+        const dias = Math.max(
+          1,
+          Math.round((new Date(janela.endDate).getTime() - new Date(janela.startDate).getTime()) / 86400000) + 1
+        );
+        const achados = montarFilaDeConversao({
+          lps,
+          exibicoes,
+          contexto: {
+            bu: dLp.bu?.key || "",
+            janela: `${janela.startDate} a ${janela.endDate}`,
+            estadoPorLP,
+            dias,
+          },
+        });
+        if (!cancelado) setConversao({ achados, erro: null });
+      } catch (e) {
+        if (!cancelado) setConversao({ achados: [], erro: (e as Error).message });
+      }
+    })();
+
+    return () => { cancelado = true; };
+  }, [useRealData, selectedId, propertyName, janelaConversao]);
+
   const todosAchados = useMemo(
     () =>
-      [...(data?.achados || []), ...(comunicacao?.achados || []), ...(conteudo?.achados || [])].sort(
-        (a, b) => b.prioridade - a.prioridade
-      ),
-    [data, comunicacao, conteudo]
+      [
+        ...(data?.achados || []),
+        ...(comunicacao?.achados || []),
+        ...(conteudo?.achados || []),
+        ...(conversao?.achados || []),
+      ].sort((a, b) => b.prioridade - a.prioridade),
+    [data, comunicacao, conteudo, conversao]
   );
 
   /** LP que o servidor já disse que não recebe mais tráfego. */
