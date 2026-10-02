@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
+import { LIMITE_LINHAS_LP } from "@/lib/bu";
 
 export type GA4Property = {
   id: string;
@@ -1386,7 +1387,7 @@ export function useLPPerformance(pathContains: string = "", daysOverride?: numbe
      * cauda sumia sem erro. O Renan viu o sintoma pelo outro lado: LP que
      * existe e não aparecia na tela.
      */
-    qs.set("limit", "25000");
+    qs.set("limit", String(LIMITE_LINHAS_LP));
     if (pathContains) qs.set("pathContains", pathContains);
     cachedFetch(`/api/lp/performance?${qs.toString()}`, { signal: ctrl.signal })
       .then((r) => r.json())

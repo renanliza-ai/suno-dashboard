@@ -6,8 +6,9 @@ import {
   type Achado,
   type Contrato,
 } from "@/lib/contrato-ga4";
-import { confirmarBaseline, gravarBaselineSeNovo, lerBaseline } from "@/lib/contrato-kv";
+import { confirmarBaseline, gravarBaselineSeNovo, regravarBaseline } from "@/lib/contrato-kv";
 import { listProperties } from "@/lib/ga4-server";
+import { LIMITE_LINHAS_LP } from "@/lib/bu";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -99,6 +100,25 @@ export async function GET(req: NextRequest) {
   const alertarParam = req.nextUrl.searchParams.get("alertar");
   const deveAlertar = alertarParam === "1" || (ehCronDaVercel && alertarParam !== "0");
 
+  /**
+   * `?regravar=1&motivo=...` reescreve o baseline do período com a medição de
+   * agora. NUNCA para o cron: baseline que se reescreve sozinho absorve a queda
+   * no dia seguinte e o alarme deixa de existir. Exige motivo, porque baseline
+   * que muda sem explicação destrói a serventia do mecanismo inteiro.
+   */
+  const regravar = !ehCronDaVercel && req.nextUrl.searchParams.get("regravar") === "1";
+  const motivoDaRegravacao = req.nextUrl.searchParams.get("motivo") || "sem motivo declarado";
+  if (regravar && !req.nextUrl.searchParams.get("motivo")) {
+    return NextResponse.json(
+      {
+        error: "motivo_obrigatorio",
+        detalhe:
+          "Regravar baseline exige ?motivo=... . Baseline que muda sem explicação deixa de ser referência e vira a mentira contra a qual tudo é comparado.",
+      },
+      { status: 400 }
+    );
+  }
+
   const periodo = mesFechado();
 
   const propsRes = await listProperties();
@@ -123,9 +143,15 @@ export async function GET(req: NextRequest) {
   const ABAS = [
     {
       aba: "landing-pages",
+      /**
+       * ⚠️ `LIMITE_LINHAS_LP`, a MESMA constante que a tela usa. Nunca um
+       * número solto: com 1.000 aqui e 25.000 na tela, o verificador reprovava
+       * por truncamento um cenário que a tela não tem, e abriria tarefa no
+       * Monday por defeito inexistente.
+       */
       url: (pid: string, nome: string) =>
         `/api/lp/performance?propertyId=${pid}&propertyName=${encodeURIComponent(nome)}` +
-        `&startDate=${periodo.startDate}&endDate=${periodo.endDate}&limit=1000`,
+        `&startDate=${periodo.startDate}&endDate=${periodo.endDate}&limit=${LIMITE_LINHAS_LP}`,
     },
     {
       aba: "banners",
@@ -200,6 +226,45 @@ export async function GET(req: NextRequest) {
 
     // ── Não regressão ────────────────────────────────────────────────────
     const achados: Achado[] = [...contrato.achados];
+
+    /**
+     * REGRAVAÇÃO EXPLÍCITA. Só por pedido de quem é master, nunca pelo cron.
+     *
+     * Existe porque um baseline pode ter sido gravado ERRADO, e aí ele deixa de
+     * ser referência e passa a ser a mentira contra a qual tudo é comparado.
+     * Aconteceu na primeira semeadura, em 01/10/2026: este verificador pedia
+     * `limit=1000` enquanto a tela já pedia 25.000, então ele gravou 151 linhas
+     * para a Research quando a tela mostra 171, e ainda reprovou por
+     * truncamento um cenário que a tela não tem.
+     *
+     * ⚠️ Fica fora do caminho do cron DE PROPÓSITO. Baseline que se reescreve
+     * sozinho não serve para nada: uma queda seria absorvida no dia seguinte e
+     * o alarme nunca dispararia. `regravarBaseline` deixa rastro com motivo.
+     */
+    if (regravar) {
+      const novo = await regravarBaseline(
+        p.id,
+        def.aba,
+        periodo.rotulo,
+        contrato.assinatura,
+        motivoDaRegravacao
+      );
+      return {
+        ...base,
+        contrato,
+        baseline: {
+          gravadoEm: novo.gravadoEm,
+          periodo: novo.periodo,
+          linhas: novo.linhas,
+          sessoes: novo.sessoes,
+          conversao: novo.conversao,
+        },
+        baselineCriadoAgora: true,
+        achados,
+        aprovado: !achados.some((a) => a.severidade === "quebra"),
+      };
+    }
+
     const { criado, baseline } = await gravarBaselineSeNovo(
       p.id,
       def.aba,

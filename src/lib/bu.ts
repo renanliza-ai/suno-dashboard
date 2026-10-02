@@ -685,3 +685,29 @@ export function impressionPairFor(
   }
   return null;
 }
+
+/**
+ * TETO DE LINHAS QUE A ABA DE LANDING PAGES PEDE AO GA4.
+ *
+ * ⚠️ Mora AQUI, e não em `lp-linhas.ts`, por dois motivos, nessa ordem:
+ *
+ *   1. Quem precisa dela é a TELA (arquivo cliente) e o VERIFICADOR do
+ *      contrato (rota de servidor). `lp-linhas.ts` importa `ga4-server`, e
+ *      importá-lo de um arquivo cliente arrastava o módulo de servidor inteiro
+ *      para o bundle do navegador. Conferido no build: o chunk do cliente
+ *      passou a conter `env.AUTH_GOOGLE_SECRET` e o endereço do oauth2. Nenhum
+ *      VALOR de segredo vazou (no navegador aquilo lê `undefined`, e nenhum
+ *      prefixo conhecido aparece no bundle), mas carregar autenticação de
+ *      servidor no cliente é peso morto e sujeira de fronteira.
+ *   2. `bu.ts` é a fonte única das regras de landing page e não importa nada,
+ *      então é seguro dos dois lados.
+ *
+ * E por que a constante existe: o número estava solto em dois lugares. A tela
+ * já pedia 25.000 e o verificador do contrato continuou pedindo 1.000, o teto
+ * antigo. A tela mostrava 171 linhas e passava; o verificador media 151 e
+ * REPROVAVA por truncamento, e abriria tarefa no Monday por defeito inexistente.
+ * Monitor que pergunta diferente da tela não monitora a tela.
+ *
+ * 25.000 é o teto da API do GA4 por requisição sem paginação.
+ */
+export const LIMITE_LINHAS_LP = 25000;
