@@ -84,7 +84,20 @@ export async function GET(req: NextRequest) {
 
   const origin = req.nextUrl.origin;
   const soEssaProperty = req.nextUrl.searchParams.get("propertyId");
-  const deveAlertar = req.nextUrl.searchParams.get("alertar") === "1";
+  /**
+   * ⚠️ O CRON ALERTA POR PADRÃO, sem depender de query string.
+   *
+   * A primeira versão registrava o cron como `/api/contrato/verificar?alertar=1`.
+   * Eu não confirmei que a Vercel aceita query string no `path` de um cron, e
+   * apostar nisso tem um custo ruim: se ela tratar a string inteira como
+   * caminho, o cron bate num 404 todo dia e o motor de risco fica desligado
+   * exatamente como se estivesse funcionando, que é o pior dos dois mundos.
+   *
+   * Quem é chamado pelo cron QUER alertar, então a regra virou essa, e
+   * `?alertar=0` existe para quem precisa rodar sem abrir tarefa.
+   */
+  const alertarParam = req.nextUrl.searchParams.get("alertar");
+  const deveAlertar = alertarParam === "1" || (ehCronDaVercel && alertarParam !== "0");
 
   const periodo = mesFechado();
 
