@@ -70,16 +70,17 @@ type Evidencia = { fonte: string; valor: string; amostra: string; janela: string
 type Classificacao =
   | "corrigir" | "investigar" | "testar" | "decidir" | "sem_volume" | "validar_medicao";
 type Superficie = "pagina" | "banner" | "popup";
-type Achado = {
-  id: string; superficie: Superficie; pagina: string; titulo: string;
-  evidencias: Evidencia[]; hipotese: string;
-  classificacao: Classificacao; porque: string;
-  proximoPasso: string[]; prioridade: number;
-  teste?: {
-    baseline: number; efeitoMinimoPp: number; amostraPorVariante: number;
-    sessoesPorDia: number; diasNecessarios: number; viavel: boolean; motivo: string;
-  } | null;
-};
+/**
+ * ⚠️ O TIPO VEM DE cro-evidence.ts, NÃO É REDECLARADO AQUI.
+ *
+ * Esta tela mantinha uma CÓPIA do `Achado`, e em 05/10/2026 ela já tinha
+ * divergido: o motor ganhou `acao`, `ondeAtacar` e `numeroChave`, a cópia não,
+ * e o build quebrou dizendo que a propriedade não existia. Contrato em dois
+ * lugares diverge sempre; a única dúvida é quando.
+ *
+ * `cro-evidence.ts` não importa nada, então é seguro do lado do cliente.
+ */
+import type { Achado } from "@/lib/cro-evidence";
 type Resposta = {
   bu: { key: string; label: string };
   janela: string; dias: number;
@@ -775,8 +776,88 @@ export default function CROPage() {
             </label>
           </div>
 
+          {/*
+            ═══════════════════════════════════════════════════════════════
+            MAPA MENTAL: a ordem em que as perguntas se respondem
+            ═══════════════════════════════════════════════════════════════
+            Pedido do Renan em 05/10/2026: "está muito confuso, preciso bater o
+            olho e entender".
+
+            O problema não era a falta de informação, era a falta de ORDEM. A
+            tela mostrava seis classificações lado a lado, como se fossem seis
+            opções do mesmo nível, e elas não são: existe PRECEDÊNCIA entre
+            elas, e é ela que diz o que olhar primeiro.
+
+            Enquanto a medição não estiver de pé, nenhum número abaixo conclui:
+            otimizar página cuja tag não dispara é trabalho no escuro. Depois
+            vem o que já dá para decidir sem experimento, que é a maior parte.
+            Teste é a ÚLTIMA etapa e a mais rara: de 955 itens medidos, 27
+            fecham um teste de MDE 50% em 30 dias.
+
+            Os três blocos abaixo são essa ordem, e cada um filtra a lista.
+          */}
+          <div className="grid gap-3 md:grid-cols-3 mb-4">
+            {([
+              {
+                n: 1,
+                titulo: "A medição está de pé?",
+                sub: "Nada abaixo conclui enquanto isto não fechar",
+                classes: ["validar_medicao", "corrigir"] as Classificacao[],
+              },
+              {
+                n: 2,
+                titulo: "O dado já basta para decidir?",
+                sub: "Aqui não precisa de experimento, precisa de decisão",
+                classes: ["decidir", "investigar"] as Classificacao[],
+              },
+              {
+                n: 3,
+                titulo: "Cabe experimento?",
+                sub: "Só quando o volume fecha no calendário",
+                classes: ["testar", "sem_volume"] as Classificacao[],
+              },
+            ]).map((etapa) => {
+              const contar = (c: Classificacao) =>
+                todosAchados.filter((a) => a.classificacao === c && (superficie === "todas" || a.superficie === superficie)).length;
+              const total = etapa.classes.reduce((s, c) => s + contar(c), 0);
+              return (
+                <div key={etapa.n} className="rounded-2xl border border-[color:var(--border)] bg-white p-3">
+                  <div className="flex items-baseline gap-2 mb-0.5">
+                    <span className="shrink-0 w-5 h-5 rounded-full bg-[#7c5cff]/10 text-[#7c5cff] text-[11px] font-bold flex items-center justify-center">
+                      {etapa.n}
+                    </span>
+                    <span className="text-sm font-bold">{etapa.titulo}</span>
+                    <span className="ml-auto text-lg font-bold tabular-nums text-[color:var(--muted-foreground)]">{total}</span>
+                  </div>
+                  <p className="text-[11px] text-[color:var(--muted-foreground)] mb-2 leading-snug">{etapa.sub}</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {etapa.classes.map((c) => {
+                      const e = ESTILO[c];
+                      const Icone = e.icone;
+                      const n = contar(c);
+                      return (
+                        <button
+                          key={c}
+                          onClick={() => setFiltro(filtro === c ? "todos" : c)}
+                          title={e.explica}
+                          className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-semibold transition ${e.classe} ${
+                            filtro === c ? "ring-2 ring-offset-1 ring-current" : n === 0 ? "opacity-40" : "hover:brightness-95"
+                          }`}
+                        >
+                          <Icone size={11} />
+                          {e.rotulo}
+                          <span className="tabular-nums font-bold">{n}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
           {/* Contagem por classificação, que é o resumo que importa */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+          <div className="hidden grid-cols-2 md:grid-cols-5 gap-3 mb-5">
             {(["validar_medicao", "corrigir", "decidir", "investigar", "testar"] as Classificacao[]).map((c) => {
               const n = c === "validar_medicao" ? totaisVisiveis.validar
                 : c === "corrigir" ? totaisVisiveis.corrigir
@@ -840,19 +921,61 @@ export default function CROPage() {
                           <Icone size={11} /> {e.rotulo}
                         </span>
                         <div className="min-w-0 flex-1">
+                          {/*
+                            ⚠️ A AÇÃO VEM ANTES DO SINTOMA, e a troca foi pedida.
+                            O título descreve o sintoma ("Tráfego sem conversão
+                            em /x"), e numa fila de 50 cards todos os sintomas se
+                            parecem. Quem decide precisa do VERBO: "Conferir a
+                            tag" é outra coisa de "Trocar o bloco de preço", e a
+                            diferença decide se o card vale o clique.
+                          */}
                           <p className="font-bold text-sm">
-                            {a.titulo}
+                            {a.acao || a.titulo}
                             {tarefa?.estado === "ok" && (
                               <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
                                 no Monday
                               </span>
                             )}
                           </p>
-                          <p className="text-xs text-[color:var(--muted-foreground)] truncate mt-0.5" title={a.pagina}>
+
+                          {/* ONDE a mudança acontece. Era texto enterrado no fim
+                              da hipótese, ou seja, só aparecia depois de abrir o
+                              card, que é justamente quando já não ajuda. */}
+                          {a.ondeAtacar && (
+                            <p className="text-xs mt-1">
+                              <span className="inline-flex items-center gap-1 rounded-md bg-[#7c5cff]/10 text-[#7c5cff] px-2 py-0.5 font-semibold">
+                                Atacar: {a.ondeAtacar}
+                              </span>
+                            </p>
+                          )}
+
+                          {/* O número que decide, em uma linha. A lista inteira
+                              de evidências continua abaixo. */}
+                          {a.numeroChave && (
+                            <p className="text-xs text-[color:var(--foreground)] mt-1.5 leading-snug">{a.numeroChave}</p>
+                          )}
+
+                          {/* A página, CLICÁVEL. Antes era texto truncado, então
+                              para ver a página que o card manda atacar era
+                              preciso copiar a mão. */}
+                          <p className="text-xs text-[color:var(--muted-foreground)] truncate mt-1" title={a.pagina}>
                             <span className="font-semibold text-[10px] uppercase tracking-wider mr-1.5 opacity-70">
                               {a.superficie === "pagina" ? rotuloDePagina(a.pagina) : a.superficie === "banner" ? "Banner" : "Pop-up"}
                             </span>
-                            {a.pagina}
+                            {a.superficie === "pagina" && /^https?:\/\//i.test(a.pagina) ? (
+                              <a
+                                href={a.pagina}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(ev) => ev.stopPropagation()}
+                                className="underline decoration-dotted hover:text-[#7c5cff]"
+                              >
+                                {a.pagina.replace(/^https?:\/\//, "")}
+                                <ExternalLink size={10} className="inline ml-1 opacity-60" />
+                              </a>
+                            ) : (
+                              a.pagina
+                            )}
                           </p>
                           {/* Estado da LP no servidor. Achado sobre página que
                               não recebe mais tráfego é trabalho jogado fora. */}

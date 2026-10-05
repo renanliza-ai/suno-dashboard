@@ -189,6 +189,7 @@ function acharLPsSemConversao(lps: EntradaLP[], ctx: Contexto): Achado[] {
     let porque: string;
     let hipotese: string;
     let ondeAtacar: string;
+    let acao: string;
     let proximoPasso: string[];
 
     if (lp.objective === "captacao" && lp.leadEvents > 0) {
@@ -205,7 +206,8 @@ function acharLPsSemConversao(lps: EntradaLP[], ctx: Contexto): Achado[] {
       hipotese =
         "O formulário capta, e o que falha é a atribuição do usuário à página. Antes de mexer em qualquer " +
         "coisa da página, confirmar no Clarity se há sessão completando o envio e chegando na Thank Page.";
-      ondeAtacar = "A medição, não a página.";
+      ondeAtacar = "A medição, não a página";
+      acao = `Confirmar a atribuição de ${conv.evento} em ${lp.path}`;
       proximoPasso = [
         `Abrir as gravações do Clarity filtrando por esta URL e procurar sessão que chega na Thank Page.`,
         `Conferir no GTM se o generate_lead desta LP envia os mesmos parâmetros das LPs que atribuem certo.`,
@@ -224,7 +226,8 @@ function acharLPsSemConversao(lps: EntradaLP[], ctx: Contexto): Achado[] {
       hipotese =
         `O evento ${conv.evento} pode não estar disparando nesta família. Enquanto isso não for descartado, ` +
         `qualquer mudança de página é feita no escuro, porque não há como medir o resultado.`;
-      ondeAtacar = "A tag da família inteira, antes de qualquer página individual.";
+      ondeAtacar = "A tag da família inteira";
+      acao = `Conferir se ${conv.evento} dispara na família ${familia}`;
       proximoPasso = [
         `Abrir uma página de ${familia} com o Tag Assistant e confirmar se ${conv.evento} dispara.`,
         `Comparar com uma família que converte na mesma property, para isolar o que difere.`,
@@ -278,10 +281,13 @@ function acharLPsSemConversao(lps: EntradaLP[], ctx: Contexto): Achado[] {
           : `O engajamento de ${lp.engagementRate ?? "n/d"}% indica que a pessoa FICA e mesmo assim não converte: o problema está na oferta ou no formulário, não na atenção.`);
       ondeAtacar =
         lp.engagementRate !== null && lp.engagementRate < 30
-          ? "Primeiro viewport: título, promessa e imagem."
+          ? "Primeiro viewport: título, promessa e imagem"
           : lp.objective === "captacao"
-            ? "O formulário: número de campos, rótulo do botão e o que é prometido em troca."
-            : "O bloco de preço e o CTA que leva ao checkout.";
+            ? "O formulário: campos, botão e a troca prometida"
+            : "O bloco de preço e o CTA do checkout";
+      acao = cabe
+        ? `Testar ${ondeAtacar.toLowerCase()} em ${lp.path}`
+        : `Copiar da irmã que converte e aplicar direto em ${lp.path}`;
       proximoPasso = cabe
         ? [
             `Rodar A/B na ${ondeAtacar.toLowerCase()}`,
@@ -302,12 +308,15 @@ function acharLPsSemConversao(lps: EntradaLP[], ctx: Contexto): Achado[] {
         superficie: "pagina",
         pagina: lp.url,
         titulo: `Tráfego sem conversão: ${lp.path}`,
+        acao,
+        ondeAtacar,
         evidencias: [
           ev("GA4", `${lp.sessions.toLocaleString("pt-BR")} sessões, zero ${conv.evento}`, `objetivo ${lp.objective} (${lp.objectiveFrom})`, ctx.janela),
           ev("GA4", `família ${familia} converte a ${taxaEsperada.toFixed(2).replace(".", ",")}%`, `${sessFamilia.toLocaleString("pt-BR")} sessões na família`, ctx.janela),
           ev("GA4", `engajamento ${lp.engagementRate ?? "n/d"}%`, `${lp.sessions.toLocaleString("pt-BR")} sessões`, ctx.janela),
         ],
-        hipotese: `${hipotese} ONDE ATACAR: ${ondeAtacar}`,
+        numeroChave: `${lp.sessions.toLocaleString("pt-BR")} sessões, zero ${conv.evento}. A família entrega ${taxaEsperada.toFixed(2).replace(".", ",")}%.`,
+        hipotese,
         classificacao,
         porque,
         proximoPasso,
@@ -322,11 +331,14 @@ function acharLPsSemConversao(lps: EntradaLP[], ctx: Contexto): Achado[] {
       superficie: "pagina",
       pagina: lp.url,
       titulo: `Tráfego sem conversão: ${lp.path}`,
+      acao,
+      ondeAtacar,
       evidencias: [
         ev("GA4", `${lp.sessions.toLocaleString("pt-BR")} sessões, zero ${conv.evento} atribuído`, `objetivo ${lp.objective}`, ctx.janela),
         ev("GA4", `${lp.leadEvents} disparo(s) do evento, ${lp.leads} pessoa(s)`, `${lp.sessions.toLocaleString("pt-BR")} sessões`, ctx.janela),
       ],
-      hipotese: `${hipotese} ONDE ATACAR: ${ondeAtacar}`,
+      numeroChave: `${lp.sessions.toLocaleString("pt-BR")} sessões, ${lp.leadEvents} disparo(s) e ${lp.leads} pessoa(s) atribuída(s).`,
+      hipotese,
       classificacao,
       porque,
       proximoPasso,
@@ -363,6 +375,9 @@ function acharAtivosParados(lps: EntradaLP[], ctx: Contexto): Achado[] {
       superficie: "pagina",
       pagina: lp.url,
       titulo: `Ativo parado: ${lp.path}`,
+      acao: `Decidir entre dar mídia ou aposentar ${lp.path}`,
+      ondeAtacar: "A origem de tráfego, não a página",
+      numeroChave: `${lp.sessions} sessão(ões) no período, com a página no ar.`,
       evidencias: [
         ev("GA4", `${lp.sessions} sessão(ões) no período`, `página no ar e respondendo 200`, ctx.janela),
       ],
@@ -452,6 +467,9 @@ function acharExibicaoSemClique(
         superficie,
         pagina: top[0].path,
         titulo: `Validar o par exibição/clique de ${rotuloDoPar} antes de cobrar criativa`,
+        acao: `Conferir no GTM como ${rotuloDoPar} conta exibição`,
+        ondeAtacar: "O disparo da exibição, antes da criativa",
+        numeroChave: `${candidatas.length} páginas somam ${totalViews.toLocaleString("pt-BR")} exibições e ${totalClicks.toLocaleString("pt-BR")} cliques.`,
         evidencias: [
           ev("GA4", `${candidatas.length} páginas com exibição alta e clique quase zero`, `${totalViews.toLocaleString("pt-BR")} exibições, ${totalClicks.toLocaleString("pt-BR")} cliques`, ctx.janela),
           ...top.map((p) =>

@@ -57,6 +57,29 @@ export type Achado = {
   superficie: Superficie;
   pagina: string;
   titulo: string;
+  /**
+   * A AÇÃO, no imperativo, para ser lida de relance. Entrou em 05/10/2026, por
+   * reclamação do Renan: "está muito confuso, preciso bater o olho e entender".
+   *
+   * O `titulo` descreve o SINTOMA ("Tráfego sem conversão em /x"), e numa fila
+   * de 50 cards todos os sintomas se parecem. Quem decide precisa do VERBO:
+   * "Conferir a tag" é outra coisa de "Trocar o bloco de preço", e a diferença
+   * decide se o card vale o clique. Opcional porque os motores antigos
+   * (cro-evidence, cro-comunicacao) não preenchem; a tela cai no `titulo`.
+   */
+  acao?: string;
+  /**
+   * ONDE a mudança acontece, em 3 a 6 palavras. Era concatenado no fim do texto
+   * da hipótese, e por isso só aparecia DEPOIS de abrir o card, que é
+   * exatamente quando já não ajuda a decidir se vale abrir.
+   */
+  ondeAtacar?: string;
+  /**
+   * O número que sustenta a decisão, já pronto para ler. Uma linha, não a lista
+   * inteira de evidências: a lista continua no card, isto é o resumo que cabe
+   * no primeiro olhar.
+   */
+  numeroChave?: string;
   evidencias: Evidencia[];
   hipotese: string;
   classificacao: Classificacao;
