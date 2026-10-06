@@ -58,13 +58,28 @@ export async function GET(req: NextRequest) {
   if (!propertyId) {
     return NextResponse.json({ error: "propertyId required" }, { status: 400 });
   }
-  if (!medium && !campaign) {
+  /**
+   * MODO SÉRIE: a curva diária, que é o que responde "a regra do Cloudflare
+   * surtiu efeito?".
+   *
+   * ⚠️ Aqui o recorte deixa de ser obrigatório, e a exceção tem motivo. A regra
+   * geral existe para não responder o TODO quando se perguntou a PARTE. Mas uma
+   * regra de WAF é geográfica e afeta o site inteiro, então a pergunta legítima
+   * é justamente sobre o todo: se eu só olhasse a fatia da campanha, não teria
+   * como ver se a regra derrubou tráfego legítimo junto, que é o risco real de
+   * bloquear por país.
+   */
+  const serie = sp.get("serie") === "1";
+  const porPais = sp.get("porPais") === "1";
+
+  if (!medium && !campaign && !serie) {
     return NextResponse.json(
       {
         error: "recorte_obrigatorio",
         detalhe:
           "Informe medium e/ou campaign. Esta rota responde 'de onde vem ESTE pedaço de tráfego'; " +
-          "devolver a property inteira quando se pediu a parte produziria conclusão errada com cara de certa.",
+          "devolver a property inteira quando se pediu a parte produziria conclusão errada com cara de certa. " +
+          "A exceção é serie=1, que responde a curva diária do site e por isso pode ser sem recorte.",
       },
       { status: 400 }
     );
@@ -93,13 +108,67 @@ export async function GET(req: NextRequest) {
       },
     });
   }
-  const filtro = condicoes.length === 1 ? condicoes[0] : { andGroup: { expressions: condicoes } };
+  const filtro =
+    condicoes.length === 0
+      ? undefined
+      : condicoes.length === 1
+        ? condicoes[0]
+        : { andGroup: { expressions: condicoes } };
 
   const METRICAS = [
     { name: "sessions" },
     { name: "engagedSessions" },
     { name: "totalUsers" },
   ];
+
+  // ── MODO SÉRIE ────────────────────────────────────────────────────────
+  if (serie) {
+    /**
+     * Limite generoso e explícito: 90 dias por 30 países dá 2.700 linhas, e
+     * resposta cortada aqui esconderia justamente o dia da virada.
+     */
+    const res = await runReport(propertyId, {
+      dateRanges: [dateRange],
+      dimensions: porPais ? [{ name: "date" }, { name: "country" }] : [{ name: "date" }],
+      metrics: METRICAS,
+      orderBys: [{ dimension: { dimensionName: "date" } }],
+      limit: 20000,
+      ...(filtro ? { dimensionFilter: filtro } : {}),
+    });
+    if (res.error) {
+      return NextResponse.json({ propertyId, erro: res.error, range: dateRange }, { status: 200 });
+    }
+    const linhas = (res.data?.rows || []).map((r) => {
+      const sessoes = Number(r.metricValues?.[0]?.value || 0);
+      const engajadas = Number(r.metricValues?.[1]?.value || 0);
+      const bruta = r.dimensionValues?.[0]?.value || "";
+      return {
+        // O GA4 devolve `date` como YYYYMMDD colado. Sem formatar, qualquer
+        // leitura por data no cliente vira string solta.
+        data: bruta.length === 8 ? `${bruta.slice(0, 4)}-${bruta.slice(4, 6)}-${bruta.slice(6, 8)}` : bruta,
+        pais: porPais ? r.dimensionValues?.[1]?.value || "(vazio)" : null,
+        sessoes,
+        engajadas,
+        engajamentoPct: sessoes > 0 ? Number(((engajadas / sessoes) * 100).toFixed(1)) : null,
+        usuarios: Number(r.metricValues?.[2]?.value || 0),
+      };
+    });
+    return NextResponse.json(
+      {
+        propertyId,
+        recorte: { medium: medium || null, campaign: campaign || null },
+        range: dateRange,
+        porPais,
+        linhas,
+        truncado: (res.data?.rows?.length || 0) >= 20000,
+        comoLer:
+          "Para saber se uma regra de WAF funcionou, a queda tem que coincidir com o DIA da regra e não pode " +
+          "arrastar junto o tráfego legítimo. Onda de robô termina sozinha também, e sem a data da virada as " +
+          "duas hipóteses são indistinguíveis.",
+      },
+      { headers: { "Cache-Control": "private, max-age=300" } }
+    );
+  }
 
   /** Cada eixo é uma consulta própria: juntos dariam produto cartesiano. */
   const eixos = [
@@ -118,7 +187,7 @@ export async function GET(req: NextRequest) {
         metrics: METRICAS,
         orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
         limit,
-        dimensionFilter: filtro,
+        ...(filtro ? { dimensionFilter: filtro } : {}),
       })
     )
   );
