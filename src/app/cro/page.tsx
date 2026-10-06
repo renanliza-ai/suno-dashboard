@@ -13,6 +13,7 @@ import { useGA4 } from "@/lib/ga4-context";
 import { DataStatus, SkeletonBlock } from "@/components/data-status";
 import { clarityLinksFor } from "@/lib/clarity";
 import { escopoDaPagina } from "@/lib/cro-gates";
+import { avaliarTrafego, chaveDaPeca } from "@/lib/trafego-suspeito";
 
 /**
  * Aba de CRO, reconstruída em 15/09/2026.
@@ -300,7 +301,7 @@ export default function CROPage() {
         bu?: { conversionModel?: string };
         spaces?: {
           space: string; kind: "banner" | "popup"; bannerName: string; named: boolean;
-          sessions: number; leads: number; accounts: number | null;
+          sessions: number; engagementRate: number | null; leads: number; accounts: number | null;
           checkoutStarts: number | null; purchases: number | null;
         }[];
       }) => {
@@ -323,12 +324,95 @@ export default function CROPage() {
           sinaisTotais:
             (r.purchases || 0) + (r.checkoutStarts || 0) + (r.leads || 0) + (r.accounts || 0),
         });
+        /**
+         * ═══════════════════════════════════════════════════════════════
+         * TRÁFEGO INVÁLIDO SAI DA FILA DE CRO, E VIRA UM CARD SÓ
+         * ═══════════════════════════════════════════════════════════════
+         * Defeito achado em 06/10/2026 pelo Renan, que perguntou de onde
+         * vinha um banner que ele tirou do ar faz tempo.
+         *
+         * O painel JÁ SABIA que aquele tráfego não é humano: a aba de Banners
+         * mostra "59,2% dos cliques desta janela têm sinal de tráfego
+         * inválido" e nomeia a peça. Mas `trafego-suspeito.ts` só era usado
+         * em spaces-view.tsx, e a aba de CRO não o enxergava. Resultado: duas
+         * telas do mesmo painel dando instruções OPOSTAS sobre a mesma peça,
+         * e a de CRO mandando o time abrir o Tag Assistant para depurar bot.
+         *
+         * Medido na peça que ele apontou (_SNCA12D1FEA, banner.home):
+         *   7 dias ......    219 cliques, 0,5% de engajamento
+         *  14 dias .. 243.319 cliques, 2,2%
+         *  30 dias .. 361.333 cliques, 3,1%
+         *  60 e 90 .. 361.417, idênticos, ou seja a enxurrada tem início e fim
+         * Tráfego humano engaja entre 60% e 80%. E a UTM não aparece em NENHUM
+         * HTML publicado: o criativo saiu do ar e as sessões continuam
+         * chegando, porque `utm_medium` é de SESSÃO e conta quem chega com a
+         * URL, exista banner ou não.
+         *
+         * Peça suspeita não vira card de otimização: vira UM card de bloquear
+         * na origem. Otimizar criativo para robô é trabalho jogado fora.
+         */
+        const avaliacao = avaliarTrafego(
+          linhas.map((r) => ({
+            space: r.space,
+            bannerName: r.bannerName,
+            sessions: r.sessions,
+            engagementRate: r.engagementRate ?? null,
+            leads: r.leads,
+            accounts: r.accounts,
+            checkoutStarts: r.checkoutStarts,
+            purchases: r.purchases,
+          }))
+        );
+
         const achados: Achado[] = [];
         for (const sup of ["banner", "popup"] as const) {
-          const pecas = linhas.filter((r) => r.kind === sup).map(para);
+          const pecas = linhas
+            .filter((r) => r.kind === sup)
+            .filter((r) => !avaliacao.suspeitas.has(chaveDaPeca(r.space, r.bannerName)))
+            .map(para);
           if (!pecas.length) continue;
           achados.push(...(classificarComunicacao(pecas, sup, janela, 14).achados as Achado[]));
         }
+
+        if (avaliacao.suspeitas.size > 0) {
+          const lista = Array.from(avaliacao.suspeitas.values()).sort((a, b) => b.sessoes - a.sessoes);
+          achados.push({
+            id: "trafego-invalido",
+            superficie: "banner",
+            pagina: lista[0].chave,
+            titulo: `Tráfego inválido em ${avaliacao.suspeitas.size} peça(s)`,
+            acao: "Bloquear o tráfego na origem, antes de qualquer teste",
+            ondeAtacar: "Cloudflare e filtro do GA4, não a criativa",
+            numeroChave:
+              `${avaliacao.sessoesSuspeitas.toLocaleString("pt-BR")} dos ${avaliacao.sessoesTotais.toLocaleString("pt-BR")} cliques ` +
+              `(${avaliacao.pctSuspeito}%) não são audiência. Sem eles, a janela real fica perto de ` +
+              `${avaliacao.sessoesLimpas.toLocaleString("pt-BR")} cliques.`,
+            evidencias: lista.slice(0, 4).map((s) => ({
+              fonte: "GA4" as const,
+              valor: s.motivo,
+              amostra: `${s.sessoes.toLocaleString("pt-BR")} cliques`,
+              janela,
+            })),
+            hipotese:
+              "Estas peças concentram volume alto com engajamento muito abaixo do resto e nenhuma conversão. " +
+              "Esse perfil não é audiência, é tráfego automatizado chegando com a UTM na URL. Como `utm_medium` " +
+              "é dimensão de SESSÃO, ele conta quem chega com o endereço, exista o banner publicado ou não.",
+            classificacao: "corrigir",
+            porque:
+              "Não é caso de CRO: não há criativa a melhorar nem tag a consertar. Enquanto este volume estiver " +
+              "na base, toda taxa da aba fica diluída e qualquer teste mede robô. Por isso estas peças saem da " +
+              "fila de otimização e viram um card só, de bloqueio.",
+            proximoPasso: [
+              "Conferir a origem no GA4 (país, origem e página de entrada destas sessões) para desenhar a regra.",
+              "Bloquear no Cloudflare por padrão de requisição, que é onde o custo some antes de virar sessão.",
+              "Criar um filtro ou segmento no GA4 para a série histórica não ficar presa a este volume.",
+              "NÃO mexer na criativa nem no taguear: o banner nem está publicado, a UTM não aparece em nenhum HTML servido.",
+            ],
+            prioridade: avaliacao.sessoesSuspeitas,
+            teste: null,
+          });
+        }
+
         setComunicacao({ achados, erro: null, pecas: linhas.length });
       })
       .catch((e) => { if (!cancelado) setComunicacao({ achados: [], erro: (e as Error).message, pecas: 0 }); });
