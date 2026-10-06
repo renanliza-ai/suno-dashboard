@@ -303,6 +303,43 @@ export function verificarBloqueio(args: { bloqueada: boolean; linhas: number }):
   ];
 }
 
+/**
+ * HOST DE LANDING PAGE DECLARADO QUE NÃO BATE COM O GA4.
+ *
+ * Nasceu em 06/10/2026, do defeito que o Renan achou mandando uma URL:
+ * `lp.fundsexplorer.com.br`. A casa declarava `lps.fundsexplorer.com.br`, com
+ * S. A aba lia 6 sessões, concluía "não há dado de landing page confiável" e
+ * mostrava tela vazia com um texto convincente explicando uma ausência que
+ * precisava ser verificada e não era.
+ *
+ * ⚠️ Esta é a família de erro mais cara deste projeto: SUPOR a forma de um dado
+ * externo em vez de olhar. E host errado é o pior caso dela, porque não falha
+ * alto. Devolve zero, e zero tem cara de resposta legítima.
+ *
+ * Por isso a invariante não confere "o host está escrito certo", que ninguém
+ * sabe responder: ela confronta a lista declarada com o que o GA4 TEM.
+ */
+export function verificarHosts(args: {
+  /** Divergências apuradas por /api/ga4/hosts. */
+  divergencias: { tipo: string; host: string; detalhe: string; gravidade: "quebra" | "alerta" }[];
+}): Achado[] {
+  return args.divergencias.map((d) => ({
+    id: `host:${d.tipo}:${d.host}`,
+    severidade: d.gravidade,
+    titulo:
+      d.tipo === "host_de_lp_nao_declarado" || d.tipo === "host_vizinho_nao_declarado"
+        ? `Host com landing page de verdade fora da lista: ${d.host}`
+        : d.tipo === "host_declarado_inexistente"
+          ? `Host declarado não existe no GA4: ${d.host}`
+          : `Host declarado para conferir: ${d.host}`,
+    evidencia: d.detalhe,
+    comoCorrigir:
+      "Corrigir `lpHosts` da B.U. em src/lib/bu.ts com o host MEDIDO, nunca com o host suposto. " +
+      "Se o host não aparece em property nenhuma, a causa é no site (página sem tag de medição) e " +
+      "não no painel: aí o certo é declarar a ausência, e não inventar um host.",
+  }));
+}
+
 // ═════════════════════════════════════════════════════════════════════════
 // NÃO REGRESSÃO
 // ═════════════════════════════════════════════════════════════════════════

@@ -100,8 +100,30 @@ export type BUProfile = {
   accountEvent?: string | null;
   /** Ressalvas que a UI é obrigada a mostrar junto do número. */
   caveats: string[];
-  /** Quando preenchido, a aba mostra estado vazio explicando o que falta em vez de número. */
+  /**
+   * Quando preenchido, a aba mostra estado vazio explicando o que falta em vez
+   * de número.
+   *
+   * ⚠️ USE SÓ QUANDO NÃO HÁ O QUE MOSTRAR. Isto apaga a aba INTEIRA, inclusive
+   * sessão, engajamento e inventário de landing page, que quase nunca são o
+   * motivo do bloqueio. Ver `conversaoBloqueada` abaixo.
+   */
   blocked: string | null;
+  /**
+   * Quando preenchido, a aba MOSTRA a B.U. (sessão, engajamento, inventário de
+   * LP) mas NÃO publica o número de conversão, e declara o motivo.
+   *
+   * Nasceu em 06/10/2026, de um defeito que o Renan apontou: "o painel não está
+   * trazendo as landing pages de FIIs nem de Funds". Na FIIs ele tinha razão e
+   * a causa era esta: `lp.fiis.com.br` tem 3.104 sessões e caminhos de landing
+   * page de verdade, e a B.U. estava em `blocked` por SUSPEITA DE DUPLICAÇÃO DO
+   * LEAD. O bloqueio era binário demais: para não publicar um número de lead
+   * duvidoso, apagava também o inventário e o tráfego, que não têm nada a ver
+   * com a suspeita.
+   *
+   * Separar os dois devolve o que é válido sem publicar o que é duvidoso.
+   */
+  conversaoBloqueada?: string | null;
 };
 
 /** Hosts de dev, staging, tradutor e lixo. Nunca entram em agregação. */
@@ -361,8 +383,15 @@ const PROFILES: Record<Exclude<BUKey, "desconhecida">, BUProfile> = {
     mqlEvents: null,
     ctaEvent: null,
     caveats: [],
-    blocked:
-      "Número de lead da FIIs sob suspeita de duplicação: 2,1 eventos por usuário em todos os caminhos de volume, o mesmo padrão que provou a duplicação da Consultoria. Como a FIIs não tem evento de etapa seguinte, não é possível cravar a razão pela API. Auditoria no GTM da FIIs pendente. Até lá esta aba não publica o número, para não repetir o caso da Consultoria.",
+    /**
+     * ⚠️ SAIU DE `blocked` EM 06/10/2026. Medido: `lp.fiis.com.br` tem 3.104
+     * sessões em 30 dias, com caminhos de landing page de verdade. O bloqueio
+     * total escondia esse inventário inteiro por causa de uma suspeita que é
+     * só sobre o número de LEAD.
+     */
+    blocked: null,
+    conversaoBloqueada:
+      "Número de lead da FIIs sob suspeita de duplicação: 2,1 eventos por usuário em todos os caminhos de volume, o mesmo padrão que provou a duplicação da Consultoria. Como a FIIs não tem evento de etapa seguinte, não é possível cravar a razão pela API. Auditoria no GTM da FIIs pendente. Até lá a coluna de conversão fica vazia, mas sessão, engajamento e inventário de LP aparecem: eles não dependem dessa suspeita.",
   },
 
   funds: {
@@ -377,7 +406,7 @@ const PROFILES: Record<Exclude<BUKey, "desconhecida">, BUProfile> = {
     ctaEvent: null,
     caveats: [],
     blocked:
-      "Não existe medição de conversão de landing page no Funds Explorer. O host de LP (lps.fundsexplorer.com.br) teve 4 sessões e zero lead em 30 dias. Os 113 generate_lead da property vêm de /funds/*, /cadastro e /entrar no portal, que não são LP. Falta instrumentar generate_lead nas LPs.",
+      "As landing pages do Funds Explorer NÃO SÃO MEDIDAS. Confirmado em 06/10/2026 batendo direto na página: lp.fundsexplorer.com.br/parceriasunofiisfunds/ responde 200 com 152 KB e tem ZERO tag de medição (nenhum GTM, nenhum gtag, nenhum ID do GA4, nenhum Clarity, nenhum pixel). Ela chama dataLayer 3 vezes, mas não existe container para ler. Por isso o host lp.fundsexplorer.com.br não aparece em NENHUMA property do GA4, e o host declarado antes (lps., com S) tem 6 sessões. Esta ausência é real e a correção é no SITE, não no painel: instalar o GTM em lp.fundsexplorer.com.br.",
   },
 
   fiagro: {
@@ -392,7 +421,7 @@ const PROFILES: Record<Exclude<BUKey, "desconhecida">, BUProfile> = {
     ctaEvent: null,
     caveats: [],
     blocked:
-      "Fiagro registrou 2 eventos generate_lead em 30 dias, nenhum em host de LP. Não há volume para leitura. Falta instrumentar a medição de conversão.",
+      "Fiagro não tem landing page medida. Medido em 06/10/2026: o host declarado lps.fiagro.com.br tem 2 sessões em 30 dias, enquanto fiagro.com.br (o portal) tem 1.754. Não há inventário de LP para mostrar nem volume para ler. Se existir LP no ar em outro host, ela não está mandando dado para esta property.",
   },
 
   certifiquei: {

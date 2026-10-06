@@ -847,6 +847,40 @@ export async function GET(req: NextRequest) {
     sessoesDeVenda: rows.filter((r) => r.objective === "venda").reduce((s, r) => s + r.sessions, 0),
   };
 
+  /**
+   * ═══════════════════════════════════════════════════════════════════════
+   * BLOQUEIO SÓ DA CONVERSÃO: a B.U. aparece, o número duvidoso não
+   * ═══════════════════════════════════════════════════════════════════════
+   * Entrou em 06/10/2026, de um defeito que o Renan apontou: "o painel não
+   * traz as landing pages de FIIs nem de Funds".
+   *
+   * Na FIIs ele tinha razão. `lp.fiis.com.br` tem 3.104 sessões em 30 dias e
+   * caminhos de landing page de verdade, e a B.U. estava em `blocked` por
+   * SUSPEITA DE DUPLICAÇÃO DO LEAD. O bloqueio era binário demais: para não
+   * publicar um número de lead duvidoso, apagava junto o inventário e o
+   * tráfego, que não dependem daquela suspeita em nada.
+   *
+   * Agora a linha fica, com sessão e engajamento, e só a conversão vira nula,
+   * com o motivo declarado em cada linha. Esconder o que é válido para proteger
+   * o que é duvidoso custa mais caro que mostrar com ressalva.
+   */
+  const conversaoBloqueada = profile.conversaoBloqueada || null;
+  if (conversaoBloqueada) {
+    rows = rows.map((r) => ({
+      ...r,
+      leads: 0,
+      leadEvents: 0,
+      qualified: null,
+      disqualified: null,
+      qualificationRate: null,
+      connectRate: null,
+      ctaRate: null,
+      primaryValue: null,
+      primaryRate: null,
+      rateCaveat: conversaoBloqueada,
+    }));
+  }
+
   // Totais recalculados a partir das linhas, não somando taxa (média de taxa mente).
   const sum = (f: (r: LPRow) => number) => rows.reduce((s, r) => s + f(r), 0);
   const tSessions = sum((r) => r.sessions);
@@ -1031,6 +1065,12 @@ export async function GET(req: NextRequest) {
         leadDivisor: profile.leadDivisor,
       },
       lpHosts: profile.lpHosts,
+      /**
+       * Preenchido quando a B.U. tem trafego e inventario validos mas o numero
+       * de conversao nao e publicavel. A tela e OBRIGADA a mostrar: sem isso a
+       * coluna zerada parece desempenho ruim em vez de medicao suspensa.
+       */
+      conversaoBloqueada,
       caveats: profile.caveats,
       checkoutAttribution,
       objectiveSummary,

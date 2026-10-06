@@ -7,6 +7,7 @@ import {
   type Contrato,
 } from "@/lib/contrato-ga4";
 import { confirmarBaseline, gravarBaselineSeNovo, regravarBaseline } from "@/lib/contrato-kv";
+import { verificarHosts } from "@/lib/contrato-ga4";
 import { listProperties } from "@/lib/ga4-server";
 import { LIMITE_LINHAS_LP } from "@/lib/bu";
 import { NextRequest, NextResponse } from "next/server";
@@ -226,6 +227,35 @@ export async function GET(req: NextRequest) {
 
     // ── Não regressão ────────────────────────────────────────────────────
     const achados: Achado[] = [...contrato.achados];
+
+    /**
+     * ⚠️ GUARDA DE HOST, só na aba de landing page, que é onde a lista importa.
+     *
+     * Confronta `lpHosts` com o que o GA4 TEM. Existe porque em 06/10/2026 a
+     * Funds Explorer ficou invisível por um host declarado com uma letra a
+     * mais (lps. em vez de lp.), e esse tipo de erro não falha alto: devolve
+     * zero, e zero tem cara de resposta legítima.
+     *
+     * Falha desta conferência NÃO derruba a verificação: ela é um complemento,
+     * e perder o contrato inteiro por causa dela seria trocar o essencial pelo
+     * acessório.
+     */
+    if (def.aba === "landing-pages") {
+      try {
+        const rh = await fetch(
+          `${origin}/api/ga4/hosts?propertyId=${p.id}&propertyName=${encodeURIComponent(p.displayName)}`,
+          { cache: "no-store" }
+        );
+        if (rh.ok) {
+          const dh = (await rh.json()) as {
+            divergencias?: { tipo: string; host: string; detalhe: string; gravidade: "quebra" | "alerta" }[];
+          };
+          achados.push(...verificarHosts({ divergencias: dh.divergencias || [] }));
+        }
+      } catch {
+        // silêncio proposital: ver o comentário acima.
+      }
+    }
 
     /**
      * REGRAVAÇÃO EXPLÍCITA. Só por pedido de quem é master, nunca pelo cron.

@@ -148,17 +148,46 @@ export async function GET(req: NextRequest) {
    */
   const divergencias: { tipo: string; host: string; detalhe: string; gravidade: "quebra" | "alerta" }[] = [];
 
+  /** Domínio registrável, ou seja os dois últimos rótulos mais o `.com.br`. */
+  const dominioDe = (h: string) => h.split(".").slice(-3).join(".");
+  const dominiosDaProperty = new Set(hosts.map((h) => dominioDe(h.host)));
+
   for (const d of declarados) {
     const medido = hosts.find((h) => h.host === d);
     if (!medido) {
+      /**
+       * ⚠️ FALSO POSITIVO QUE EU MESMO PRODUZI NA PRIMEIRA VARREDURA, em
+       * 06/10/2026: a regra acusou "host declarado inexistente" nas properties
+       * de APP (Suno Research - App, Statusinvest - App), que obviamente não
+       * servem host web. Foram 5 quebras das 8 divergências, todas ruído.
+       *
+       * Guardião que grita todo dia deixa de ser lido, e aí não serve para o
+       * dia em que o grito é real.
+       *
+       * O corte é por DADO, não por nome: se a property não tem NENHUM host no
+       * domínio declarado, ela simplesmente não serve aquele domínio. É outro
+       * fluxo de dados, não configuração quebrada.
+       */
+      if (!dominiosDaProperty.has(dominioDe(d))) {
+        divergencias.push({
+          tipo: "dominio_nao_atendido_por_esta_property",
+          host: d,
+          gravidade: "alerta",
+          detalhe:
+            `A B.U. declara "${d}", e esta property não tem NENHUM host em ${dominioDe(d)}. ` +
+            `Provavelmente é outro fluxo de dados (app, por exemplo), não configuração errada. ` +
+            `A declaração da B.U. é compartilhada entre as properties dela.`,
+        });
+        continue;
+      }
       divergencias.push({
         tipo: "host_declarado_inexistente",
         host: d,
         gravidade: "quebra",
         detalhe:
-          `A B.U. declara "${d}" como host de landing page, e o GA4 não tem NENHUMA sessão nesse host ` +
-          `nesta janela. Host declarado errado não falha: devolve zero com cara de resposta legítima, e a ` +
-          `tela conclui que a B.U. não tem LP.`,
+          `A B.U. declara "${d}" como host de landing page, esta property TEM hosts em ${dominioDe(d)}, ` +
+          `e o GA4 não tem NENHUMA sessão nesse host específico. Host declarado errado não falha: devolve ` +
+          `zero com cara de resposta legítima, e a tela conclui que a B.U. não tem LP.`,
       });
       continue;
     }
