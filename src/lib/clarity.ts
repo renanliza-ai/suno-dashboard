@@ -26,6 +26,17 @@ const CLARITY_PROJECT_BY_BU: Partial<Record<BUKey, string>> = {
   consultoria: "xmvijj46fk",
   status: "ic1rhluxfu",
   funds: "i81rpq047d",
+  /**
+   * FIIs entrou em 06/10/2026. Este ID foi MEDIDO, não copiado do painel do
+   * Clarity: carreguei `lp.fiis.com.br/whatsapp-fiis/` num navegador de verdade
+   * e li o script que ela baixa, `clarity.ms/tag/i81qt7ta5p?ref=gtm`.
+   *
+   * ⚠️ É o projeto que a LANDING PAGE usa, que é o que importa para os links
+   * desta aba. O projeto "FIIs" no painel do Clarity está registrado em
+   * `fiis.com.br` (o portal), e pode ou não ser o mesmo. Se um dia os links
+   * caírem em projeto vazio, é aqui que se olha.
+   */
+  fiis: "i81qt7ta5p",
 };
 
 function slug(s: string): string {
