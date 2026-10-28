@@ -44,13 +44,16 @@ async function runBriefing(req: NextRequest) {
     );
   }
 
-  // Validação do token — header Bearer OU query param `token`
+  /**
+   * Validação do token — SÓ header `Authorization: Bearer`.
+   *
+   * ⚠️ O caminho `?token=` CAIU em 28/10/2026. Segredo em query string entra em
+   * log de servidor, de proxy e de CDN, e no histórico do navegador de quem
+   * testar na barra de endereço. O agendador externo precisa passar a mandar o
+   * header.
+   */
   const authHeader = req.headers.get("authorization");
-  const tokenFromHeader = authHeader?.startsWith("Bearer ")
-    ? authHeader.slice(7)
-    : null;
-  const tokenFromQuery = req.nextUrl.searchParams.get("token");
-  const token = tokenFromHeader || tokenFromQuery;
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
   if (!token || token !== expectedToken) {
     return NextResponse.json(

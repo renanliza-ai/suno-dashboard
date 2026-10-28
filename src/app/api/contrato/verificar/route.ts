@@ -1,4 +1,4 @@
-import { auth } from "@/auth";
+import { autorizarCron, respostaDeRecusa, cabecalhoInterno, pareceTelaDeLogin } from "@/lib/cron-auth";
 import { resolveBU } from "@/lib/bu";
 import {
   compararComBaseline,
@@ -70,19 +70,26 @@ type AbaVerificada = {
 };
 
 export async function GET(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  const authHeader = req.headers.get("authorization");
-  const ua = req.headers.get("user-agent") || "";
-  const ehCronDaVercel = /vercel-cron/i.test(ua);
-  const temSegredo = Boolean(secret && authHeader === `Bearer ${secret}`);
-  let ehMaster = false;
-  if (!ehCronDaVercel && !temSegredo) {
-    const s = (await auth()) as { user?: { isMaster?: boolean } } | null;
-    ehMaster = Boolean(s?.user?.isMaster);
+  // Bearer CRON_SECRET, ou sessão master. Ver src/lib/cron-auth.ts.
+  // ⚠️ O user-agent `vercel-cron` CAIU em 28/10/2026: era texto livre.
+  const permissao = await autorizarCron(req);
+  if (!permissao.ok) {
+    return NextResponse.json(respostaDeRecusa(permissao), { status: permissao.status });
   }
-  if (!ehCronDaVercel && !temSegredo && !ehMaster) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  /**
+   * ⚠️ ARMADILHA QUE ESTA LINHA EVITA.
+   *
+   * `deveAlertar` e `regravar` dependiam de `ehCronDaVercel`, que vinha do
+   * user-agent. Tirar o user-agent SEM trocar esta derivação faria a chamada
+   * legítima da Vercel virar `false` nos dois: o cron rodaria e PARARIA DE
+   * ALERTAR, e o caminho do segredo ganharia permissão de regravar baseline.
+   * Motor de risco ligado e mudo é o pior estado possível, e a quebra não
+   * apareceria em teste nenhum.
+   *
+   * Agora "é máquina" significa "veio com o segredo", que é o mesmo conjunto de
+   * chamadas de antes, só que provado em vez de declarado.
+   */
+  const ehCron = permissao.via === "segredo";
 
   const origin = req.nextUrl.origin;
   const soEssaProperty = req.nextUrl.searchParams.get("propertyId");
@@ -99,7 +106,7 @@ export async function GET(req: NextRequest) {
    * `?alertar=0` existe para quem precisa rodar sem abrir tarefa.
    */
   const alertarParam = req.nextUrl.searchParams.get("alertar");
-  const deveAlertar = alertarParam === "1" || (ehCronDaVercel && alertarParam !== "0");
+  const deveAlertar = alertarParam === "1" || (ehCron && alertarParam !== "0");
 
   /**
    * `?regravar=1&motivo=...` reescreve o baseline do período com a medição de
@@ -107,7 +114,7 @@ export async function GET(req: NextRequest) {
    * no dia seguinte e o alarme deixa de existir. Exige motivo, porque baseline
    * que muda sem explicação destrói a serventia do mecanismo inteiro.
    */
-  const regravar = !ehCronDaVercel && req.nextUrl.searchParams.get("regravar") === "1";
+  const regravar = !ehCron && req.nextUrl.searchParams.get("regravar") === "1";
   const motivoDaRegravacao = req.nextUrl.searchParams.get("motivo") || "sem motivo declarado";
   if (regravar && !req.nextUrl.searchParams.get("motivo")) {
     return NextResponse.json(
@@ -187,7 +194,11 @@ export async function GET(req: NextRequest) {
 
     let payload: { contrato?: Contrato | null; blocked?: string | null; error?: string };
     try {
-      const r = await fetch(`${origin}${def.url(p.id, p.displayName)}`, { cache: "no-store" });
+      const r = await fetch(`${origin}${def.url(p.id, p.displayName)}`, {
+        cache: "no-store",
+        headers: cabecalhoInterno(),
+      });
+      if (pareceTelaDeLogin(r)) throw new Error("recebi a tela de login: a chamada interna nao foi autenticada");
       payload = await r.json();
       if (!r.ok) {
         return { ...base, erro: `HTTP ${r.status}` };
@@ -384,7 +395,7 @@ export async function GET(req: NextRequest) {
         .join("\n\n");
       const r = await fetch(`${origin}/api/monday/create-task`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: cabecalhoInterno({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           title: `[CONTRATO] ${quebras.length} quebra(s) de dado no painel`,
           description:

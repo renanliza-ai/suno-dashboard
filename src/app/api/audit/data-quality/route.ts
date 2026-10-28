@@ -350,16 +350,17 @@ async function auditProperty(propertyId: string, propertyName: string, auditDate
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const tokenFromQuery = searchParams.get("token");
   const cronToken = process.env.BRIEFING_CRON_TOKEN;
 
-  // Auth: query token (cron) OU bearer header
+  /**
+   * Auth: header `Authorization: Bearer` (cron externo) OU sessão master.
+   *
+   * ⚠️ O caminho `?token=` CAIU em 28/10/2026, pelo mesmo motivo do briefing:
+   * segredo em query string vaza em log. A TELA nunca usou esse caminho (ela
+   * chama sem token, pela sessão master), então a remoção não afeta o painel.
+   */
   const authHeader = req.headers.get("authorization");
-  const tokenFromHeader = authHeader?.startsWith("Bearer ")
-    ? authHeader.slice(7)
-    : null;
-
-  const provided = tokenFromQuery || tokenFromHeader;
+  const provided = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
   const isCron = !!(cronToken && provided === cronToken);
 
   // Auth: aceita (a) cron token via query/header OU (b) sessão master no painel
@@ -397,6 +398,38 @@ export async function GET(req: NextRequest) {
 
   const auditDate = yesterdayISO();
   const startedAt = Date.now();
+
+  /**
+   * @sonda-contrato
+   * `?debug=1` devolve a resposta CRUA do `runReport` da primeira property, sem
+   * tratamento, para conferir a forma sem abrir o código.
+   *
+   * POR QUE ESTA SONDA NASCEU AGORA
+   * A mudança desta sessão nesta rota foi SÓ de autenticação (saiu o segredo por
+   * query string). Não encostei na leitura do dado. Mas o guarda de contrato
+   * pergunta se o código supõe a forma de algo que eu não observei NESTA sessão,
+   * e a resposta honesta é que não observei. Então, em vez de assinar uma
+   * anotação que eu não ganhei, deixo a forma conferível.
+   *
+   * A forma que o `readMetric` acima já assume, e que esta sonda deixa provar:
+   * sem dimensão, o GA4 põe o resultado em `rows[0].metricValues`; com dimensão
+   * e `metricAggregations`, em `totals[0].metricValues`. É por isso que aquele
+   * helper tenta os dois lugares.
+   */
+  if (searchParams.get("debug") === "1") {
+    const amostra = await runReport(properties[0].id, {
+      dateRanges: [{ startDate: auditDate, endDate: auditDate }],
+      metrics: [{ name: "totalUsers" }],
+    });
+    return NextResponse.json({
+      sonda: "resposta crua do runReport, sem tratamento",
+      property: properties[0],
+      data: auditDate,
+      respostaCrua: amostra,
+      comoLer:
+        "Sem dimensao, o numero vem em data.rows[0].metricValues[0].value. Com dimensao mais metricAggregations, vem em data.totals[0].metricValues[0].value. O helper readMetric tenta os dois, nessa ordem.",
+    });
+  }
 
   // Audita propriedades em paralelo (são chamadas independentes)
   const propertyAudits = await Promise.all(

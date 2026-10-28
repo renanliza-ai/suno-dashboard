@@ -1,5 +1,5 @@
 import { listProperties } from "@/lib/ga4-server";
-import { auth } from "@/auth";
+import { autorizarCron, respostaDeRecusa, cabecalhoInterno, pareceTelaDeLogin } from "@/lib/cron-auth";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -40,21 +40,12 @@ type PropReport = {
 
 export async function GET(req: NextRequest) {
   // ---- Auth ----
-  // Aceita: (1) Vercel Cron (user-agent vercel-cron) — funciona out-of-the-box;
-  // (2) Bearer CRON_SECRET (opcional, mais forte); (3) sessão master.
-  // A varredura só expõe status de conector (sem credenciais), risco baixo.
-  const secret = process.env.CRON_SECRET;
-  const authHeader = req.headers.get("authorization");
-  const ua = req.headers.get("user-agent") || "";
-  const isVercelCron = /vercel-cron/i.test(ua);
-  const hasSecret = Boolean(secret && authHeader === `Bearer ${secret}`);
-  let isMaster = false;
-  if (!isVercelCron && !hasSecret) {
-    const s = (await auth()) as { user?: { isMaster?: boolean } } | null;
-    isMaster = Boolean(s?.user?.isMaster);
-  }
-  if (!isVercelCron && !hasSecret && !isMaster) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // Bearer CRON_SECRET, ou sessão master. Ver src/lib/cron-auth.ts.
+  // ⚠️ O user-agent `vercel-cron` CAIU em 28/10/2026: era texto livre e
+  // qualquer `curl -H` passava, então não protegia nada.
+  const permissao = await autorizarCron(req);
+  if (!permissao.ok) {
+    return NextResponse.json(respostaDeRecusa(permissao), { status: permissao.status });
   }
 
   const origin = req.nextUrl.origin;
@@ -74,7 +65,13 @@ export async function GET(req: NextRequest) {
 
     // Ads (meta + google) — 1 chamada combinada
     try {
-      const r = await fetch(`${origin}/api/ads/campaigns?propertyName=${encodeURIComponent(p.displayName)}`, { cache: "no-store" });
+      const r = await fetch(`${origin}/api/ads/campaigns?propertyName=${encodeURIComponent(p.displayName)}`, {
+        cache: "no-store",
+        headers: cabecalhoInterno(),
+      });
+      // 200 text/html = redirect para /login seguido. Sem esta checagem o
+      // r.json() estoura e o erro de parse vira "conector quebrado".
+      if (pareceTelaDeLogin(r)) throw new Error("recebi a tela de login: a chamada interna nao foi autenticada");
       const j = await r.json();
       const m = j.platforms?.meta;
       const g = j.platforms?.google;
@@ -94,7 +91,11 @@ export async function GET(req: NextRequest) {
 
     // GA4 — presença de dados (últimos 7 dias)
     try {
-      const r = await fetch(`${origin}/api/ga4/overview?propertyId=${p.id}&days=7`, { cache: "no-store" });
+      const r = await fetch(`${origin}/api/ga4/overview?propertyId=${p.id}&days=7`, {
+        cache: "no-store",
+        headers: cabecalhoInterno(),
+      });
+      if (pareceTelaDeLogin(r)) throw new Error("recebi a tela de login: a chamada interna nao foi autenticada");
       const j = await r.json();
       if (j.errors?.kpis || j.error) { ga4.status = "error"; ga4.detail = j.errors?.kpis || j.error; }
       else if (j.kpis && (j.kpis.activeUsers > 0 || j.kpis.sessions > 0)) { ga4.status = "ok"; ga4.detail = `${j.kpis.sessions} sessões/7d`; }
@@ -144,7 +145,7 @@ export async function GET(req: NextRequest) {
       const body = anomalies.map((a) => `- **${a.property}** · ${a.connector}: ${a.detail}`).join("\n");
       const r = await fetch(`${origin}/api/monday/create-task`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: cabecalhoInterno({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           title: `[HEALTH] ${anomalies.length} conector(es) fora do normal`,
           description: `## 🚨 Varredura diária de saúde\n\nConectores com anomalia hoje:\n\n${body}\n\n_Gerado automaticamente pelo health-sweep._`,

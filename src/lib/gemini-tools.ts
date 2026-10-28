@@ -1,5 +1,6 @@
 // src/lib/gemini-tools.ts
 import { resolveBU, type BUProfile } from "@/lib/bu";
+import { cabecalhoInterno, pareceTelaDeLogin } from "@/lib/cron-auth";
 import {
   envelope,
   contratoDeLandingPages,
@@ -156,12 +157,29 @@ function rangeQS(ctx: ChatToolContext): string {
   return `days=${ctx.days}`;
 }
 
+/**
+ * Chama uma rota do próprio painel.
+ *
+ * ⚠️ DUAS CREDENCIAIS, PORQUE SÃO DOIS CHAMADORES.
+ *
+ * Pelo chat, quem chama é o navegador e o cookie da sessão existe. Pelo cron
+ * dos cards, NÃO existe cookie: cron não loga. Enquanto `/api` ficou fora do
+ * middleware isso não aparecia, porque ninguém pedia credencial. No dia em que
+ * `/api` passar a exigir sessão, a chamada do cron receberia um redirect para
+ * `/login` e voltaria HTML com status 200, e todo card ativo passaria a
+ * registrar erro. Por isso a chamada leva TAMBÉM o Bearer quando ele existe.
+ */
 async function internalFetch(ctx: ChatToolContext, path: string): Promise<unknown> {
   const resp = await fetch(`${ctx.origin}${path}`, {
-    headers: ctx.cookie ? { cookie: ctx.cookie } : undefined,
+    headers: cabecalhoInterno(ctx.cookie ? { cookie: ctx.cookie } : undefined),
     // 20s — abaixo do timeout do route handler
     signal: AbortSignal.timeout(20000),
   });
+  if (pareceTelaDeLogin(resp)) {
+    // Erro explícito em vez de deixar o r.json() estourar: "Unexpected token <"
+    // manda quem investiga para o lugar errado.
+    return { error: "a chamada interna recebeu a tela de login, não foi autenticada" };
+  }
   return resp.json();
 }
 

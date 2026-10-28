@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listarCards, salvarCard, comNovaExecucao } from "@/lib/cards-kv";
 import { executeChatTool, type ChatToolContext } from "@/lib/gemini-tools";
+import { autorizarCron, respostaDeRecusa } from "@/lib/cron-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,12 +33,18 @@ export const maxDuration = 60;
 const TETO_POR_RODADA = 12;
 
 export async function GET(req: NextRequest) {
-  const ehCron = req.headers.get("user-agent")?.includes("vercel-cron") ?? false;
-  const segredo = process.env.CRON_SECRET;
-  const autorizado =
-    ehCron || !segredo || req.headers.get("authorization") === `Bearer ${segredo}`;
-  if (!autorizado) {
-    return NextResponse.json({ error: "não autorizado" }, { status: 401 });
+  /**
+   * Mesma regra dos outros dois crons. Ver src/lib/cron-auth.ts.
+   *
+   * ⚠️ A versão que subiu em 28/10/2026 tinha `|| !segredo`, que liberava a
+   * rota para QUALQUER UM enquanto CRON_SECRET não existisse no ambiente. Como
+   * a variável nunca foi criada, ela foi ao ar pública: qualquer pessoa com a
+   * URL disparava a rotina e queimava cota do GA4. Escape hatch em verificação
+   * de autorização é buraco, não conveniência.
+   */
+  const permissao = await autorizarCron(req);
+  if (!permissao.ok) {
+    return NextResponse.json(respostaDeRecusa(permissao), { status: permissao.status });
   }
 
   const todos = await listarCards();
