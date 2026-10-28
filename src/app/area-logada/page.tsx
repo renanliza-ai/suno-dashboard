@@ -19,7 +19,12 @@ import {
   CheckCircle2,
   Clock,
   XCircle,
+  ShoppingCart,
+  Calendar,
+  Timer,
 } from "lucide-react";
+import { VendasNai } from "@/components/vendas-nai";
+import { TrialStatus } from "@/components/trial-status";
 import {
   Area,
   AreaChart,
@@ -32,7 +37,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { useGA4 } from "@/lib/ga4-context";
+import { useGA4, periodoLiteral } from "@/lib/ga4-context";
 import { formatNumber } from "@/lib/utils";
 
 type AreaLogadaAnalysis = {
@@ -150,10 +155,15 @@ function getSubscriptionDimForProperty(displayName: string | null | undefined): 
 }
 
 export default function AreaLogadaPage() {
-  const { selectedId, selected } = useGA4();
-  const today = new Date().toISOString().slice(0, 10);
-  const [startDate, setStartDate] = useState("2025-11-01");
-  const [endDate, setEndDate] = useState(today);
+  const { selectedId, selected, days, customRange, periodLabel } = useGA4();
+  /**
+   * Período vem do seletor do TOPO, igual a todas as outras abas.
+   *
+   * Antes aqui havia `useState("2025-11-01")` com campos de data próprios: o
+   * usuário trocava o período no cabeçalho e esta aba continuava em 2025, sem
+   * avisar. Número certo respondendo a pergunta errada é pior que erro.
+   */
+  const { startDate, endDate } = periodoLiteral(days, customRange);
   const [pagePath, setPagePath] = useState("/onboarding");
   // Hostname e dim agora são auto-derivados do nome da property, mas
   // o user pode editar manualmente se quiser sobrescrever
@@ -274,23 +284,20 @@ export default function AreaLogadaPage() {
             className="mt-1 w-full px-3 py-2 text-sm font-mono rounded-lg border border-[color:var(--border)] focus:outline-none focus:border-emerald-500"
           />
         </div>
-        <div>
-          <label className="text-[10px] font-semibold uppercase text-slate-500 tracking-wider">Data início</label>
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="mt-1 w-full px-3 py-2 text-sm rounded-lg border border-[color:var(--border)] focus:outline-none focus:border-emerald-500"
-          />
-        </div>
-        <div>
-          <label className="text-[10px] font-semibold uppercase text-slate-500 tracking-wider">Data fim</label>
-          <input
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="mt-1 w-full px-3 py-2 text-sm rounded-lg border border-[color:var(--border)] focus:outline-none focus:border-emerald-500"
-          />
+        {/*
+          Os campos de data saíram daqui de propósito. O período é o do seletor
+          do topo, compartilhado por todas as abas. Dois seletores na mesma tela
+          é convite para os dois discordarem, que foi o que aconteceu.
+        */}
+        <div className="md:col-span-2">
+          <label className="text-[10px] font-semibold uppercase text-slate-500 tracking-wider">Período</label>
+          <div className="mt-1 flex items-center gap-2 rounded-lg border border-[color:var(--border)] bg-slate-50 px-3 py-2 text-sm text-slate-600">
+            <Calendar size={14} className="text-slate-400" />
+            <span className="font-medium text-slate-800">{periodLabel}</span>
+            <span className="tabular-nums text-[11px] text-slate-400">
+              {startDate} a {endDate}
+            </span>
+          </div>
         </div>
         <div className="flex items-end">
           <button
@@ -342,6 +349,38 @@ export default function AreaLogadaPage() {
               propertyName={data.query.hostname.includes("statusinvest") ? "Statusinvest" : "Suno"}
             />
           )}
+
+          {/*
+            Vendas da NAI. Vem do Zeus, não do GA4: o `purchase` dispara ZERO
+            vezes em investidor.suno.com.br, porque a venda nasce aqui e fecha
+            no checkout aberto. Sem credencial do Zeus, a seção declara o que
+            falta em vez de mostrar zero.
+          */}
+          <section>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-700 mb-3 flex items-center gap-2">
+              <ShoppingCart size={14} className="text-emerald-600" />
+              Vendas que nascem na área logada
+            </h2>
+            <VendasNai inicio={startDate} fim={endDate} />
+          </section>
+
+          {/*
+            Trial de 7 dias. EXCLUSIVO do Status Invest: o componente não
+            renderiza nada quando a property é outra, em vez de mostrar um bloco
+            zerado que pareceria "ninguém ativou".
+          */}
+          <section>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-700 mb-3 flex items-center gap-2">
+              <Timer size={14} className="text-blue-600" />
+              Trial de 7 dias
+            </h2>
+            <TrialStatus
+              propertyId={selectedId}
+              propertyName={selected?.displayName || ""}
+              inicio={startDate}
+              fim={endDate}
+            />
+          </section>
 
           {/* Onboarding KPIs */}
           <section>

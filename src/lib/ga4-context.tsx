@@ -165,6 +165,35 @@ export function useGA4() {
   return ctx;
 }
 
+/**
+ * Datas LITERAIS do período global, para quem precisa de "2026-10-01" em vez de
+ * "30daysAgo": componente que chama rota fora de /api/ga4/*, rótulo na tela,
+ * nome de arquivo exportado.
+ *
+ * POR QUE EXISTE
+ * Antes disto, a aba /area-logada mantinha o próprio `useState("2025-11-01")` e
+ * os próprios campos de data, ignorando o seletor do topo. O usuário trocava o
+ * período no cabeçalho e aquela aba continuava em 2025, sem avisar. Agora existe
+ * UMA definição de período, e quem precisa de data literal chama daqui.
+ *
+ * Convenção: termina em ONTEM, igual ao padrão do painel (ver
+ * `buildDateRange` em ga4-server.ts: "endDate = yesterday para bater com o
+ * painel GA4"). Range custom manda sobre o preset.
+ */
+export function periodoLiteral(
+  days: number,
+  customRange: DateRangeCustom | null
+): DateRangeCustom {
+  if (customRange?.startDate && customRange?.endDate) return customRange;
+  const fim = new Date();
+  fim.setUTCHours(0, 0, 0, 0);
+  fim.setUTCDate(fim.getUTCDate() - 1); // ontem
+  const ini = new Date(fim);
+  ini.setUTCDate(ini.getUTCDate() - (Math.max(1, days) - 1));
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  return { startDate: iso(ini), endDate: iso(fim) };
+}
+
 // Monta query string comum pros hooks que consultam /api/ga4/*
 function buildDateQS(days: number, customRange: DateRangeCustom | null, extra?: Record<string, string>) {
   const qs = new URLSearchParams();
