@@ -1,0 +1,17 @@
+{
+  "//": "Compila a camada semântica para os testes rodarem em node puro. Existe porque o tsc da linha de comando não aceita --paths, e chat-semantica.ts importa @/lib/bu (import de TIPO, apagado no emit: o .js sai sem dependência).",
+  "compilerOptions": {
+    "module": "es2022",
+    "target": "es2022",
+    "moduleResolution": "bundler",
+    "skipLibCheck": true,
+    "noEmitOnError": true,
+    "outDir": ".build",
+    "rootDir": "../src/lib",
+    "baseUrl": "..",
+    "paths": {
+      "@/lib/*": ["src/lib/*"]
+    }
+  },
+  "files": ["../src/lib/bu.ts", "../src/lib/chat-semantica.ts", "../src/lib/contrato-ga4.ts"]
+}

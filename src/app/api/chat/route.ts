@@ -5,6 +5,8 @@ import {
   executeChatTool,
   ChatToolContext,
 } from "@/lib/gemini-tools";
+import { resolveBU } from "@/lib/bu";
+import { regrasDoContrato, regraDeConversao } from "@/lib/chat-semantica";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,9 +65,12 @@ function systemPrompt(ctx: RequestBody["context"]): string {
     ctx.startDate && ctx.endDate
       ? `${ctx.startDate} a ${ctx.endDate}`
       : `últimos ${ctx.days} dias`;
+  const p = resolveBU(ctx.propertyName);
   return [
     `Você é o copiloto de analytics do painel interno da Suno (empresa brasileira de research de investimentos).`,
     `Contexto da sessão: propriedade GA4 "${ctx.propertyName}" · período selecionado: ${periodo}.`,
+    `B.U. resolvida: ${p.label}. Regra de conversão vigente: ${regraDeConversao(p)}`,
+    `Quem pergunta é o time de Growth, Mídia e Produto, não só analista. Explique a ressalva em linguagem de negócio, sem jargão de API.`,
     ``,
     `REGRAS OBRIGATÓRIAS:`,
     `1. NUNCA invente números. Só cite valores que vieram das ferramentas. Se não tiver o dado, diga claramente que não tem.`,
@@ -75,6 +80,8 @@ function systemPrompt(ctx: RequestBody["context"]): string {
     `5. Se uma ferramenta retornar { error }, informe o erro real ao usuário em 1 linha — sem mascarar.`,
     `6. Use o período da sessão como padrão; só mude se o usuário pedir explicitamente outro período.`,
     `7. Moeda em R$ quando aplicável. Taxas com 1 casa decimal.`,
+    ``,
+    regrasDoContrato(),
   ].join("\n");
 }
 
@@ -183,6 +190,29 @@ export async function POST(req: NextRequest) {
           .filter((p): p is { text: string } => "text" in p)
           .map((p) => p.text)
           .join("");
+
+        /**
+         * @sonda-contrato
+         * `?debug=1` devolve a resposta CRUA do Gemini junto do texto. O campo
+         * `raw` já era capturado em `callGemini` e descartado; agora dá para
+         * conferir a forma sem abrir o código.
+         *
+         * Honestidade sobre o que eu NÃO observei: a alteração desta sessão
+         * mexeu só no texto do system prompt e nas tools, não no parsing de
+         * `candidates[0].content.parts`, que é anterior a ela. Em vez de
+         * anotar uma observação que eu não fiz, exponho o cru para que a
+         * primeira pergunta em produção prove a forma.
+         */
+        if (req.nextUrl.searchParams.get("debug") === "1") {
+          return NextResponse.json({
+            reply: text,
+            sonda: "resposta crua do Gemini, sem tratamento",
+            respostaCrua: "raw" in result ? result.raw : null,
+            comoLer:
+              "candidates[0].content.parts[] traz { text } ou { functionCall: { name, args } }. O loop de tools lê functionCall e devolve functionResponse.",
+          });
+        }
+
         return NextResponse.json({ reply: text || "Não consegui formular uma resposta. Reformula a pergunta?" });
       }
 
